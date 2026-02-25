@@ -1,5 +1,10 @@
 package engine
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Result 表示扫描结果
 type Result struct {
 	Type string      `json:"type"`
@@ -48,6 +53,12 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 		for _, scanner := range p.domainScanners {
 			results, err := scanner.Execute(input)
 			if err != nil {
+				// 如果工具不存在，打印警告并跳过
+				if strings.Contains(err.Error(), "not found in PATH") {
+					fmt.Printf("⚠️  [%s] 工具未安装，跳过\n", scanner.Name())
+					continue
+				}
+				// 其他错误则返回
 				return nil, err
 			}
 

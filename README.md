@@ -19,6 +19,7 @@ hunter/
 │   ├── plugins/         # 扫描工具插件
 │   │   ├── subfinder.go # Subfinder 域名搜集插件
 │   │   ├── samoscout.go # Samoscout 域名搜集插件
+│   │   ├── subdog.go    # Subdog 域名搜集插件
 │   │   └── httpx.go     # Httpx 存活检测插件
 │   └── db/              # 数据库相关
 │       ├── models.go    # 数据模型
@@ -39,6 +40,7 @@ hunter/
 - Docker & Docker Compose
 - subfinder
 - samoscout
+- subdog
 - httpx
 
 安装扫描工具：
@@ -49,9 +51,14 @@ go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 # 安装 samoscout
 go install -v github.com/samogod/samoscout@latest
 
+# 安装 subdog
+go install -v github.com/rix4uni/SubDog@latest
+
 # 安装 httpx
 go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 ```
+
+注意：如果某个工具未安装，程序会自动跳过该工具并继续执行。
 
 ### 2. 启动数据库
 
@@ -68,9 +75,11 @@ go mod tidy
 ### 4. 运行扫描
 
 ```bash
-# 默认使用所有子域名搜集工具（Subfinder + Samoscout）
+# 默认使用所有子域名搜集工具（Subfinder + Samoscout + Subdog）
 go run main.go example.com
 ```
+
+注意：如果某个工具未安装，会显示警告并自动跳过，不影响其他工具的执行。
 
 ## 🔧 核心功能
 
@@ -96,11 +105,15 @@ type Scanner interface {
 2. **Samoscout 插件**: 搜集子域名
    - 调用 `samoscout -d domain.com -silent -json`
    - 过滤日志行，提取有效 JSON 中的 `host` 字段
+
+3. **Subdog 插件**: 搜集子域名
+   - 调用 `echo domain.com | subdog --silent`
+   - 解析纯文本输出，每行一个域名
    - 自动去重
 
 **第二阶段：存活检测**
 
-3. **Httpx 插件**: 对所有发现的域名进行存活检测
+4. **Httpx 插件**: 对所有发现的域名进行存活检测
    - 接收合并后的域名列表
    - 调用 `httpx -json -sc -title -td`
    - 实时解析 JSONL 输出
@@ -142,15 +155,17 @@ func (n *NewPlugin) Execute(input []string) ([]engine.Result, error) {
 
 ```
 🎯 开始扫描目标: example.com
-📡 使用 Subfinder + Samoscout 进行子域名搜集
+📡 使用 Subfinder + Samoscout + Subdog 进行子域名搜集
 🚀 启动扫描流水线...
 [Subfinder] 正在搜集域名: example.com
 [Subfinder] 发现 25 个域名
 [Samoscout] 正在搜集域名: example.com
 [Samoscout] 发现 32 个域名
-[Httpx] 正在对 48 个域名进行测活...（已自动去重）
+[Subdog] 正在搜集域名: example.com
+[Subdog] 发现 18 个域名
+[Httpx] 正在对 62 个域名进行测活...（已自动去重）
 [Httpx] 已发现 10 个存活服务
-[Httpx] 测活完成，发现 18 个存活服务
+[Httpx] 测活完成，发现 20 个存活服务
 💾 正在保存扫描结果到数据库...
 
 ==================================================
@@ -172,8 +187,9 @@ func (n *NewPlugin) Execute(input []string) ([]engine.Result, error) {
 
 ## 🛠️ 技术特性
 
-- **错误处理**: 优雅处理工具缺失和执行错误
+- **错误处理**: 优雅处理工具缺失和执行错误，未安装的工具会自动跳过
 - **实时进度**: 扫描过程中实时显示进度
 - **数据去重**: 以域名为唯一键，自动更新重复记录
 - **并发安全**: 支持并发扫描和数据库操作
 - **可扩展性**: 插件化架构，易于添加新工具
+- **智能跳过**: 如果某个工具未安装，自动跳过并继续使用其他工具
