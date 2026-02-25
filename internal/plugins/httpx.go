@@ -17,14 +17,19 @@ type HttpxPlugin struct{}
 
 // HttpxResult Httpx 输出结果结构
 type HttpxResult struct {
-	URL          string   `json:"url"`
-	StatusCode   int      `json:"status_code"`
-	Title        string   `json:"title"`
-	Technologies []string `json:"technologies"`
-	IP           string   `json:"host"`
-	ContentType  string   `json:"content_type"`
-	Method       string   `json:"method"`
-	Input        string   `json:"input"`
+	URL         string   `json:"url"`
+	StatusCode  int      `json:"status_code"`
+	Title       string   `json:"title"`
+	Tech        []string `json:"tech"`    // httpx 使用 tech 而不是 technologies
+	Host        string   `json:"host"`    // 域名
+	HostIP      string   `json:"host_ip"` // IP 地址
+	A           []string `json:"a"`       // A 记录列表
+	ContentType string   `json:"content_type"`
+	Method      string   `json:"method"`
+	Input       string   `json:"input"`
+	Webserver   string   `json:"webserver"`
+	CDN         bool     `json:"cdn"`
+	CDNName     string   `json:"cdn_name"`
 }
 
 // NewHttpxPlugin 创建 Httpx 插件实例
@@ -111,15 +116,21 @@ func (h *HttpxPlugin) Execute(input []string) ([]engine.Result, error) {
 			fmt.Printf("[Httpx] 已发现 %d 个存活服务\n", liveCount)
 		}
 
+		// 使用 host_ip 或 A 记录中的第一个 IP
+		ip := httpxResult.HostIP
+		if ip == "" && len(httpxResult.A) > 0 {
+			ip = httpxResult.A[0]
+		}
+
 		results = append(results, engine.Result{
 			Type: "web_service",
 			Data: map[string]interface{}{
 				"url":           httpxResult.URL,
 				"status_code":   httpxResult.StatusCode,
 				"title":         httpxResult.Title,
-				"technologies":  httpxResult.Technologies,
-				"ip":            httpxResult.IP,
-				"domain":        httpxResult.Input,
+				"technologies":  httpxResult.Tech, // 使用 tech 字段
+				"ip":            ip,
+				"domain":        httpxResult.Host, // 使用 host 字段作为域名
 				"discovered_at": time.Now(),
 			},
 		})

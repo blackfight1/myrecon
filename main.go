@@ -84,9 +84,9 @@ func main() {
 	}
 
 	// 打印扫描总结
-	fmt.Println("\n" + "="*50)
+	fmt.Println("\n==================================================")
 	fmt.Println("📊 扫描完成总结")
-	fmt.Println("=" * 50)
+	fmt.Println("==================================================")
 	fmt.Printf("🎯 扫描目标: %s\n", domain)
 	fmt.Printf("⏱️  扫描耗时: %v\n", time.Since(scanStartTime).Round(time.Second))
 	fmt.Printf("📈 数据库资产总数: %d -> %d\n", beforeCount, afterCount)
@@ -104,6 +104,6 @@ func main() {
 		}
 	}
 
-	fmt.Println("=" * 50)
+	fmt.Println("==================================================")
 	fmt.Println("✅ 扫描任务完成!")
 }
