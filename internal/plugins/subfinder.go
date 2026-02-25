@@ -43,7 +43,7 @@ func (s *SubfinderPlugin) Execute(input []string) ([]engine.Result, error) {
 	for _, domain := range input {
 		fmt.Printf("[Subfinder] 正在搜集域名: %s\n", domain)
 
-		cmd := exec.Command("subfinder", "-d", domain, "-json", "-silent")
+		cmd := exec.Command("subfinder", "-d", domain, "-all", "-json", "-silent")
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create stdout pipe: %v", err)

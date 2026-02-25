@@ -18,11 +18,13 @@ hunter/
 │   │   └── scanner.go   # Scanner 接口和 Pipeline 实现
 │   ├── plugins/         # 扫描工具插件
 │   │   ├── subfinder.go # Subfinder 域名搜集插件
+│   │   ├── samoscout.go # Samoscout 域名搜集插件
 │   │   └── httpx.go     # Httpx 存活检测插件
 │   └── db/              # 数据库相关
 │       ├── models.go    # 数据模型
 │       └── database.go  # 数据库操作
 ├── main.go              # 主程序入口
+├── query.go             # 数据库查询工具
 ├── go.mod               # Go 模块文件
 ├── docker-compose.yml   # PostgreSQL 容器配置
 └── README.md            # 项目说明
@@ -36,12 +38,16 @@ hunter/
 - Go 1.21+
 - Docker & Docker Compose
 - subfinder
+- samoscout
 - httpx
 
 安装扫描工具：
 ```bash
 # 安装 subfinder
 go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+
+# 安装 samoscout
+go install -v github.com/samogod/samoscout@latest
 
 # 安装 httpx
 go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
@@ -62,7 +68,14 @@ go mod tidy
 ### 4. 运行扫描
 
 ```bash
+# 使用 Subfinder (默认)
 go run main.go example.com
+
+# 使用 Samoscout
+go run main.go example.com samoscout
+
+# 同时使用两个工具
+go run main.go example.com both
 ```
 
 ## 🔧 核心功能
@@ -80,11 +93,18 @@ type Scanner interface {
 
 ### 流水线执行
 
+支持多种子域名搜集工具：
+
 1. **Subfinder 插件**: 搜集子域名
    - 调用 `subfinder -d domain.com -json`
    - 提取 JSON 中的 `host` 字段
 
-2. **Httpx 插件**: 存活检测
+2. **Samoscout 插件**: 搜集子域名
+   - 调用 `samoscout -d domain.com -silent -json`
+   - 过滤日志行，提取有效 JSON 中的 `host` 字段
+   - 自动去重
+
+3. **Httpx 插件**: 存活检测
    - 接收域名列表
    - 调用 `httpx -json -sc -title -td`
    - 实时解析 JSONL 输出
@@ -126,12 +146,15 @@ func (n *NewPlugin) Execute(input []string) ([]engine.Result, error) {
 
 ```
 🎯 开始扫描目标: example.com
+📡 使用 Subfinder + Samoscout 进行子域名搜集
 🚀 启动扫描流水线...
 [Subfinder] 正在搜集域名: example.com
 [Subfinder] 发现 25 个域名
-[Httpx] 正在对 25 个域名进行测活...
+[Samoscout] 正在搜集域名: example.com
+[Samoscout] 发现 32 个域名
+[Httpx] 正在对 57 个域名进行测活...
 [Httpx] 已发现 10 个存活服务
-[Httpx] 测活完成，发现 15 个存活服务
+[Httpx] 测活完成，发现 18 个存活服务
 💾 正在保存扫描结果到数据库...
 
 ==================================================
