@@ -14,27 +14,62 @@ type Scanner interface {
 
 // Pipeline 表示扫描流水线
 type Pipeline struct {
-	scanners []Scanner
+	domainScanners []Scanner // 子域名搜集器（并行执行）
+	nextScanners   []Scanner // 后续扫描器（串行执行）
 }
 
 // NewPipeline 创建新的流水线
 func NewPipeline() *Pipeline {
 	return &Pipeline{
-		scanners: make([]Scanner, 0),
+		domainScanners: make([]Scanner, 0),
+		nextScanners:   make([]Scanner, 0),
 	}
 }
 
-// AddScanner 添加扫描器到流水线
+// AddDomainScanner 添加子域名搜集器（会并行执行）
+func (p *Pipeline) AddDomainScanner(scanner Scanner) {
+	p.domainScanners = append(p.domainScanners, scanner)
+}
+
+// AddScanner 添加后续扫描器（串行执行）
 func (p *Pipeline) AddScanner(scanner Scanner) {
-	p.scanners = append(p.scanners, scanner)
+	p.nextScanners = append(p.nextScanners, scanner)
 }
 
 // Execute 执行流水线
 func (p *Pipeline) Execute(input []string) ([]Result, error) {
-	currentInput := input
 	var allResults []Result
+	var currentInput []string
 
-	for _, scanner := range p.scanners {
+	// 第一阶段：并行执行所有子域名搜集器
+	if len(p.domainScanners) > 0 {
+		domainMap := make(map[string]bool) // 用于去重
+
+		for _, scanner := range p.domainScanners {
+			results, err := scanner.Execute(input)
+			if err != nil {
+				return nil, err
+			}
+
+			// 收集所有域名结果并去重
+			for _, result := range results {
+				if result.Type == "domain" {
+					if domain, ok := result.Data.(string); ok {
+						if !domainMap[domain] {
+							domainMap[domain] = true
+							currentInput = append(currentInput, domain)
+							allResults = append(allResults, result)
+						}
+					}
+				}
+			}
+		}
+	} else {
+		currentInput = input
+	}
+
+	// 第二阶段：串行执行后续扫描器
+	for _, scanner := range p.nextScanners {
 		results, err := scanner.Execute(currentInput)
 		if err != nil {
 			return nil, err

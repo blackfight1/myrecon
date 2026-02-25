@@ -13,25 +13,12 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("使用方法: go run main.go <domain> [scanner]")
+		fmt.Println("使用方法: go run main.go <domain>")
 		fmt.Println("示例: go run main.go example.com")
-		fmt.Println("      go run main.go example.com subfinder")
-		fmt.Println("      go run main.go example.com samoscout")
-		fmt.Println("      go run main.go example.com both")
-		fmt.Println("")
-		fmt.Println("scanner 选项:")
-		fmt.Println("  subfinder  - 使用 Subfinder (默认)")
-		fmt.Println("  samoscout  - 使用 Samoscout")
-		fmt.Println("  both       - 同时使用两个工具")
 		os.Exit(1)
 	}
 
 	domain := os.Args[1]
-	scanner := "subfinder" // 默认使用 subfinder
-	if len(os.Args) >= 3 {
-		scanner = os.Args[2]
-	}
-
 	fmt.Printf("🎯 开始扫描目标: %s\n", domain)
 
 	// 连接数据库
@@ -52,27 +39,14 @@ func main() {
 	// 创建流水线
 	pipeline := engine.NewPipeline()
 
-	// 根据选择添加子域名搜集插件
-	switch scanner {
-	case "subfinder":
-		fmt.Println("📡 使用 Subfinder 进行子域名搜集")
-		subfinderPlugin := plugins.NewSubfinderPlugin()
-		pipeline.AddScanner(subfinderPlugin)
-	case "samoscout":
-		fmt.Println("📡 使用 Samoscout 进行子域名搜集")
-		samoscoutPlugin := plugins.NewSamoscoutPlugin()
-		pipeline.AddScanner(samoscoutPlugin)
-	case "both":
-		fmt.Println("📡 使用 Subfinder + Samoscout 进行子域名搜集")
-		subfinderPlugin := plugins.NewSubfinderPlugin()
-		samoscoutPlugin := plugins.NewSamoscoutPlugin()
-		pipeline.AddScanner(subfinderPlugin)
-		pipeline.AddScanner(samoscoutPlugin)
-	default:
-		log.Fatalf("未知的扫描器: %s (可选: subfinder, samoscout, both)", scanner)
-	}
+	// 添加所有子域名搜集插件（并行执行）
+	fmt.Println("📡 使用 Subfinder + Samoscout 进行子域名搜集")
+	subfinderPlugin := plugins.NewSubfinderPlugin()
+	samoscoutPlugin := plugins.NewSamoscoutPlugin()
+	pipeline.AddDomainScanner(subfinderPlugin)
+	pipeline.AddDomainScanner(samoscoutPlugin)
 
-	// 添加 Httpx 插件
+	// 添加 Httpx 插件（对所有发现的域名进行测活）
 	httpxPlugin := plugins.NewHttpxPlugin()
 	pipeline.AddScanner(httpxPlugin)
 

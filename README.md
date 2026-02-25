@@ -68,14 +68,8 @@ go mod tidy
 ### 4. 运行扫描
 
 ```bash
-# 使用 Subfinder (默认)
+# 默认使用所有子域名搜集工具（Subfinder + Samoscout）
 go run main.go example.com
-
-# 使用 Samoscout
-go run main.go example.com samoscout
-
-# 同时使用两个工具
-go run main.go example.com both
 ```
 
 ## 🔧 核心功能
@@ -93,7 +87,7 @@ type Scanner interface {
 
 ### 流水线执行
 
-支持多种子域名搜集工具：
+**第一阶段：并行子域名搜集**（自动去重）
 
 1. **Subfinder 插件**: 搜集子域名
    - 调用 `subfinder -d domain.com -json`
@@ -104,8 +98,10 @@ type Scanner interface {
    - 过滤日志行，提取有效 JSON 中的 `host` 字段
    - 自动去重
 
-3. **Httpx 插件**: 存活检测
-   - 接收域名列表
+**第二阶段：存活检测**
+
+3. **Httpx 插件**: 对所有发现的域名进行存活检测
+   - 接收合并后的域名列表
    - 调用 `httpx -json -sc -title -td`
    - 实时解析 JSONL 输出
 
@@ -152,7 +148,7 @@ func (n *NewPlugin) Execute(input []string) ([]engine.Result, error) {
 [Subfinder] 发现 25 个域名
 [Samoscout] 正在搜集域名: example.com
 [Samoscout] 发现 32 个域名
-[Httpx] 正在对 57 个域名进行测活...
+[Httpx] 正在对 48 个域名进行测活...（已自动去重）
 [Httpx] 已发现 10 个存活服务
 [Httpx] 测活完成，发现 18 个存活服务
 💾 正在保存扫描结果到数据库...
