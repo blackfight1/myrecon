@@ -61,8 +61,6 @@ go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
 # nmap 需要系统安装
 
-# DNS 解析和泛解析过滤
-go install github.com/d3mondev/puredns/v2@latest
 ```
 
 ### 2. 配置环境变量
@@ -121,17 +119,7 @@ another.com
 | Subdog | 子域名收集 | ✅ stdin |
 | Shosubgo | 从 Shodan 查找子域名 | ❌ 逐个处理 |
 
-### 第二阶段：DNS 解析和泛解析过滤
-
-| 工具 | 说明 |
-|------|------|
-| Puredns | DNS 解析验证，自动过滤泛解析子域名 |
-
-- 每次运行自动从 GitHub 更新 resolvers.txt
-- 自动检测并过滤泛解析（Wildcard）子域名
-- 只保留真实存在的子域名
-
-### 第三阶段：存活检测 + 端口扫描（并行执行）
+### 第二阶段：存活检测 + 端口扫描（并行执行）
 
 | 工具 | 说明 |
 |------|------|
