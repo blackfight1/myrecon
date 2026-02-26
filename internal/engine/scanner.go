@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // Result 表示扫描结果
@@ -41,6 +42,13 @@ func (p *Pipeline) AddScanner(scanner Scanner) {
 	p.nextScanners = append(p.nextScanners, scanner)
 }
 
+// scannerResult 用于收集并行扫描的结果
+type scannerResult struct {
+	name    string
+	results []Result
+	err     error
+}
+
 // Execute 执行流水线
 func (p *Pipeline) Execute(input []string) ([]Result, error) {
 	var allResults []Result
@@ -48,22 +56,44 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 
 	// 第一阶段：并行执行所有子域名搜集器
 	if len(p.domainScanners) > 0 {
-		domainMap := make(map[string]bool) // 用于去重
+		var wg sync.WaitGroup
+		resultChan := make(chan scannerResult, len(p.domainScanners))
 
+		// 并行启动所有扫描器
 		for _, scanner := range p.domainScanners {
-			results, err := scanner.Execute(input)
-			if err != nil {
+			wg.Add(1)
+			go func(s Scanner) {
+				defer wg.Done()
+				results, err := s.Execute(input)
+				resultChan <- scannerResult{
+					name:    s.Name(),
+					results: results,
+					err:     err,
+				}
+			}(scanner)
+		}
+
+		// 等待所有扫描器完成后关闭 channel
+		go func() {
+			wg.Wait()
+			close(resultChan)
+		}()
+
+		// 收集结果并去重
+		domainMap := make(map[string]bool)
+		for sr := range resultChan {
+			if sr.err != nil {
 				// 如果工具不存在，打印警告并跳过
-				if strings.Contains(err.Error(), "not found in PATH") {
-					fmt.Printf("⚠️  [%s] 工具未安装，跳过\n", scanner.Name())
+				if strings.Contains(sr.err.Error(), "not found in PATH") {
+					fmt.Printf("⚠️  [%s] 工具未安装，跳过\n", sr.name)
 					continue
 				}
 				// 其他错误则返回
-				return nil, err
+				return nil, sr.err
 			}
 
 			// 收集所有域名结果并去重
-			for _, result := range results {
+			for _, result := range sr.results {
 				if result.Type == "domain" {
 					if domain, ok := result.Data.(string); ok {
 						if !domainMap[domain] {
