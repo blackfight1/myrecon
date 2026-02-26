@@ -120,6 +120,22 @@ func main() {
 
 	fmt.Println("💾 正在保存扫描结果到数据库...")
 
+	// 统计每个根域名的结果
+	domainStats := make(map[string]*struct {
+		subdomains  int
+		webServices int
+		ports       int
+	})
+
+	// 初始化统计
+	for _, d := range domains {
+		domainStats[d] = &struct {
+			subdomains  int
+			webServices int
+			ports       int
+		}{}
+	}
+
 	// 保存结果到数据库
 	savedAssetCount := 0
 	savedPortCount := 0
@@ -127,10 +143,18 @@ func main() {
 	for _, result := range results {
 		switch result.Type {
 		case "domain":
-			// 仅子域名模式下保存子域名
-			if *subsOnly {
-				if subdomain, ok := result.Data.(string); ok {
-					// 保存子域名为资产
+			if subdomain, ok := result.Data.(string); ok {
+				// 统计子域名归属
+				for _, rootDomain := range domains {
+					if strings.HasSuffix(subdomain, rootDomain) {
+						if domainStats[rootDomain] != nil {
+							domainStats[rootDomain].subdomains++
+						}
+						break
+					}
+				}
+				// 仅子域名模式下保存子域名
+				if *subsOnly {
 					data := map[string]interface{}{
 						"domain": subdomain,
 					}
@@ -143,6 +167,17 @@ func main() {
 			}
 		case "web_service":
 			if data, ok := result.Data.(map[string]interface{}); ok {
+				// 统计 web 服务归属
+				if domain, ok := data["domain"].(string); ok {
+					for _, rootDomain := range domains {
+						if strings.HasSuffix(domain, rootDomain) {
+							if domainStats[rootDomain] != nil {
+								domainStats[rootDomain].webServices++
+							}
+							break
+						}
+					}
+				}
 				if err := database.SaveOrUpdateAsset(data); err != nil {
 					fmt.Printf("保存资产失败: %v\n", err)
 				} else {
@@ -151,6 +186,17 @@ func main() {
 			}
 		case "port_service":
 			if data, ok := result.Data.(map[string]interface{}); ok {
+				// 统计端口归属
+				if domain, ok := data["domain"].(string); ok {
+					for _, rootDomain := range domains {
+						if strings.HasSuffix(domain, rootDomain) {
+							if domainStats[rootDomain] != nil {
+								domainStats[rootDomain].ports++
+							}
+							break
+						}
+					}
+				}
 				if err := database.SaveOrUpdatePort(data); err != nil {
 					fmt.Printf("保存端口失败: %v\n", err)
 				} else {
@@ -159,6 +205,17 @@ func main() {
 			}
 		case "open_port":
 			if data, ok := result.Data.(map[string]interface{}); ok {
+				// 统计端口归属
+				if host, ok := data["host"].(string); ok {
+					for _, rootDomain := range domains {
+						if strings.HasSuffix(host, rootDomain) {
+							if domainStats[rootDomain] != nil {
+								domainStats[rootDomain].ports++
+							}
+							break
+						}
+					}
+				}
 				if err := database.SaveOrUpdatePort(data); err != nil {
 					fmt.Printf("保存端口失败: %v\n", err)
 				}
@@ -188,52 +245,87 @@ func main() {
 	}
 
 	// 打印扫描总结
-	fmt.Println("\n==================================================")
-	fmt.Println("📊 扫描完成总结")
-	fmt.Println("==================================================")
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║                      📊 扫描完成总结                          ║")
+	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+
+	// 基本信息
 	if isBatchMode {
-		fmt.Printf("🎯 扫描目标: %d 个域名\n", len(domains))
+		fmt.Printf("║  🎯 扫描目标: %-47d 个域名 ║\n", len(domains))
 	} else {
-		fmt.Printf("🎯 扫描目标: %s\n", domains[0])
+		fmt.Printf("║  🎯 扫描目标: %-50s ║\n", domains[0])
 	}
-	fmt.Printf("⏱️  扫描耗时: %v\n", time.Since(scanStartTime).Round(time.Second))
-	fmt.Printf("📈 数据库资产总数: %d -> %d\n", beforeAssetCount, afterAssetCount)
-	if !*subsOnly {
-		fmt.Printf("🔌 数据库端口总数: %d -> %d\n", beforePortCount, afterPortCount)
-	}
-	fmt.Printf("🆕 本次新增资产: %d 个\n", len(recentAssets))
-	if !*subsOnly {
-		fmt.Printf("🆕 本次新增端口: %d 个\n", len(recentPorts))
-	}
-	if *subsOnly {
-		fmt.Printf("💾 成功保存子域名: %d 个\n", savedDomainCount)
-	} else {
-		fmt.Printf("💾 成功保存资产: %d 个\n", savedAssetCount)
-		fmt.Printf("💾 成功保存端口: %d 个\n", savedPortCount)
+	fmt.Printf("║  ⏱️  扫描耗时: %-50v ║\n", time.Since(scanStartTime).Round(time.Second))
+
+	// 每个域名的统计
+	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+	fmt.Println("║                      📋 各域名统计                            ║")
+	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+
+	totalSubdomains := 0
+	totalWebServices := 0
+	totalPorts := 0
+
+	for _, d := range domains {
+		stats := domainStats[d]
+		if stats != nil {
+			totalSubdomains += stats.subdomains
+			totalWebServices += stats.webServices
+			totalPorts += stats.ports
+
+			if *subsOnly {
+				fmt.Printf("║  %-30s 子域名: %-6d              ║\n", truncateString(d, 30), stats.subdomains)
+			} else {
+				fmt.Printf("║  %-25s 子域名:%-5d Web:%-5d 端口:%-5d ║\n",
+					truncateString(d, 25), stats.subdomains, stats.webServices, stats.ports)
+			}
+		}
 	}
 
-	if len(recentAssets) > 0 {
+	// 汇总统计
+	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+	fmt.Println("║                      📈 汇总统计                              ║")
+	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+	fmt.Printf("║  📊 发现子域名总数: %-43d ║\n", totalSubdomains)
+	if !*subsOnly {
+		fmt.Printf("║  🌐 存活 Web 服务: %-43d ║\n", totalWebServices)
+		fmt.Printf("║  🔌 开放端口总数: %-44d ║\n", totalPorts)
+	}
+	fmt.Printf("║  📈 数据库资产: %-5d -> %-37d ║\n", beforeAssetCount, afterAssetCount)
+	if !*subsOnly {
+		fmt.Printf("║  📈 数据库端口: %-5d -> %-37d ║\n", beforePortCount, afterPortCount)
+	}
+
+	// 保存统计
+	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+	if *subsOnly {
+		fmt.Printf("║  💾 成功保存子域名: %-43d ║\n", savedDomainCount)
+	} else {
+		fmt.Printf("║  💾 成功保存资产: %-45d ║\n", savedAssetCount)
+		fmt.Printf("║  💾 成功保存端口: %-45d ║\n", savedPortCount)
+	}
+
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+
+	// 显示新发现的资产（简化版）
+	if len(recentAssets) > 0 && len(recentAssets) <= 20 {
 		fmt.Println("\n🔍 新发现的资产:")
-		for i, asset := range recentAssets {
-			if i >= 10 {
-				fmt.Printf("... 还有 %d 个资产\n", len(recentAssets)-10)
-				break
-			}
+		for _, asset := range recentAssets {
 			if asset.URL != "" {
 				fmt.Printf("  • %s [%d] %s\n", asset.URL, asset.StatusCode, asset.Title)
 			} else {
 				fmt.Printf("  • %s\n", asset.Domain)
 			}
 		}
+	} else if len(recentAssets) > 20 {
+		fmt.Printf("\n🔍 新发现 %d 个资产（数量较多，请查看数据库）\n", len(recentAssets))
 	}
 
-	if !*subsOnly && len(recentPorts) > 0 {
+	// 显示新发现的端口（简化版）
+	if !*subsOnly && len(recentPorts) > 0 && len(recentPorts) <= 20 {
 		fmt.Println("\n🔌 新发现的端口:")
-		for i, port := range recentPorts {
-			if i >= 10 {
-				fmt.Printf("... 还有 %d 个端口\n", len(recentPorts)-10)
-				break
-			}
+		for _, port := range recentPorts {
 			serviceInfo := port.Service
 			if port.Version != "" {
 				serviceInfo += " " + port.Version
@@ -244,8 +336,17 @@ func main() {
 			}
 			fmt.Printf("  • %s:%d (%s) [%s] %s\n", host, port.Port, port.IP, port.Protocol, serviceInfo)
 		}
+	} else if !*subsOnly && len(recentPorts) > 20 {
+		fmt.Printf("\n🔌 新发现 %d 个端口（数量较多，请查看数据库）\n", len(recentPorts))
 	}
 
-	fmt.Println("==================================================")
-	fmt.Println("✅ 扫描任务完成!")
+	fmt.Println("\n✅ 扫描任务完成!")
+}
+
+// truncateString 截断字符串
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
