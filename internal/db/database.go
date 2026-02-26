@@ -177,6 +177,7 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 		// 创建新端口记录
 		portRecord := Port{
 			AssetID:  asset.ID,
+			Domain:   domain, // 保存子域名
 			IP:       ip,
 			Port:     port,
 			Protocol: getStringValue(data, "protocol"),

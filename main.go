@@ -159,7 +159,12 @@ func main() {
 			if port.Version != "" {
 				serviceInfo += " " + port.Version
 			}
-			fmt.Printf("  • %s:%d [%s] %s\n", port.IP, port.Port, port.Protocol, serviceInfo)
+			// 显示域名和端口信息
+			host := port.Domain
+			if host == "" {
+				host = port.IP
+			}
+			fmt.Printf("  • %s:%d (%s) [%s] %s\n", host, port.Port, port.IP, port.Protocol, serviceInfo)
 		}
 	}
 

@@ -63,6 +63,7 @@ func (Asset) TableName() string {
 type Port struct {
 	ID        uint           `gorm:"primarykey" json:"id"`
 	AssetID   uint           `gorm:"index;not null" json:"asset_id"` // 关联 Asset
+	Domain    string         `gorm:"index" json:"domain"`            // 子域名
 	IP        string         `gorm:"not null" json:"ip"`
 	Port      int            `gorm:"not null" json:"port"`
 	Protocol  string         `gorm:"default:tcp" json:"protocol"` // tcp/udp
