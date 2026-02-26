@@ -41,13 +41,15 @@ func main() {
 	pipeline := engine.NewPipeline()
 
 	// 添加所有子域名搜集插件（并行执行）
-	fmt.Println("📡 使用 Subfinder + Samoscout + Subdog 进行子域名搜集")
+	fmt.Println("📡 使用 Subfinder + Samoscout + Subdog + Shosubgo 进行子域名搜集")
 	subfinderPlugin := plugins.NewSubfinderPlugin()
 	samoscoutPlugin := plugins.NewSamoscoutPlugin()
 	subdogPlugin := plugins.NewSubdogPlugin()
+	shosubgoPlugin := plugins.NewShosubgoPlugin()
 	pipeline.AddDomainScanner(subfinderPlugin)
 	pipeline.AddDomainScanner(samoscoutPlugin)
 	pipeline.AddDomainScanner(subdogPlugin)
+	pipeline.AddDomainScanner(shosubgoPlugin)
 
 	// 设置 Httpx 插件（与端口扫描并行执行）
 	fmt.Println("🌐 Httpx 测活 + Naabu/Nmap 端口扫描（并行执行）")
