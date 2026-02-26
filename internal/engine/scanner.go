@@ -21,6 +21,7 @@ type Scanner interface {
 // Pipeline 表示扫描流水线
 type Pipeline struct {
 	domainScanners []Scanner // 子域名搜集器（并行执行）
+	dnsFilter      Scanner   // DNS 解析和泛解析过滤器（puredns）
 	nextScanners   []Scanner // 后续扫描器（串行执行）
 	httpxScanner   Scanner   // Httpx 扫描器（与端口扫描并行）
 	portScanners   []Scanner // 端口扫描链（Naabu → Nmap，串行执行，与 Httpx 并行）
@@ -43,6 +44,11 @@ func (p *Pipeline) AddDomainScanner(scanner Scanner) {
 // AddScanner 添加后续扫描器（串行执行）
 func (p *Pipeline) AddScanner(scanner Scanner) {
 	p.nextScanners = append(p.nextScanners, scanner)
+}
+
+// SetDNSFilter 设置 DNS 过滤器（puredns，用于泛解析过滤）
+func (p *Pipeline) SetDNSFilter(scanner Scanner) {
+	p.dnsFilter = scanner
 }
 
 // SetHttpxScanner 设置 Httpx 扫描器（与端口扫描并行执行）
@@ -122,7 +128,50 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 		currentInput = input
 	}
 
-	// 第二阶段：并行执行 Httpx 和端口扫描链
+	// 第二阶段：DNS 解析和泛解析过滤（puredns）
+	if p.dnsFilter != nil && len(currentInput) > 0 {
+		fmt.Printf("🔍 使用 %s 进行 DNS 解析和泛解析过滤...\n", p.dnsFilter.Name())
+		results, err := p.dnsFilter.Execute(currentInput)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found in PATH") {
+				fmt.Printf("⚠️  [%s] 工具未安装，跳过泛解析过滤\n", p.dnsFilter.Name())
+			} else {
+				return nil, err
+			}
+		} else {
+			// 更新 currentInput 为过滤后的域名
+			beforeCount := len(currentInput)
+			currentInput = nil
+			for _, result := range results {
+				if result.Type == "domain" {
+					if domain, ok := result.Data.(string); ok {
+						currentInput = append(currentInput, domain)
+					}
+				}
+			}
+			// 更新 allResults 中的域名结果
+			var filteredResults []Result
+			filteredMap := make(map[string]bool)
+			for _, domain := range currentInput {
+				filteredMap[domain] = true
+			}
+			for _, result := range allResults {
+				if result.Type == "domain" {
+					if domain, ok := result.Data.(string); ok {
+						if filteredMap[domain] {
+							filteredResults = append(filteredResults, result)
+						}
+					}
+				} else {
+					filteredResults = append(filteredResults, result)
+				}
+			}
+			allResults = filteredResults
+			fmt.Printf("🔍 泛解析过滤完成: %d -> %d 个子域名\n", beforeCount, len(currentInput))
+		}
+	}
+
+	// 第三阶段：并行执行 Httpx 和端口扫描链
 	if p.httpxScanner != nil || len(p.portScanners) > 0 {
 		var wg sync.WaitGroup
 		resultChan := make(chan scannerResult, 2)
@@ -218,7 +267,7 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 		}
 	}
 
-	// 第三阶段：串行执行其他后续扫描器
+	// 第四阶段：串行执行其他后续扫描器
 	for _, scanner := range p.nextScanners {
 		results, err := scanner.Execute(currentInput)
 		if err != nil {

@@ -98,6 +98,11 @@ func main() {
 	pipeline.AddDomainScanner(subdogPlugin)
 	pipeline.AddDomainScanner(shosubgoPlugin)
 
+	// 添加 Puredns 进行 DNS 解析和泛解析过滤
+	fmt.Println("🔍 使用 Puredns 进行 DNS 解析和泛解析过滤")
+	purednsPlugin := plugins.NewPurednsPlugin()
+	pipeline.SetDNSFilter(purednsPlugin)
+
 	// 如果不是仅子域名模式，添加测活和端口扫描
 	if !*subsOnly {
 		fmt.Println("🌐 Httpx 测活 + Naabu/Nmap 端口扫描（并行执行）")
