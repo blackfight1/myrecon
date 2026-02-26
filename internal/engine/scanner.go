@@ -22,6 +22,8 @@ type Scanner interface {
 type Pipeline struct {
 	domainScanners []Scanner // 子域名搜集器（并行执行）
 	nextScanners   []Scanner // 后续扫描器（串行执行）
+	httpxScanner   Scanner   // Httpx 扫描器（与端口扫描并行）
+	portScanners   []Scanner // 端口扫描链（Naabu → Nmap，串行执行，与 Httpx 并行）
 }
 
 // NewPipeline 创建新的流水线
@@ -29,6 +31,7 @@ func NewPipeline() *Pipeline {
 	return &Pipeline{
 		domainScanners: make([]Scanner, 0),
 		nextScanners:   make([]Scanner, 0),
+		portScanners:   make([]Scanner, 0),
 	}
 }
 
@@ -40,6 +43,16 @@ func (p *Pipeline) AddDomainScanner(scanner Scanner) {
 // AddScanner 添加后续扫描器（串行执行）
 func (p *Pipeline) AddScanner(scanner Scanner) {
 	p.nextScanners = append(p.nextScanners, scanner)
+}
+
+// SetHttpxScanner 设置 Httpx 扫描器（与端口扫描并行执行）
+func (p *Pipeline) SetHttpxScanner(scanner Scanner) {
+	p.httpxScanner = scanner
+}
+
+// AddPortScanner 添加端口扫描器（Naabu → Nmap 串行执行）
+func (p *Pipeline) AddPortScanner(scanner Scanner) {
+	p.portScanners = append(p.portScanners, scanner)
 }
 
 // scannerResult 用于收集并行扫描的结果
@@ -109,7 +122,103 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 		currentInput = input
 	}
 
-	// 第二阶段：串行执行后续扫描器
+	// 第二阶段：并行执行 Httpx 和端口扫描链
+	if p.httpxScanner != nil || len(p.portScanners) > 0 {
+		var wg sync.WaitGroup
+		resultChan := make(chan scannerResult, 2)
+
+		// 启动 Httpx 扫描（如果设置了）
+		if p.httpxScanner != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				results, err := p.httpxScanner.Execute(currentInput)
+				resultChan <- scannerResult{
+					name:    p.httpxScanner.Name(),
+					results: results,
+					err:     err,
+				}
+			}()
+		}
+
+		// 启动端口扫描链（Naabu → Nmap）
+		if len(p.portScanners) > 0 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				var portResults []Result
+				portInput := currentInput
+
+				for _, scanner := range p.portScanners {
+					results, err := scanner.Execute(portInput)
+					if err != nil {
+						if strings.Contains(err.Error(), "not found in PATH") {
+							fmt.Printf("⚠️  [%s] 工具未安装，跳过端口扫描链\n", scanner.Name())
+							break
+						}
+						resultChan <- scannerResult{
+							name: "PortScan",
+							err:  err,
+						}
+						return
+					}
+
+					portResults = append(portResults, results...)
+
+					// 准备下一阶段的输入（Naabu → Nmap）
+					// 将 open_port 结果转换为 "ip:port:host" 格式
+					var nextInput []string
+					for _, result := range results {
+						if result.Type == "open_port" {
+							if data, ok := result.Data.(map[string]interface{}); ok {
+								ip := ""
+								port := 0
+								host := ""
+								if v, ok := data["ip"].(string); ok {
+									ip = v
+								}
+								if v, ok := data["port"].(int); ok {
+									port = v
+								}
+								if v, ok := data["host"].(string); ok {
+									host = v
+								}
+								if ip != "" && port > 0 {
+									nextInput = append(nextInput, fmt.Sprintf("%s:%d:%s", ip, port, host))
+								}
+							}
+						}
+					}
+					portInput = nextInput
+				}
+
+				resultChan <- scannerResult{
+					name:    "PortScan",
+					results: portResults,
+				}
+			}()
+		}
+
+		// 等待所有扫描器完成后关闭 channel
+		go func() {
+			wg.Wait()
+			close(resultChan)
+		}()
+
+		// 收集结果
+		for sr := range resultChan {
+			if sr.err != nil {
+				if strings.Contains(sr.err.Error(), "not found in PATH") {
+					fmt.Printf("⚠️  [%s] 工具未安装，跳过\n", sr.name)
+					continue
+				}
+				return nil, sr.err
+			}
+			allResults = append(allResults, sr.results...)
+		}
+	}
+
+	// 第三阶段：串行执行其他后续扫描器
 	for _, scanner := range p.nextScanners {
 		results, err := scanner.Execute(currentInput)
 		if err != nil {

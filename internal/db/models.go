@@ -51,9 +51,31 @@ type Asset struct {
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
 	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+	Ports        []Port         `gorm:"foreignKey:AssetID" json:"ports"` // 关联端口
 }
 
 // TableName 指定表名
 func (Asset) TableName() string {
 	return "assets"
+}
+
+// Port 端口模型
+type Port struct {
+	ID        uint           `gorm:"primarykey" json:"id"`
+	AssetID   uint           `gorm:"index;not null" json:"asset_id"` // 关联 Asset
+	IP        string         `gorm:"not null" json:"ip"`
+	Port      int            `gorm:"not null" json:"port"`
+	Protocol  string         `gorm:"default:tcp" json:"protocol"` // tcp/udp
+	Service   string         `json:"service"`                     // nmap 识别的服务名
+	Version   string         `json:"version"`                     // 服务版本
+	Banner    string         `json:"banner"`                      // 服务 banner
+	LastSeen  time.Time      `json:"last_seen"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// TableName 指定表名
+func (Port) TableName() string {
+	return "ports"
 }

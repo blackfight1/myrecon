@@ -25,7 +25,7 @@ func NewDatabase(dsn string) (*Database, error) {
 	}
 
 	// 自动迁移
-	if err := db.AutoMigrate(&Asset{}); err != nil {
+	if err := db.AutoMigrate(&Asset{}, &Port{}); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %v", err)
 	}
 
@@ -120,6 +120,129 @@ func (d *Database) GetRecentAssets(since time.Time) ([]Asset, error) {
 		return nil, err
 	}
 	return assets, nil
+}
+
+// SaveOrUpdatePort 保存或更新端口信息
+func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
+	ip := getStringValue(data, "ip")
+	port := getIntValue(data, "port")
+	domain := getStringValue(data, "domain")
+
+	if ip == "" || port == 0 {
+		return fmt.Errorf("ip and port are required")
+	}
+
+	// 先查找或创建对应的 Asset
+	var asset Asset
+	if domain != "" {
+		result := d.DB.Where("domain = ?", domain).First(&asset)
+		if result.Error == gorm.ErrRecordNotFound {
+			// 创建新的 Asset
+			asset = Asset{
+				Domain:   domain,
+				IP:       ip,
+				LastSeen: time.Now(),
+			}
+			if err := d.DB.Create(&asset).Error; err != nil {
+				return fmt.Errorf("failed to create asset: %v", err)
+			}
+		} else if result.Error != nil {
+			return fmt.Errorf("database query error: %v", result.Error)
+		}
+	} else {
+		// 如果没有域名，尝试通过 IP 查找
+		result := d.DB.Where("ip = ?", ip).First(&asset)
+		if result.Error == gorm.ErrRecordNotFound {
+			// 创建新的 Asset（以 IP 作为 domain）
+			asset = Asset{
+				Domain:   ip,
+				IP:       ip,
+				LastSeen: time.Now(),
+			}
+			if err := d.DB.Create(&asset).Error; err != nil {
+				return fmt.Errorf("failed to create asset: %v", err)
+			}
+		} else if result.Error != nil {
+			return fmt.Errorf("database query error: %v", result.Error)
+		}
+	}
+
+	// 查找现有端口记录
+	var existingPort Port
+	result := d.DB.Where("asset_id = ? AND ip = ? AND port = ?", asset.ID, ip, port).First(&existingPort)
+
+	now := time.Now()
+
+	if result.Error == gorm.ErrRecordNotFound {
+		// 创建新端口记录
+		portRecord := Port{
+			AssetID:  asset.ID,
+			IP:       ip,
+			Port:     port,
+			Protocol: getStringValue(data, "protocol"),
+			Service:  getStringValue(data, "service"),
+			Version:  getStringValue(data, "version"),
+			Banner:   getStringValue(data, "banner"),
+			LastSeen: now,
+		}
+		if portRecord.Protocol == "" {
+			portRecord.Protocol = "tcp"
+		}
+
+		if err := d.DB.Create(&portRecord).Error; err != nil {
+			return fmt.Errorf("failed to create port: %v", err)
+		}
+	} else if result.Error == nil {
+		// 更新现有端口记录
+		updates := map[string]interface{}{
+			"last_seen": now,
+		}
+
+		if service := getStringValue(data, "service"); service != "" {
+			updates["service"] = service
+		}
+		if version := getStringValue(data, "version"); version != "" {
+			updates["version"] = version
+		}
+		if banner := getStringValue(data, "banner"); banner != "" {
+			updates["banner"] = banner
+		}
+
+		if err := d.DB.Model(&existingPort).Updates(updates).Error; err != nil {
+			return fmt.Errorf("failed to update port: %v", err)
+		}
+	} else {
+		return fmt.Errorf("database query error: %v", result.Error)
+	}
+
+	return nil
+}
+
+// GetPortCount 获取端口总数
+func (d *Database) GetPortCount() (int64, error) {
+	var count int64
+	if err := d.DB.Model(&Port{}).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// GetRecentPorts 获取最近添加的端口
+func (d *Database) GetRecentPorts(since time.Time) ([]Port, error) {
+	var ports []Port
+	if err := d.DB.Where("created_at > ?", since).Find(&ports).Error; err != nil {
+		return nil, err
+	}
+	return ports, nil
+}
+
+// GetAssetByDomain 根据域名获取资产
+func (d *Database) GetAssetByDomain(domain string) (*Asset, error) {
+	var asset Asset
+	if err := d.DB.Where("domain = ?", domain).First(&asset).Error; err != nil {
+		return nil, err
+	}
+	return &asset, nil
 }
 
 // 辅助函数
