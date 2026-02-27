@@ -19,7 +19,42 @@ func main() {
 	domain := flag.String("d", "", "单个目标域名")
 	domainList := flag.String("dL", "", "包含域名列表的文件路径")
 	subsOnly := flag.Bool("subs", false, "仅执行子域名收集（不进行测活和端口扫描）")
+	noScreenshot := flag.Bool("no-screenshot", false, "禁用截图功能")
+	screenshotDir := flag.String("screenshot-dir", "screenshots", "截图存储目录")
+
+	// 截图查看服务参数
+	reportDomain := flag.String("report", "", "启动指定域名的截图查看服务")
+	reportHost := flag.String("report-host", "0.0.0.0", "截图服务监听地址")
+	reportPort := flag.Int("report-port", 7070, "截图服务监听端口")
+	listScreenshots := flag.Bool("list-screenshots", false, "列出所有有截图的域名")
+
 	flag.Parse()
+
+	// 列出所有有截图的域名
+	if *listScreenshots {
+		domains, err := plugins.ListScreenshotDomains(*screenshotDir)
+		if err != nil {
+			log.Fatalf("获取截图域名列表失败: %v", err)
+		}
+		if len(domains) == 0 {
+			fmt.Println("暂无截图数据")
+		} else {
+			fmt.Println("📸 已有截图的域名:")
+			for _, d := range domains {
+				fmt.Printf("  • %s\n", d)
+			}
+			fmt.Printf("\n使用 -report {domain} 启动查看服务")
+		}
+		return
+	}
+
+	// 启动截图查看服务
+	if *reportDomain != "" {
+		if err := plugins.StartReportServer(*screenshotDir, *reportDomain, *reportHost, *reportPort); err != nil {
+			log.Fatalf("启动截图服务失败: %v", err)
+		}
+		return
+	}
 
 	// 验证参数
 	if *domain == "" && *domainList == "" {
@@ -28,6 +63,11 @@ func main() {
 		fmt.Println("  批量域名:   go run main.go -dL domains.txt")
 		fmt.Println("  仅子域名:   go run main.go -d example.com -subs")
 		fmt.Println("  批量+仅子域名: go run main.go -dL domains.txt -subs")
+		fmt.Println()
+		fmt.Println("截图相关:")
+		fmt.Println("  禁用截图:   go run main.go -d example.com -no-screenshot")
+		fmt.Println("  查看截图:   go run main.go -report example.com")
+		fmt.Println("  列出域名:   go run main.go -list-screenshots")
 		os.Exit(1)
 	}
 
@@ -108,6 +148,13 @@ func main() {
 		nmapPlugin := plugins.NewNmapPlugin()
 		pipeline.AddPortScanner(naabuPlugin)
 		pipeline.AddPortScanner(nmapPlugin)
+
+		// 添加截图功能
+		if !*noScreenshot {
+			fmt.Println("📸 Gowitness 截图（Httpx 完成后执行）")
+			gowitnessPlugin := plugins.NewGowitnessPlugin(*screenshotDir)
+			pipeline.SetScreenshotScanner(gowitnessPlugin)
+		}
 	}
 
 	fmt.Println("🚀 启动扫描流水线...")
@@ -220,6 +267,15 @@ func main() {
 					fmt.Printf("保存端口失败: %v\n", err)
 				}
 			}
+		case "screenshot":
+			// 截图结果不需要保存到数据库，只打印信息
+			if data, ok := result.Data.(map[string]interface{}); ok {
+				if rootDomain, ok := data["root_domain"].(string); ok {
+					if count, ok := data["screenshot_count"].(int); ok {
+						fmt.Printf("📸 %s: %d 张截图\n", rootDomain, count)
+					}
+				}
+			}
 		}
 	}
 
@@ -304,6 +360,16 @@ func main() {
 	} else {
 		fmt.Printf("║  💾 成功保存资产: %-45d ║\n", savedAssetCount)
 		fmt.Printf("║  💾 成功保存端口: %-45d ║\n", savedPortCount)
+	}
+
+	// 显示截图信息
+	if !*subsOnly && !*noScreenshot {
+		screenshotDomains, _ := plugins.ListScreenshotDomains(*screenshotDir)
+		if len(screenshotDomains) > 0 {
+			fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+			fmt.Printf("║  📸 截图域名数: %-46d ║\n", len(screenshotDomains))
+			fmt.Printf("║  💡 查看截图: go run main.go -report {domain}                ║\n")
+		}
 	}
 
 	fmt.Println("╚══════════════════════════════════════════════════════════════╝")

@@ -20,10 +20,11 @@ type Scanner interface {
 
 // Pipeline 表示扫描流水线
 type Pipeline struct {
-	domainScanners []Scanner // 子域名搜集器（并行执行）
-	nextScanners   []Scanner // 后续扫描器（串行执行）
-	httpxScanner   Scanner   // Httpx 扫描器（与端口扫描并行）
-	portScanners   []Scanner // 端口扫描链（Naabu → Nmap，串行执行，与 Httpx 并行）
+	domainScanners    []Scanner // 子域名搜集器（并行执行）
+	nextScanners      []Scanner // 后续扫描器（串行执行）
+	httpxScanner      Scanner   // Httpx 扫描器（与端口扫描并行）
+	portScanners      []Scanner // 端口扫描链（Naabu → Nmap，串行执行，与 Httpx 并行）
+	screenshotScanner Scanner   // 截图扫描器（httpx 完成后执行）
 }
 
 // NewPipeline 创建新的流水线
@@ -33,6 +34,11 @@ func NewPipeline() *Pipeline {
 		nextScanners:   make([]Scanner, 0),
 		portScanners:   make([]Scanner, 0),
 	}
+}
+
+// SetScreenshotScanner 设置截图扫描器
+func (p *Pipeline) SetScreenshotScanner(scanner Scanner) {
+	p.screenshotScanner = scanner
 }
 
 // AddDomainScanner 添加子域名搜集器（会并行执行）
@@ -205,7 +211,8 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 			close(resultChan)
 		}()
 
-		// 收集结果
+		// 收集结果，同时收集 httpx 的 URL 用于截图
+		var httpxURLs []string
 		for sr := range resultChan {
 			if sr.err != nil {
 				if strings.Contains(sr.err.Error(), "not found in PATH") {
@@ -215,6 +222,41 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 				return nil, sr.err
 			}
 			allResults = append(allResults, sr.results...)
+
+			// 收集 httpx 结果中的 URL 用于截图
+			if sr.name == "Httpx" {
+				for _, result := range sr.results {
+					if result.Type == "web_service" {
+						if data, ok := result.Data.(map[string]interface{}); ok {
+							if url, ok := data["url"].(string); ok && url != "" {
+								// 获取域名并提取根域名
+								domain := ""
+								if d, ok := data["domain"].(string); ok {
+									domain = d
+								}
+								// 格式: url|root_domain
+								rootDomain := extractRootDomain(domain)
+								httpxURLs = append(httpxURLs, url+"|"+rootDomain)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// 第三阶段：执行截图（如果设置了截图扫描器）
+		if p.screenshotScanner != nil && len(httpxURLs) > 0 {
+			fmt.Printf("📸 开始对 %d 个存活 URL 进行截图...\n", len(httpxURLs))
+			screenshotResults, err := p.screenshotScanner.Execute(httpxURLs)
+			if err != nil {
+				if strings.Contains(err.Error(), "not found in PATH") {
+					fmt.Printf("⚠️  [%s] 工具未安装，跳过截图\n", p.screenshotScanner.Name())
+				} else {
+					fmt.Printf("⚠️  截图执行失败: %v\n", err)
+				}
+			} else {
+				allResults = append(allResults, screenshotResults...)
+			}
 		}
 	}
 
@@ -238,4 +280,13 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 	}
 
 	return allResults, nil
+}
+
+// extractRootDomain 从子域名提取根域名
+func extractRootDomain(subdomain string) string {
+	parts := strings.Split(subdomain, ".")
+	if len(parts) >= 2 {
+		return parts[len(parts)-2] + "." + parts[len(parts)-1]
+	}
+	return subdomain
 }

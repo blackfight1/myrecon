@@ -99,6 +99,12 @@ go run main.go -dL domains.txt -subs
 | `-d` | 单个目标域名 | `-d example.com` |
 | `-dL` | 域名列表文件 | `-dL domains.txt` |
 | `-subs` | 仅子域名收集模式 | `-subs` |
+| `-no-screenshot` | 禁用截图功能 | `-no-screenshot` |
+| `-screenshot-dir` | 截图存储目录 | `-screenshot-dir ./shots` |
+| `-report` | 启动截图查看服务 | `-report example.com` |
+| `-report-host` | 截图服务监听地址 | `-report-host 0.0.0.0` |
+| `-report-port` | 截图服务监听端口 | `-report-port 7070` |
+| `-list-screenshots` | 列出所有有截图的域名 | `-list-screenshots` |
 
 **domains.txt 格式：**
 ```
@@ -126,6 +132,12 @@ another.com
 | Httpx | HTTP 存活检测、状态码、标题、技术栈 |
 | Naabu | 快速端口扫描 |
 | Nmap | 服务版本识别 |
+
+### 第三阶段：Web 截图
+
+| 工具 | 说明 |
+|------|------|
+| Gowitness | 对存活 Web 服务进行截图，按域名分类存储 |
 
 ## 📊 输出示例
 
@@ -222,6 +234,45 @@ TRUNCATE TABLE ports RESTART IDENTITY CASCADE;
 ```bash
 # 在终端执行
 docker exec -it hunter-postgres psql -U hunter -d hunter -c "TRUNCATE TABLE assets, ports RESTART IDENTITY CASCADE;"
+```
+
+## 📸 截图功能
+
+Hunter 集成了 Gowitness 进行 Web 截图，截图按根域名分类存储：
+
+```
+screenshots/
+├── google.com/
+│   ├── gowitness.sqlite3
+│   └── screenshots/
+└── tesla.com/
+    ├── gowitness.sqlite3
+    └── screenshots/
+```
+
+### 截图相关命令
+
+```bash
+# 扫描时自动截图（默认开启）
+go run main.go -d example.com
+
+# 禁用截图
+go run main.go -d example.com -no-screenshot
+
+# 列出所有有截图的域名
+go run main.go -list-screenshots
+
+# 启动截图查看服务
+go run main.go -report example.com
+
+# 指定端口启动
+go run main.go -report example.com -report-port 8080
+```
+
+### 安装 Gowitness
+
+```bash
+go install github.com/sensepost/gowitness@latest
 ```
 
 ## 🔌 扩展插件
