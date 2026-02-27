@@ -282,6 +282,142 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 	return allResults, nil
 }
 
+// ExecuteFromSubdomains 从子域名开始执行（跳过子域名收集阶段）
+func (p *Pipeline) ExecuteFromSubdomains(subdomains []string) ([]Result, error) {
+	var allResults []Result
+
+	// 直接进入第二阶段：并行执行 Httpx 和端口扫描链
+	if p.httpxScanner != nil || len(p.portScanners) > 0 {
+		var wg sync.WaitGroup
+		resultChan := make(chan scannerResult, 2)
+
+		// 启动 Httpx 扫描（如果设置了）
+		if p.httpxScanner != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				results, err := p.httpxScanner.Execute(subdomains)
+				resultChan <- scannerResult{
+					name:    p.httpxScanner.Name(),
+					results: results,
+					err:     err,
+				}
+			}()
+		}
+
+		// 启动端口扫描链（Naabu → Nmap）
+		if len(p.portScanners) > 0 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				var portResults []Result
+				portInput := subdomains
+
+				for _, scanner := range p.portScanners {
+					results, err := scanner.Execute(portInput)
+					if err != nil {
+						if strings.Contains(err.Error(), "not found in PATH") {
+							fmt.Printf("⚠️  [%s] 工具未安装，跳过端口扫描链\n", scanner.Name())
+							break
+						}
+						resultChan <- scannerResult{
+							name: "PortScan",
+							err:  err,
+						}
+						return
+					}
+
+					portResults = append(portResults, results...)
+
+					// 准备下一阶段的输入（Naabu → Nmap）
+					var nextInput []string
+					for _, result := range results {
+						if result.Type == "open_port" {
+							if data, ok := result.Data.(map[string]interface{}); ok {
+								ip := ""
+								port := 0
+								host := ""
+								if v, ok := data["ip"].(string); ok {
+									ip = v
+								}
+								if v, ok := data["port"].(int); ok {
+									port = v
+								}
+								if v, ok := data["host"].(string); ok {
+									host = v
+								}
+								if ip != "" && port > 0 {
+									nextInput = append(nextInput, fmt.Sprintf("%s:%d:%s", ip, port, host))
+								}
+							}
+						}
+					}
+					portInput = nextInput
+				}
+
+				resultChan <- scannerResult{
+					name:    "PortScan",
+					results: portResults,
+				}
+			}()
+		}
+
+		// 等待所有扫描器完成后关闭 channel
+		go func() {
+			wg.Wait()
+			close(resultChan)
+		}()
+
+		// 收集结果，同时收集 httpx 的 URL 用于截图
+		var httpxURLs []string
+		for sr := range resultChan {
+			if sr.err != nil {
+				if strings.Contains(sr.err.Error(), "not found in PATH") {
+					fmt.Printf("⚠️  [%s] 工具未安装，跳过\n", sr.name)
+					continue
+				}
+				return nil, sr.err
+			}
+			allResults = append(allResults, sr.results...)
+
+			// 收集 httpx 结果中的 URL 用于截图
+			if sr.name == "Httpx" {
+				for _, result := range sr.results {
+					if result.Type == "web_service" {
+						if data, ok := result.Data.(map[string]interface{}); ok {
+							if url, ok := data["url"].(string); ok && url != "" {
+								domain := ""
+								if d, ok := data["domain"].(string); ok {
+									domain = d
+								}
+								rootDomain := extractRootDomain(domain)
+								httpxURLs = append(httpxURLs, url+"|"+rootDomain)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// 执行截图（如果设置了截图扫描器）
+		if p.screenshotScanner != nil && len(httpxURLs) > 0 {
+			fmt.Printf("📸 开始对 %d 个存活 URL 进行截图...\n", len(httpxURLs))
+			screenshotResults, err := p.screenshotScanner.Execute(httpxURLs)
+			if err != nil {
+				if strings.Contains(err.Error(), "not found in PATH") {
+					fmt.Printf("⚠️  [%s] 工具未安装，跳过截图\n", p.screenshotScanner.Name())
+				} else {
+					fmt.Printf("⚠️  截图执行失败: %v\n", err)
+				}
+			} else {
+				allResults = append(allResults, screenshotResults...)
+			}
+		}
+	}
+
+	return allResults, nil
+}
+
 // extractRootDomain 从子域名提取根域名
 func extractRootDomain(subdomain string) string {
 	parts := strings.Split(subdomain, ".")

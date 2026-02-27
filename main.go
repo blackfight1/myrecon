@@ -15,15 +15,20 @@ import (
 )
 
 func main() {
-	// 命令行参数
+	// 基础参数
 	domain := flag.String("d", "", "单个目标域名")
-	domainList := flag.String("dL", "", "包含域名列表的文件路径")
-	subsOnly := flag.Bool("subs", false, "仅执行子域名收集（不进行测活和端口扫描）")
-	noScreenshot := flag.Bool("no-screenshot", false, "禁用截图功能")
+	domainList := flag.String("dL", "", "域名列表文件")
+	inputFile := flag.String("i", "", "输入文件（用于 ports/witness 模块独立运行）")
+
+	// 模块选择
+	modules := flag.String("m", "", "选择模块: subs,ports,witness（逗号分隔，默认全部）")
+
+	// 控制参数
+	dryRun := flag.Bool("dry-run", false, "测试模式，不写入数据库")
 	screenshotDir := flag.String("screenshot-dir", "screenshots", "截图存储目录")
 
-	// 截图查看服务参数
-	reportDomain := flag.String("report", "", "启动指定域名的截图查看服务")
+	// 截图服务参数
+	reportDomain := flag.String("report", "", "启动截图查看服务")
 	reportHost := flag.String("report-host", "0.0.0.0", "截图服务监听地址")
 	reportPort := flag.Int("report-port", 7070, "截图服务监听端口")
 	listScreenshots := flag.Bool("list-screenshots", false, "列出所有有截图的域名")
@@ -43,7 +48,7 @@ func main() {
 			for _, d := range domains {
 				fmt.Printf("  • %s\n", d)
 			}
-			fmt.Printf("\n使用 -report {domain} 启动查看服务")
+			fmt.Printf("\n使用 -report {domain} 启动查看服务\n")
 		}
 		return
 	}
@@ -56,357 +61,440 @@ func main() {
 		return
 	}
 
-	// 验证参数
-	if *domain == "" && *domainList == "" {
-		fmt.Println("使用方法:")
-		fmt.Println("  单个域名:   go run main.go -d example.com")
-		fmt.Println("  批量域名:   go run main.go -dL domains.txt")
-		fmt.Println("  仅子域名:   go run main.go -d example.com -subs")
-		fmt.Println("  批量+仅子域名: go run main.go -dL domains.txt -subs")
-		fmt.Println()
-		fmt.Println("截图相关:")
-		fmt.Println("  禁用截图:   go run main.go -d example.com -no-screenshot")
-		fmt.Println("  查看截图:   go run main.go -report example.com")
-		fmt.Println("  列出域名:   go run main.go -list-screenshots")
+	// 解析模块选择
+	enableSubs := false
+	enablePorts := false
+	enableWitness := false
+
+	if *modules == "" {
+		// 默认启用所有模块
+		enableSubs = true
+		enablePorts = true
+		enableWitness = true
+	} else {
+		modList := strings.Split(strings.ToLower(*modules), ",")
+		for _, m := range modList {
+			m = strings.TrimSpace(m)
+			switch m {
+			case "subs":
+				enableSubs = true
+			case "ports":
+				enablePorts = true
+			case "witness":
+				enableWitness = true
+			default:
+				log.Fatalf("未知模块: %s（可用: subs, ports, witness）", m)
+			}
+		}
+	}
+
+	// 验证输入参数
+	if !validateInput(*domain, *domainList, *inputFile, enableSubs, enablePorts, enableWitness) {
+		printUsage()
 		os.Exit(1)
 	}
 
-	// 获取目标域名列表
-	var domains []string
-	if *domainList != "" {
-		// 从文件读取域名列表
-		file, err := os.Open(*domainList)
-		if err != nil {
-			log.Fatalf("无法打开域名列表文件: %v", err)
-		}
-		defer file.Close()
+	// 获取输入数据
+	var input []string
+	var err error
 
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			d := strings.TrimSpace(scanner.Text())
-			if d != "" && !strings.HasPrefix(d, "#") {
-				domains = append(domains, d)
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			log.Fatalf("读取域名列表文件失败: %v", err)
-		}
-
-		if len(domains) == 0 {
-			log.Fatalf("域名列表文件为空")
-		}
-		fmt.Printf("🎯 批量扫描模式: 共 %d 个目标域名\n", len(domains))
+	if enableSubs {
+		// subs 模块需要域名输入
+		input, err = getDomainsInput(*domain, *domainList)
+	} else if *inputFile != "" {
+		// ports/witness 模块使用 -i 输入
+		input, err = readLinesFromFile(*inputFile)
 	} else {
-		domains = []string{*domain}
-		fmt.Printf("🎯 开始扫描目标: %s\n", *domain)
+		// 从 stdin 读取
+		input, err = readLinesFromStdin()
 	}
 
-	if *subsOnly {
-		fmt.Println("📋 模式: 仅子域名收集")
-	}
-
-	// 判断是否为批量模式
-	isBatchMode := *domainList != ""
-
-	// 连接数据库
-	dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
-	database, err := db.NewDatabase(dsn)
 	if err != nil {
-		log.Fatalf("数据库连接失败: %v", err)
+		log.Fatalf("读取输入失败: %v", err)
 	}
 
-	// 记录扫描开始前的资产和端口数量
-	beforeAssetCount, err := database.GetAssetCount()
-	if err != nil {
-		log.Fatalf("获取资产数量失败: %v", err)
+	if len(input) == 0 {
+		log.Fatalf("输入为空")
 	}
-	beforePortCount, _ := database.GetPortCount()
+
+	// 打印运行信息
+	printRunInfo(enableSubs, enablePorts, enableWitness, *dryRun, len(input))
+
+	// 连接数据库（如果需要）
+	var database *db.Database
+	var beforeAssetCount, beforePortCount int64
+
+	if !*dryRun {
+		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
+		database, err = db.NewDatabase(dsn)
+		if err != nil {
+			log.Fatalf("数据库连接失败: %v", err)
+		}
+		beforeAssetCount, _ = database.GetAssetCount()
+		beforePortCount, _ = database.GetPortCount()
+	} else {
+		fmt.Println("🧪 测试模式：结果不会写入数据库")
+	}
 
 	scanStartTime := time.Now()
 
-	// 创建流水线
-	pipeline := engine.NewPipeline()
+	// 根据模块组合执行不同流程
+	var results []engine.Result
 
-	// 添加所有子域名搜集插件（并行执行）
-	fmt.Println("📡 使用 Subfinder + Samoscout + Subdog + Shosubgo 进行子域名搜集")
-	subfinderPlugin := plugins.NewSubfinderPlugin(isBatchMode)
-	samoscoutPlugin := plugins.NewSamoscoutPlugin(isBatchMode)
-	subdogPlugin := plugins.NewSubdogPlugin(isBatchMode)
-	shosubgoPlugin := plugins.NewShosubgoPlugin()
-	pipeline.AddDomainScanner(subfinderPlugin)
-	pipeline.AddDomainScanner(samoscoutPlugin)
-	pipeline.AddDomainScanner(subdogPlugin)
-	pipeline.AddDomainScanner(shosubgoPlugin)
+	if enableSubs && !enablePorts && !enableWitness {
+		// 仅子域名收集
+		results, err = runSubsOnly(input)
+	} else if !enableSubs && enablePorts && !enableWitness {
+		// 仅端口扫描
+		results, err = runPortsOnly(input)
+	} else if !enableSubs && !enablePorts && enableWitness {
+		// 仅截图
+		results, err = runWitnessOnly(input, *screenshotDir)
+	} else if enableSubs && enablePorts && !enableWitness {
+		// 子域名 + 端口
+		results, err = runSubsAndPorts(input)
+	} else if enableSubs && !enablePorts && enableWitness {
+		// 子域名 + 截图（需要先 httpx）
+		results, err = runSubsAndWitness(input, *screenshotDir)
+	} else if !enableSubs && enablePorts && enableWitness {
+		// 端口 + 截图
+		results, err = runPortsAndWitness(input, *screenshotDir)
+	} else {
+		// 完整流程
+		results, err = runFullPipeline(input, *screenshotDir)
+	}
 
-	// 如果不是仅子域名模式，添加测活和端口扫描
-	if !*subsOnly {
-		fmt.Println("🌐 Httpx 测活 + Naabu/Nmap 端口扫描（并行执行）")
-		httpxPlugin := plugins.NewHttpxPlugin()
-		pipeline.SetHttpxScanner(httpxPlugin)
+	if err != nil {
+		log.Fatalf("执行失败: %v", err)
+	}
 
-		naabuPlugin := plugins.NewNaabuPlugin()
-		nmapPlugin := plugins.NewNmapPlugin()
-		pipeline.AddPortScanner(naabuPlugin)
-		pipeline.AddPortScanner(nmapPlugin)
+	// 保存结果
+	if !*dryRun && database != nil {
+		saveResults(database, results, input)
+	}
 
-		// 添加截图功能
-		if !*noScreenshot {
-			fmt.Println("📸 Gowitness 截图（Httpx 完成后执行）")
-			gowitnessPlugin := plugins.NewGowitnessPlugin(*screenshotDir)
-			pipeline.SetScreenshotScanner(gowitnessPlugin)
+	// 打印统计
+	printSummary(results, input, scanStartTime, *dryRun, database, beforeAssetCount, beforePortCount, *screenshotDir, enableWitness)
+}
+
+// validateInput 验证输入参数
+func validateInput(domain, domainList, inputFile string, subs, ports, witness bool) bool {
+	if subs {
+		// subs 模块需要 -d 或 -dL
+		return domain != "" || domainList != ""
+	}
+	// ports/witness 模块需要 -i 或 stdin
+	return inputFile != "" || !isTerminal()
+}
+
+// isTerminal 检查是否为终端输入
+func isTerminal() bool {
+	fi, _ := os.Stdin.Stat()
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+// getDomainsInput 获取域名输入
+func getDomainsInput(domain, domainList string) ([]string, error) {
+	if domainList != "" {
+		return readLinesFromFile(domainList)
+	}
+	return []string{domain}, nil
+}
+
+// readLinesFromFile 从文件读取行
+func readLinesFromFile(filename string) ([]string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" && !strings.HasPrefix(line, "#") {
+			lines = append(lines, line)
 		}
 	}
+	return lines, scanner.Err()
+}
 
-	fmt.Println("🚀 启动扫描流水线...")
+// readLinesFromStdin 从 stdin 读取行
+func readLinesFromStdin() ([]string, error) {
+	var lines []string
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" && !strings.HasPrefix(line, "#") {
+			lines = append(lines, line)
+		}
+	}
+	return lines, scanner.Err()
+}
 
-	// 执行流水线
-	results, err := pipeline.Execute(domains)
-	if err != nil {
-		log.Fatalf("流水线执行失败: %v", err)
+// printUsage 打印使用说明
+func printUsage() {
+	fmt.Println("Hunter - 资产搜集引擎")
+	fmt.Println()
+	fmt.Println("使用方法:")
+	fmt.Println("  完整扫描:     hunter -d example.com")
+	fmt.Println("  批量扫描:     hunter -dL domains.txt")
+	fmt.Println()
+	fmt.Println("模块选择 (-m):")
+	fmt.Println("  subs          子域名收集（输入: 域名）")
+	fmt.Println("  ports         端口扫描（输入: 子域名）")
+	fmt.Println("  witness       Web 截图（输入: URL）")
+	fmt.Println()
+	fmt.Println("示例:")
+	fmt.Println("  hunter -m subs -d example.com              # 仅子域名收集")
+	fmt.Println("  hunter -m ports -i subdomains.txt          # 仅端口扫描")
+	fmt.Println("  hunter -m witness -i urls.txt              # 仅截图")
+	fmt.Println("  hunter -m subs,ports -d example.com        # 子域名+端口")
+	fmt.Println("  cat subs.txt | hunter -m ports             # 管道输入")
+	fmt.Println()
+	fmt.Println("其他参数:")
+	fmt.Println("  --dry-run           测试模式，不写入数据库")
+	fmt.Println("  -screenshot-dir     截图存储目录（默认: screenshots）")
+	fmt.Println("  -report {domain}    启动截图查看服务")
+	fmt.Println("  -list-screenshots   列出所有有截图的域名")
+}
+
+// printRunInfo 打印运行信息
+func printRunInfo(subs, ports, witness, dryRun bool, inputCount int) {
+	var mods []string
+	if subs {
+		mods = append(mods, "subs")
+	}
+	if ports {
+		mods = append(mods, "ports")
+	}
+	if witness {
+		mods = append(mods, "witness")
 	}
 
-	fmt.Println("💾 正在保存扫描结果到数据库...")
+	fmt.Printf("🎯 输入: %d 条\n", inputCount)
+	fmt.Printf("📦 模块: %s\n", strings.Join(mods, " → "))
+	if dryRun {
+		fmt.Println("🧪 模式: 测试（不写入数据库）")
+	}
+	fmt.Println()
+}
 
-	// 统计每个根域名的结果
-	domainStats := make(map[string]*struct {
-		subdomains  int
-		webServices int
-		ports       int
-	})
+// runSubsOnly 仅运行子域名收集
+func runSubsOnly(domains []string) ([]engine.Result, error) {
+	fmt.Println("📡 子域名收集...")
+	pipeline := engine.NewPipeline()
 
-	// 初始化统计
-	for _, d := range domains {
-		domainStats[d] = &struct {
-			subdomains  int
-			webServices int
-			ports       int
-		}{}
+	isBatchMode := len(domains) > 1
+	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewSamoscoutPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewSubdogPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
+
+	return pipeline.Execute(domains)
+}
+
+// runPortsOnly 仅运行端口扫描
+func runPortsOnly(subdomains []string) ([]engine.Result, error) {
+	fmt.Println("🔌 端口扫描...")
+
+	// 先用 httpx 测活，再用 naabu+nmap 扫描
+	pipeline := engine.NewPipeline()
+	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
+	pipeline.AddPortScanner(plugins.NewNaabuPlugin())
+	pipeline.AddPortScanner(plugins.NewNmapPlugin())
+
+	// 直接使用子域名作为输入（跳过子域名收集阶段）
+	return pipeline.ExecuteFromSubdomains(subdomains)
+}
+
+// runWitnessOnly 仅运行截图
+func runWitnessOnly(urls []string, screenshotDir string) ([]engine.Result, error) {
+	fmt.Println("📸 Web 截图...")
+
+	gowitnessPlugin := plugins.NewGowitnessPlugin(screenshotDir)
+
+	// 将 URL 转换为 "url|root_domain" 格式
+	var input []string
+	for _, url := range urls {
+		// 从 URL 提取域名
+		domain := extractDomainFromURL(url)
+		rootDomain := plugins.ExtractRootDomain(domain)
+		input = append(input, url+"|"+rootDomain)
 	}
 
-	// 保存结果到数据库
-	savedAssetCount := 0
-	savedPortCount := 0
-	savedDomainCount := 0
+	return gowitnessPlugin.Execute(input)
+}
+
+// runSubsAndPorts 子域名 + 端口扫描
+func runSubsAndPorts(domains []string) ([]engine.Result, error) {
+	fmt.Println("📡 子域名收集 + 🔌 端口扫描...")
+	pipeline := engine.NewPipeline()
+
+	isBatchMode := len(domains) > 1
+	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewSamoscoutPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewSubdogPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
+
+	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
+	pipeline.AddPortScanner(plugins.NewNaabuPlugin())
+	pipeline.AddPortScanner(plugins.NewNmapPlugin())
+
+	return pipeline.Execute(domains)
+}
+
+// runSubsAndWitness 子域名 + 截图
+func runSubsAndWitness(domains []string, screenshotDir string) ([]engine.Result, error) {
+	fmt.Println("📡 子域名收集 + 📸 截图...")
+	pipeline := engine.NewPipeline()
+
+	isBatchMode := len(domains) > 1
+	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewSamoscoutPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewSubdogPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
+
+	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
+	pipeline.SetScreenshotScanner(plugins.NewGowitnessPlugin(screenshotDir))
+
+	return pipeline.Execute(domains)
+}
+
+// runPortsAndWitness 端口扫描 + 截图
+func runPortsAndWitness(subdomains []string, screenshotDir string) ([]engine.Result, error) {
+	fmt.Println("🔌 端口扫描 + 📸 截图...")
+	pipeline := engine.NewPipeline()
+
+	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
+	pipeline.AddPortScanner(plugins.NewNaabuPlugin())
+	pipeline.AddPortScanner(plugins.NewNmapPlugin())
+	pipeline.SetScreenshotScanner(plugins.NewGowitnessPlugin(screenshotDir))
+
+	return pipeline.ExecuteFromSubdomains(subdomains)
+}
+
+// runFullPipeline 完整流程
+func runFullPipeline(domains []string, screenshotDir string) ([]engine.Result, error) {
+	fmt.Println("🚀 完整扫描流程...")
+	pipeline := engine.NewPipeline()
+
+	isBatchMode := len(domains) > 1
+	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewSamoscoutPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewSubdogPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
+
+	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
+	pipeline.AddPortScanner(plugins.NewNaabuPlugin())
+	pipeline.AddPortScanner(plugins.NewNmapPlugin())
+	pipeline.SetScreenshotScanner(plugins.NewGowitnessPlugin(screenshotDir))
+
+	return pipeline.Execute(domains)
+}
+
+// extractDomainFromURL 从 URL 提取域名
+func extractDomainFromURL(url string) string {
+	// 移除协议
+	url = strings.TrimPrefix(url, "http://")
+	url = strings.TrimPrefix(url, "https://")
+	// 移除路径
+	if idx := strings.Index(url, "/"); idx != -1 {
+		url = url[:idx]
+	}
+	// 移除端口
+	if idx := strings.Index(url, ":"); idx != -1 {
+		url = url[:idx]
+	}
+	return url
+}
+
+// saveResults 保存结果到数据库
+func saveResults(database *db.Database, results []engine.Result, domains []string) {
+	fmt.Println("💾 保存结果到数据库...")
+
 	for _, result := range results {
 		switch result.Type {
 		case "domain":
 			if subdomain, ok := result.Data.(string); ok {
-				// 统计子域名归属
-				for _, rootDomain := range domains {
-					if strings.HasSuffix(subdomain, rootDomain) {
-						if domainStats[rootDomain] != nil {
-							domainStats[rootDomain].subdomains++
-						}
-						break
-					}
-				}
-				// 仅子域名模式下保存子域名
-				if *subsOnly {
-					data := map[string]interface{}{
-						"domain": subdomain,
-					}
-					if err := database.SaveOrUpdateAsset(data); err != nil {
-						// 忽略重复错误
-					} else {
-						savedDomainCount++
-					}
-				}
+				data := map[string]interface{}{"domain": subdomain}
+				database.SaveOrUpdateAsset(data)
 			}
 		case "web_service":
 			if data, ok := result.Data.(map[string]interface{}); ok {
-				// 统计 web 服务归属
-				if domain, ok := data["domain"].(string); ok {
-					for _, rootDomain := range domains {
-						if strings.HasSuffix(domain, rootDomain) {
-							if domainStats[rootDomain] != nil {
-								domainStats[rootDomain].webServices++
-							}
-							break
-						}
-					}
-				}
-				if err := database.SaveOrUpdateAsset(data); err != nil {
-					fmt.Printf("保存资产失败: %v\n", err)
-				} else {
-					savedAssetCount++
-				}
+				database.SaveOrUpdateAsset(data)
 			}
-		case "port_service":
+		case "port_service", "open_port":
 			if data, ok := result.Data.(map[string]interface{}); ok {
-				// 统计端口归属
-				if domain, ok := data["domain"].(string); ok {
-					for _, rootDomain := range domains {
-						if strings.HasSuffix(domain, rootDomain) {
-							if domainStats[rootDomain] != nil {
-								domainStats[rootDomain].ports++
-							}
-							break
-						}
-					}
-				}
-				if err := database.SaveOrUpdatePort(data); err != nil {
-					fmt.Printf("保存端口失败: %v\n", err)
-				} else {
-					savedPortCount++
-				}
+				database.SaveOrUpdatePort(data)
 			}
-		case "open_port":
-			if data, ok := result.Data.(map[string]interface{}); ok {
-				// 统计端口归属
-				if host, ok := data["host"].(string); ok {
-					for _, rootDomain := range domains {
-						if strings.HasSuffix(host, rootDomain) {
-							if domainStats[rootDomain] != nil {
-								domainStats[rootDomain].ports++
-							}
-							break
-						}
-					}
-				}
-				if err := database.SaveOrUpdatePort(data); err != nil {
-					fmt.Printf("保存端口失败: %v\n", err)
-				}
-			}
+		}
+	}
+}
+
+// printSummary 打印统计摘要
+func printSummary(results []engine.Result, domains []string, startTime time.Time, dryRun bool, database *db.Database, beforeAsset, beforePort int64, screenshotDir string, witnessEnabled bool) {
+	// 统计结果
+	subdomainCount := 0
+	webServiceCount := 0
+	portCount := 0
+	screenshotCount := 0
+
+	for _, result := range results {
+		switch result.Type {
+		case "domain":
+			subdomainCount++
+		case "web_service":
+			webServiceCount++
+		case "port_service", "open_port":
+			portCount++
 		case "screenshot":
-			// 截图结果不需要保存到数据库，只打印信息
 			if data, ok := result.Data.(map[string]interface{}); ok {
-				if rootDomain, ok := data["root_domain"].(string); ok {
-					if count, ok := data["screenshot_count"].(int); ok {
-						fmt.Printf("📸 %s: %d 张截图\n", rootDomain, count)
-					}
+				if count, ok := data["screenshot_count"].(int); ok {
+					screenshotCount += count
 				}
 			}
 		}
 	}
 
-	// 获取扫描后的资产数量
-	afterAssetCount, err := database.GetAssetCount()
-	if err != nil {
-		log.Fatalf("获取资产数量失败: %v", err)
-	}
-
-	// 获取扫描后的端口数量
-	afterPortCount, _ := database.GetPortCount()
-
-	// 获取本次扫描新增的资产
-	recentAssets, err := database.GetRecentAssets(scanStartTime)
-	if err != nil {
-		log.Printf("获取新增资产失败: %v", err)
-	}
-
-	// 获取本次扫描新增的端口
-	recentPorts, err := database.GetRecentPorts(scanStartTime)
-	if err != nil {
-		log.Printf("获取新增端口失败: %v", err)
-	}
-
-	// 打印扫描总结
 	fmt.Println()
 	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
 	fmt.Println("║                      📊 扫描完成总结                          ║")
 	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-
-	// 基本信息
-	if isBatchMode {
-		fmt.Printf("║  🎯 扫描目标: %-47d 个域名 ║\n", len(domains))
-	} else {
-		fmt.Printf("║  🎯 扫描目标: %-50s ║\n", domains[0])
-	}
-	fmt.Printf("║  ⏱️  扫描耗时: %-50v ║\n", time.Since(scanStartTime).Round(time.Second))
-
-	// 每个域名的统计
-	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-	fmt.Println("║                      📋 各域名统计                            ║")
+	fmt.Printf("║  ⏱️  耗时: %-52v ║\n", time.Since(startTime).Round(time.Second))
 	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
 
-	totalSubdomains := 0
-	totalWebServices := 0
-	totalPorts := 0
-
-	for _, d := range domains {
-		stats := domainStats[d]
-		if stats != nil {
-			totalSubdomains += stats.subdomains
-			totalWebServices += stats.webServices
-			totalPorts += stats.ports
-
-			if *subsOnly {
-				fmt.Printf("║  %-30s 子域名: %-6d              ║\n", truncateString(d, 30), stats.subdomains)
-			} else {
-				fmt.Printf("║  %-25s 子域名:%-5d Web:%-5d 端口:%-5d ║\n",
-					truncateString(d, 25), stats.subdomains, stats.webServices, stats.ports)
-			}
-		}
+	if subdomainCount > 0 {
+		fmt.Printf("║  📡 子域名: %-50d ║\n", subdomainCount)
+	}
+	if webServiceCount > 0 {
+		fmt.Printf("║  🌐 Web 服务: %-48d ║\n", webServiceCount)
+	}
+	if portCount > 0 {
+		fmt.Printf("║  🔌 开放端口: %-48d ║\n", portCount)
+	}
+	if screenshotCount > 0 {
+		fmt.Printf("║  📸 截图: %-52d ║\n", screenshotCount)
 	}
 
-	// 汇总统计
-	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-	fmt.Println("║                      📈 汇总统计                              ║")
-	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-	fmt.Printf("║  📊 发现子域名总数: %-43d ║\n", totalSubdomains)
-	if !*subsOnly {
-		fmt.Printf("║  🌐 存活 Web 服务: %-43d ║\n", totalWebServices)
-		fmt.Printf("║  🔌 开放端口总数: %-44d ║\n", totalPorts)
-	}
-	fmt.Printf("║  📈 数据库资产: %-5d -> %-37d ║\n", beforeAssetCount, afterAssetCount)
-	if !*subsOnly {
-		fmt.Printf("║  📈 数据库端口: %-5d -> %-37d ║\n", beforePortCount, afterPortCount)
+	if !dryRun && database != nil {
+		afterAsset, _ := database.GetAssetCount()
+		afterPort, _ := database.GetPortCount()
+		fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+		fmt.Printf("║  💾 资产: %d → %-47d ║\n", beforeAsset, afterAsset)
+		fmt.Printf("║  💾 端口: %d → %-47d ║\n", beforePort, afterPort)
 	}
 
-	// 保存统计
-	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-	if *subsOnly {
-		fmt.Printf("║  💾 成功保存子域名: %-43d ║\n", savedDomainCount)
-	} else {
-		fmt.Printf("║  💾 成功保存资产: %-45d ║\n", savedAssetCount)
-		fmt.Printf("║  💾 成功保存端口: %-45d ║\n", savedPortCount)
-	}
-
-	// 显示截图信息
-	if !*subsOnly && !*noScreenshot {
-		screenshotDomains, _ := plugins.ListScreenshotDomains(*screenshotDir)
+	if witnessEnabled {
+		screenshotDomains, _ := plugins.ListScreenshotDomains(screenshotDir)
 		if len(screenshotDomains) > 0 {
 			fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-			fmt.Printf("║  📸 截图域名数: %-46d ║\n", len(screenshotDomains))
-			fmt.Printf("║  💡 查看截图: go run main.go -report {domain}                ║\n")
+			fmt.Printf("║  💡 查看截图: hunter -report {domain}                        ║\n")
 		}
 	}
 
 	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
-
-	// 显示新发现的资产（简化版）
-	if len(recentAssets) > 0 && len(recentAssets) <= 20 {
-		fmt.Println("\n🔍 新发现的资产:")
-		for _, asset := range recentAssets {
-			if asset.URL != "" {
-				fmt.Printf("  • %s [%d] %s\n", asset.URL, asset.StatusCode, asset.Title)
-			} else {
-				fmt.Printf("  • %s\n", asset.Domain)
-			}
-		}
-	} else if len(recentAssets) > 20 {
-		fmt.Printf("\n🔍 新发现 %d 个资产（数量较多，请查看数据库）\n", len(recentAssets))
-	}
-
-	// 显示新发现的端口（简化版）
-	if !*subsOnly && len(recentPorts) > 0 && len(recentPorts) <= 20 {
-		fmt.Println("\n🔌 新发现的端口:")
-		for _, port := range recentPorts {
-			serviceInfo := port.Service
-			if port.Version != "" {
-				serviceInfo += " " + port.Version
-			}
-			host := port.Domain
-			if host == "" {
-				host = port.IP
-			}
-			fmt.Printf("  • %s:%d (%s) [%s] %s\n", host, port.Port, port.IP, port.Protocol, serviceInfo)
-		}
-	} else if !*subsOnly && len(recentPorts) > 20 {
-		fmt.Printf("\n🔌 新发现 %d 个端口（数量较多，请查看数据库）\n", len(recentPorts))
-	}
-
-	fmt.Println("\n✅ 扫描任务完成!")
 }
 
 // truncateString 截断字符串
