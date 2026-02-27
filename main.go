@@ -48,7 +48,7 @@ func main() {
 			for _, d := range domains {
 				fmt.Printf("  • %s\n", d)
 			}
-			fmt.Printf("\n使用 -report {domain} 启动查看服务\n")
+			fmt.Println("\n使用 go run main.go -report <domain> 启动查看服务")
 		}
 		return
 	}
@@ -238,8 +238,8 @@ func printUsage() {
 	fmt.Println("Hunter - 资产搜集引擎")
 	fmt.Println()
 	fmt.Println("使用方法:")
-	fmt.Println("  完整扫描:     hunter -d example.com")
-	fmt.Println("  批量扫描:     hunter -dL domains.txt")
+	fmt.Println("  完整扫描:     go run main.go -d example.com")
+	fmt.Println("  批量扫描:     go run main.go -dL domains.txt")
 	fmt.Println()
 	fmt.Println("模块选择 (-m):")
 	fmt.Println("  subs          子域名收集（输入: 域名）")
@@ -247,16 +247,15 @@ func printUsage() {
 	fmt.Println("  witness       Web 截图（输入: URL）")
 	fmt.Println()
 	fmt.Println("示例:")
-	fmt.Println("  hunter -m subs -d example.com              # 仅子域名收集")
-	fmt.Println("  hunter -m ports -i subdomains.txt          # 仅端口扫描")
-	fmt.Println("  hunter -m witness -i urls.txt              # 仅截图")
-	fmt.Println("  hunter -m subs,ports -d example.com        # 子域名+端口")
-	fmt.Println("  cat subs.txt | hunter -m ports             # 管道输入")
+	fmt.Println("  go run main.go -m subs -d example.com        # 仅子域名收集")
+	fmt.Println("  go run main.go -m ports -i subdomains.txt    # 仅端口扫描")
+	fmt.Println("  go run main.go -m witness -i urls.txt        # 仅截图")
+	fmt.Println("  go run main.go -m subs,ports -d example.com  # 子域名+端口")
 	fmt.Println()
 	fmt.Println("其他参数:")
 	fmt.Println("  --dry-run           测试模式，不写入数据库")
 	fmt.Println("  -screenshot-dir     截图存储目录（默认: screenshots）")
-	fmt.Println("  -report {domain}    启动截图查看服务")
+	fmt.Println("  -report <domain>    启动截图查看服务")
 	fmt.Println("  -list-screenshots   列出所有有截图的域名")
 }
 
@@ -490,7 +489,7 @@ func printSummary(results []engine.Result, domains []string, startTime time.Time
 		screenshotDomains, _ := plugins.ListScreenshotDomains(screenshotDir)
 		if len(screenshotDomains) > 0 {
 			fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-			fmt.Printf("║  💡 查看截图: hunter -report {domain}                        ║\n")
+			fmt.Println("║  💡 查看截图: go run main.go -report <domain>                ║")
 		}
 	}
 
