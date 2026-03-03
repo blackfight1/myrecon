@@ -1,266 +1,232 @@
-# Hunter - 资产搜集引擎
+﻿# Hunter - 资产侦查与漏洞发现引擎
 
-Hunter 是一个模块化的资产搜集引擎，采用流水线架构设计，支持插件化扩展。
+Hunter 是一个模块化的后端工具，面向 bug bounty 侦查流程，支持：
 
-## 🏗️ 架构设计
+- 子域名收集（多工具并行）
+- 存活探测与端口扫描
+- Web 截图
+- Nuclei（CVE 优先）漏洞扫描
+- PostgreSQL 持久化
 
-- **插件化设计**: 每个扫描工具都是独立的插件，易于扩展
-- **流水线模式**: 支持将一个工具的输出作为下一个工具的输入
-- **模块化执行**: 支持单独运行各模块或组合运行
-- **数据库存储**: 使用 PostgreSQL + GORM 进行数据持久化
+## 功能概览
 
-## 📁 项目结构
+- `subs`：子域名收集（`subfinder` / `samoscout` / `subdog` / `shosubgo`）
+- `ports`：`httpx` + `naabu` + `nmap`
+- `witness`：`gowitness` 截图
+- `nuclei`：可选漏洞扫描（默认按 `cve` 标签，`medium,high,critical`）
 
-```
-hunter/
+## 项目结构
+
+```text
+myrecon/
+├── main.go
 ├── internal/
-│   ├── engine/          # 流水线核心逻辑
-│   │   └── scanner.go   # Scanner 接口和 Pipeline 实现
-│   ├── plugins/         # 扫描工具插件
-│   │   ├── subfinder.go # Subfinder 域名搜集插件
-│   │   ├── samoscout.go # Samoscout 域名搜集插件
-│   │   ├── subdog.go    # Subdog 域名搜集插件
-│   │   ├── shosubgo.go  # Shosubgo 域名搜集插件（Shodan）
-│   │   ├── httpx.go     # Httpx 存活检测插件
-│   │   ├── naabu.go     # Naabu 端口扫描插件
-│   │   ├── nmap.go      # Nmap 服务识别插件
-│   │   ├── gowitness.go # Gowitness 截图插件
-│   │   └── utils.go     # 辅助函数
-│   └── db/              # 数据库相关
-│       ├── models.go    # 数据模型
-│       └── database.go  # 数据库操作
-├── main.go              # 主程序入口
-├── go.mod               # Go 模块文件
-├── docker-compose.yml   # PostgreSQL 容器配置
-└── README.md            # 项目说明
+│   ├── engine/
+│   │   └── scanner.go
+│   ├── plugins/
+│   │   ├── subfinder.go
+│   │   ├── samoscout.go
+│   │   ├── subdog.go
+│   │   ├── shosubgo.go
+│   │   ├── httpx.go
+│   │   ├── naabu.go
+│   │   ├── nmap.go
+│   │   ├── gowitness.go
+│   │   ├── nuclei.go
+│   │   └── utils.go
+│   └── db/
+│       ├── models.go
+│       └── database.go
+├── docker-compose.yml
+└── README.md
 ```
 
-## 🚀 快速开始
+## 环境准备
 
-### 1. 环境准备
+### 1) 基础依赖
 
-确保已安装以下工具：
 - Go 1.21+
-- Docker & Docker Compose
+- Docker / Docker Compose
+- PostgreSQL（可通过 docker-compose 启动）
 
-安装扫描工具：
+### 2) 安装扫描工具
+
 ```bash
-# 子域名收集工具
+# 子域名收集
 go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 go install -v github.com/samogod/samoscout@latest
 go install -v github.com/rix4uni/SubDog@latest
 go install -v github.com/incogbyte/shosubgo@latest
 
-# 存活检测
+# 存活探测
 go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 
 # 端口扫描
 go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
 # nmap 需要系统安装
 
-# 截图工具
+# 截图
 go install github.com/sensepost/gowitness@latest
+
+# 漏洞扫描
+go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+nuclei -update-templates
 ```
 
-### 2. 启动数据库
+### 3) 环境变量
+
+```bash
+# Shodan 子域名插件需要
+export SHODAN_API_KEY=your_key
+```
+
+Windows PowerShell:
+
+```powershell
+$env:SHODAN_API_KEY="your_key"
+```
+
+## 启动数据库
 
 ```bash
 docker-compose up -d
 ```
 
-### 3. 运行扫描
+默认连接：
+
+- host: `localhost`
+- port: `5432`
+- db: `hunter`
+- user: `hunter`
+- password: `hunter123`
+
+## 使用方法
+
+### 完整扫描（推荐）
 
 ```bash
-# 完整扫描（子域名 + 端口 + 截图）
-hunter -d example.com
-
-# 批量扫描
-hunter -dL domains.txt
-
-# 测试模式（不写入数据库）
-hunter -d example.com --dry-run
+go run main.go -d example.com
 ```
 
-## 📋 命令行参数
-
-### 基础参数
-
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `-d` | 单个目标域名 | `-d example.com` |
-| `-dL` | 域名列表文件 | `-dL domains.txt` |
-| `-i` | 输入文件（用于 ports/witness 模块） | `-i subdomains.txt` |
-| `-m` | 选择模块（逗号分隔） | `-m subs,ports` |
-| `--dry-run` | 测试模式，不写入数据库 | `--dry-run` |
-
-### 模块选择 (-m)
-
-| 模块 | 说明 | 输入类型 |
-|------|------|----------|
-| `subs` | 子域名收集 | 域名 |
-| `ports` | 端口扫描（含 httpx 测活） | 子域名 |
-| `witness` | Web 截图 | URL |
-
-### 截图相关
-
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `-screenshot-dir` | 截图存储目录 | `-screenshot-dir ./shots` |
-| `-report` | 启动截图查看服务 | `-report example.com` |
-| `-report-host` | 截图服务监听地址 | `-report-host 0.0.0.0` |
-| `-report-port` | 截图服务监听端口 | `-report-port 7070` |
-| `-list-screenshots` | 列出所有有截图的域名 | `-list-screenshots` |
-
-## 🔧 使用示例
-
-### 完整扫描
+### 完整扫描 + Nuclei
 
 ```bash
-# 单域名完整扫描
-hunter -d example.com
-
-# 批量域名完整扫描
-hunter -dL domains.txt
-
-# 测试模式（不写入数据库）
-hunter -d example.com --dry-run
+go run main.go -d example.com -nuclei
 ```
 
-### 模块单独使用
+### 批量扫描
+
+```bash
+go run main.go -dL domains.txt -nuclei
+```
+
+### 仅运行指定模块
 
 ```bash
 # 仅子域名收集
-hunter -m subs -d example.com
+go run main.go -m subs -d example.com
 
-# 仅端口扫描（输入: 子域名列表）
-hunter -m ports -i subdomains.txt
+# 仅端口链（输入是子域名列表）
+go run main.go -m ports -i subdomains.txt -nuclei
 
-# 仅截图（输入: URL 列表）
-hunter -m witness -i urls.txt
-
-# 管道输入
-cat subdomains.txt | hunter -m ports
-echo "https://example.com" | hunter -m witness
+# 仅截图（输入是 URL 列表）
+go run main.go -m witness -i urls.txt
 ```
 
-### 模块组合
+### 管道输入
 
 ```bash
-# 子域名 + 端口扫描
-hunter -m subs,ports -d example.com
-
-# 子域名 + 截图
-hunter -m subs,witness -d example.com
-
-# 端口扫描 + 截图
-hunter -m ports,witness -i subdomains.txt
+cat subdomains.txt | go run main.go -m ports -nuclei
+cat urls.txt | go run main.go -m witness
 ```
 
-### 截图管理
+## 命令行参数
 
-```bash
-# 列出所有有截图的域名
-hunter -list-screenshots
+| 参数 | 说明 |
+|---|---|
+| `-d` | 单个目标域名 |
+| `-dL` | 域名列表文件 |
+| `-i` | 输入文件（ports/witness 模块） |
+| `-m` | 模块选择：`subs,ports,witness` |
+| `--dry-run` | 只运行，不写数据库 |
+| `-screenshot-dir` | 截图目录（默认 `screenshots`） |
+| `-nuclei` | 启用 Nuclei 漏洞扫描 |
+| `-report` | 启动 gowitness 报告服务 |
+| `-report-host` | 报告服务监听地址 |
+| `-report-port` | 报告服务端口 |
+| `-list-screenshots` | 列出已有截图域名 |
 
-# 启动截图查看服务
-hunter -report example.com
+## 扫描流程
 
-# 指定端口
-hunter -report example.com -report-port 8080
+```text
+输入目标(-d/-dL/-i)
+      |
+      v
+模块选择(subs/ports/witness)
+      |
+      v
+[subs] 子域名收集(并行多工具) -> 去重
+      |
+      v
+[ports] httpx存活 + naabu->nmap
+      |
+      +--> [可选] nuclei (CVE优先)
+      |
+      +--> [可选] gowitness 截图
+      |
+      v
+写入 PostgreSQL + 输出统计摘要
 ```
 
-## 🔧 扫描流程
+## 数据库表
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        subs 模块                             │
-│  Subfinder + Samoscout + Subdog + Shosubgo（并行执行）        │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-                         子域名列表
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                       ports 模块                             │
-│  ┌─────────────┐    ┌─────────────────────────────────┐     │
-│  │   Httpx     │    │  Naabu → Nmap（端口扫描链）      │     │
-│  │  （测活）    │    │                                 │     │
-│  └─────────────┘    └─────────────────────────────────┘     │
-│        ↓ 并行执行                                            │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-                          存活 URL
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                      witness 模块                            │
-│                 Gowitness（按域名分类截图）                   │
-└─────────────────────────────────────────────────────────────┘
-```
+自动迁移会创建以下表：
 
-## 📸 截图存储结构
+- `assets`：资产信息（域名、URL、状态码、标题、技术栈等）
+- `ports`：端口与服务信息
+- `vulnerabilities`：Nuclei 漏洞结果（模板、严重度、CVE、匹配目标、指纹等）
 
-截图按根域名分类存储：
-
-```
-screenshots/
-├── google.com/
-│   ├── gowitness.sqlite3
-│   └── screenshots/
-└── tesla.com/
-    ├── gowitness.sqlite3
-    └── screenshots/
-```
-
-## 🗄️ 数据库操作
-
-### 连接数据库
-
-```bash
-docker exec -it hunter-postgres psql -U hunter -d hunter
-```
-
-### 常用查询
+## 常用查询
 
 ```sql
--- 查看所有资产
-SELECT domain, url, status_code, title FROM assets;
+-- 资产
+SELECT domain, url, status_code, title, last_seen FROM assets ORDER BY updated_at DESC LIMIT 50;
 
--- 查看所有端口
-SELECT domain, ip, port, service, version FROM ports;
+-- 端口
+SELECT domain, ip, port, service, version, last_seen FROM ports ORDER BY updated_at DESC LIMIT 50;
 
--- 按域名统计
-SELECT 
-    SUBSTRING(domain FROM '([^.]+\.[^.]+)$') as root_domain,
-    COUNT(*) as count 
-FROM assets 
-GROUP BY root_domain;
+-- 漏洞
+SELECT domain, template_id, severity, cve, matched_at, last_seen
+FROM vulnerabilities
+ORDER BY updated_at DESC
+LIMIT 50;
 ```
 
-### 清理数据
+## 截图查看
 
 ```bash
-docker exec -it hunter-postgres psql -U hunter -d hunter -c "TRUNCATE TABLE assets, ports RESTART IDENTITY CASCADE;"
+# 列出可查看域名
+go run main.go -list-screenshots
+
+# 启动指定域名的截图服务
+go run main.go -report example.com
+
+# 自定义地址端口
+go run main.go -report example.com -report-host 0.0.0.0 -report-port 8080
 ```
 
-## 🔌 扩展插件
+## 注意事项
 
-要添加新的扫描工具，只需：
+- 仅对授权范围目标执行扫描。
+- `shosubgo` 依赖 `SHODAN_API_KEY`。
+- `nuclei` 结果属于候选，建议人工复现后再提交报告。
+- 首次运行 `nuclei` 前建议执行 `nuclei -update-templates`。
 
-1. 在 `internal/plugins/` 目录创建新插件文件
-2. 实现 `Scanner` 接口
-3. 在 `main.go` 中添加到流水线
+## 后续维护约定
 
-```go
-type Scanner interface {
-    Name() string
-    Execute(input []string) ([]Result, error)
-}
-```
+后续如果功能或参数有变更，请同步更新本 README，至少包含：
 
-## 🛠️ 技术特性
-
-- **模块化执行**: 各模块可独立运行或组合使用
-- **测试模式**: `--dry-run` 不写入数据库，方便调试
-- **管道支持**: 支持 stdin 输入，便于与其他工具集成
-- **错误处理**: 优雅处理工具缺失和执行错误
-- **并发执行**: 子域名收集工具并行执行
-- **数据去重**: 自动去重和更新重复记录
+- 新增/变更参数
+- 流程图或执行顺序变化
+- 数据库表结构变化
+- 最小可运行示例命令
