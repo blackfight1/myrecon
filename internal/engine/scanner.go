@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Result represents a scanner output item.
@@ -68,9 +69,10 @@ func (p *Pipeline) SetVulnScanner(scanner Scanner) {
 }
 
 type scannerResult struct {
-	name    string
-	results []Result
-	err     error
+	name     string
+	results  []Result
+	err      error
+	statuses []Result
 }
 
 // Execute runs the full pipeline from root domains.
@@ -86,8 +88,15 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 			wg.Add(1)
 			go func(s Scanner) {
 				defer wg.Done()
+				start := time.Now()
 				results, err := s.Execute(input)
-				resultChan <- scannerResult{name: s.Name(), results: results, err: err}
+				status := buildPluginStatusResult(s.Name(), len(results), err, time.Since(start))
+				resultChan <- scannerResult{
+					name:     s.Name(),
+					results:  results,
+					err:      err,
+					statuses: []Result{status},
+				}
 			}(scanner)
 		}
 
@@ -98,6 +107,8 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 
 		domainMap := make(map[string]bool)
 		for sr := range resultChan {
+			allResults = append(allResults, sr.statuses...)
+
 			if sr.err != nil {
 				if strings.Contains(sr.err.Error(), "not found in PATH") {
 					fmt.Printf("⚠️  [%s] 工具未安装，跳过\n", sr.name)
@@ -130,7 +141,9 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 	allResults = append(allResults, networkResults...)
 
 	for _, scanner := range p.nextScanners {
+		start := time.Now()
 		results, err := scanner.Execute(currentInput)
+		allResults = append(allResults, buildPluginStatusResult(scanner.Name(), len(results), err, time.Since(start)))
 		if err != nil {
 			return nil, err
 		}
@@ -167,8 +180,10 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			start := time.Now()
 			results, err := p.httpxScanner.Execute(input)
-			resultChan <- scannerResult{name: p.httpxScanner.Name(), results: results, err: err}
+			status := buildPluginStatusResult(p.httpxScanner.Name(), len(results), err, time.Since(start))
+			resultChan <- scannerResult{name: p.httpxScanner.Name(), results: results, err: err, statuses: []Result{status}}
 		}()
 	}
 
@@ -177,16 +192,20 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 		go func() {
 			defer wg.Done()
 			var portResults []Result
+			var statusResults []Result
 			portInput := input
 
 			for _, scanner := range p.portScanners {
+				start := time.Now()
 				results, err := scanner.Execute(portInput)
+				statusResults = append(statusResults, buildPluginStatusResult(scanner.Name(), len(results), err, time.Since(start)))
+
 				if err != nil {
 					if strings.Contains(err.Error(), "not found in PATH") {
 						fmt.Printf("⚠️  [%s] 工具未安装，跳过端口扫描链\n", scanner.Name())
 						break
 					}
-					resultChan <- scannerResult{name: "PortScan", err: err}
+					resultChan <- scannerResult{name: "PortScan", err: err, statuses: statusResults, results: portResults}
 					return
 				}
 
@@ -212,7 +231,7 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 				portInput = nextInput
 			}
 
-			resultChan <- scannerResult{name: "PortScan", results: portResults}
+			resultChan <- scannerResult{name: "PortScan", results: portResults, statuses: statusResults}
 		}()
 	}
 
@@ -225,6 +244,8 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 	var liveURLs []string
 
 	for sr := range resultChan {
+		allResults = append(allResults, sr.statuses...)
+
 		if sr.err != nil {
 			if strings.Contains(sr.err.Error(), "not found in PATH") {
 				fmt.Printf("⚠️  [%s] 工具未安装，跳过\n", sr.name)
@@ -260,7 +281,9 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 
 	if p.vulnScanner != nil && len(liveURLs) > 0 {
 		fmt.Printf("🛡️  开始对 %d 个存活 URL 进行漏洞扫描...\n", len(liveURLs))
+		start := time.Now()
 		vulnResults, err := p.vulnScanner.Execute(liveURLs)
+		allResults = append(allResults, buildPluginStatusResult(p.vulnScanner.Name(), len(vulnResults), err, time.Since(start)))
 		if err != nil {
 			if strings.Contains(err.Error(), "not found in PATH") {
 				fmt.Printf("⚠️  [%s] 工具未安装，跳过漏洞扫描\n", p.vulnScanner.Name())
@@ -274,7 +297,9 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 
 	if p.screenshotScanner != nil && len(screenshotInputs) > 0 {
 		fmt.Printf("📸 开始对 %d 个存活 URL 进行截图...\n", len(screenshotInputs))
+		start := time.Now()
 		screenshotResults, err := p.screenshotScanner.Execute(screenshotInputs)
+		allResults = append(allResults, buildPluginStatusResult(p.screenshotScanner.Name(), len(screenshotResults), err, time.Since(start)))
 		if err != nil {
 			if strings.Contains(err.Error(), "not found in PATH") {
 				fmt.Printf("⚠️  [%s] 工具未安装，跳过截图\n", p.screenshotScanner.Name())
@@ -296,4 +321,41 @@ func extractRootDomain(subdomain string) string {
 		return parts[len(parts)-2] + "." + parts[len(parts)-1]
 	}
 	return subdomain
+}
+
+func buildPluginStatusResult(scannerName string, successCount int, err error, duration time.Duration) Result {
+	failureCount := 0
+	timeoutCount := 0
+	errMsg := ""
+	status := "ok"
+
+	if err != nil {
+		failureCount = 1
+		errMsg = err.Error()
+		status = "error"
+		if isTimeoutError(err) {
+			timeoutCount = 1
+		}
+	}
+
+	return Result{
+		Type: "plugin_status",
+		Data: map[string]interface{}{
+			"scanner":       scannerName,
+			"status":        status,
+			"success_count": successCount,
+			"failure_count": failureCount,
+			"timeout_count": timeoutCount,
+			"duration_ms":   duration.Milliseconds(),
+			"error":         errMsg,
+		},
+	}
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded")
 }

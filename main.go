@@ -24,6 +24,7 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "测试模式，不写入数据库")
 	screenshotDir := flag.String("screenshot-dir", "screenshots", "截图存储目录")
 	enableNuclei := flag.Bool("nuclei", false, "启用 Nuclei 漏洞扫描（CVE 优先）")
+	enableNotify := flag.Bool("notify", false, "启用钉钉开始/结束通知（读取 DINGTALK_WEBHOOK）")
 
 	reportDomain := flag.String("report", "", "启动截图查看服务")
 	reportHost := flag.String("report-host", "0.0.0.0", "截图服务监听地址")
@@ -80,6 +81,24 @@ func main() {
 	}
 
 	printRunInfo(enableSubs, enablePorts, enableWitness, *enableNuclei, *dryRun, len(input))
+	modulesList := buildModules(enableSubs, enablePorts, enableWitness, *enableNuclei)
+	notifier := plugins.NewDingTalkNotifierFromEnv(*enableNotify)
+	scanStartTime := time.Now()
+	if notifier.Enabled() {
+		if err := notifier.SendReconStart(len(input), modulesList, *dryRun); err != nil {
+			fmt.Printf("⚠️  通知发送失败(开始): %v\n", err)
+		}
+	}
+
+	failExit := func(format string, args ...interface{}) {
+		msg := fmt.Sprintf(format, args...)
+		if notifier.Enabled() {
+			if err := notifier.SendReconEnd(false, time.Since(scanStartTime), map[string]int{}, msg); err != nil {
+				fmt.Printf("⚠️  通知发送失败(结束): %v\n", err)
+			}
+		}
+		log.Fatalf("%s", msg)
+	}
 
 	var database *db.Database
 	var beforeAssetCount, beforePortCount, beforeVulnCount int64
@@ -87,7 +106,7 @@ func main() {
 		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
 		database, err = db.NewDatabase(dsn)
 		if err != nil {
-			log.Fatalf("数据库连接失败: %v", err)
+			failExit("数据库连接失败: %v", err)
 		}
 		beforeAssetCount, _ = database.GetAssetCount()
 		beforePortCount, _ = database.GetPortCount()
@@ -95,8 +114,6 @@ func main() {
 	} else {
 		fmt.Println("🧪 测试模式：结果不会写入数据库")
 	}
-
-	scanStartTime := time.Now()
 
 	var results []engine.Result
 	switch {
@@ -117,11 +134,18 @@ func main() {
 	}
 
 	if err != nil {
-		log.Fatalf("执行失败: %v", err)
+		failExit("执行失败: %v", err)
 	}
 
 	if !*dryRun && database != nil {
 		saveResults(database, results)
+	}
+
+	if notifier.Enabled() {
+		stats := collectResultCounts(results)
+		if err := notifier.SendReconEnd(true, time.Since(scanStartTime), stats, ""); err != nil {
+			fmt.Printf("⚠️  通知发送失败(结束): %v\n", err)
+		}
 	}
 
 	printSummary(results, scanStartTime, *dryRun, database, beforeAssetCount, beforePortCount, beforeVulnCount, *screenshotDir, enableWitness)
@@ -223,9 +247,27 @@ func printUsage() {
 	fmt.Println("其他参数:")
 	fmt.Println("  --dry-run           测试模式，不写入数据库")
 	fmt.Println("  -nuclei             启用 Nuclei 漏洞扫描（CVE 优先）")
+	fmt.Println("  -notify             启用钉钉开始/结束通知（环境变量 DINGTALK_WEBHOOK）")
 	fmt.Println("  -screenshot-dir     截图存储目录（默认 screenshots）")
 	fmt.Println("  -report <domain>    启动截图查看服务")
 	fmt.Println("  -list-screenshots   列出所有有截图的域名")
+}
+
+func buildModules(subs, ports, witness, nuclei bool) []string {
+	var mods []string
+	if subs {
+		mods = append(mods, "subs")
+	}
+	if ports {
+		mods = append(mods, "ports")
+	}
+	if witness {
+		mods = append(mods, "witness")
+	}
+	if nuclei {
+		mods = append(mods, "nuclei")
+	}
+	return mods
 }
 
 func printRunInfo(subs, ports, witness, nuclei, dryRun bool, inputCount int) {
@@ -405,48 +447,55 @@ func saveResults(database *db.Database, results []engine.Result) {
 }
 
 func printSummary(results []engine.Result, startTime time.Time, dryRun bool, database *db.Database, beforeAsset, beforePort, beforeVuln int64, screenshotDir string, witnessEnabled bool) {
-	subdomainCount := 0
-	webServiceCount := 0
-	portCount := 0
-	screenshotCount := 0
-	vulnCount := 0
+	counts := collectResultCounts(results)
+	type pluginStatus struct {
+		Scanner      string
+		SuccessCount int
+		FailureCount int
+		TimeoutCount int
+		DurationMS   int64
+		Status       string
+		Error        string
+	}
+	var pluginStatuses []pluginStatus
 
 	for _, result := range results {
 		switch result.Type {
-		case "domain":
-			subdomainCount++
-		case "web_service":
-			webServiceCount++
-		case "port_service", "open_port":
-			portCount++
-		case "vulnerability":
-			vulnCount++
-		case "screenshot":
-			if data, ok := result.Data.(map[string]interface{}); ok {
-				if count, ok := data["screenshot_count"].(int); ok {
-					screenshotCount += count
-				}
+		case "plugin_status":
+			data, ok := result.Data.(map[string]interface{})
+			if !ok {
+				continue
 			}
+			ps := pluginStatus{
+				Scanner:      getStringFromMap(data, "scanner"),
+				SuccessCount: getIntFromMap(data, "success_count"),
+				FailureCount: getIntFromMap(data, "failure_count"),
+				TimeoutCount: getIntFromMap(data, "timeout_count"),
+				DurationMS:   int64(getIntFromMap(data, "duration_ms")),
+				Status:       getStringFromMap(data, "status"),
+				Error:        getStringFromMap(data, "error"),
+			}
+			pluginStatuses = append(pluginStatuses, ps)
 		}
 	}
 
 	fmt.Println()
 	fmt.Println("================= 📊 扫描完成 =================")
 	fmt.Printf("⏱️  耗时: %v\n", time.Since(startTime).Round(time.Second))
-	if subdomainCount > 0 {
-		fmt.Printf("📗 子域名: %d\n", subdomainCount)
+	if counts["subdomains"] > 0 {
+		fmt.Printf("📗 子域名: %d\n", counts["subdomains"])
 	}
-	if webServiceCount > 0 {
-		fmt.Printf("🌐 Web 服务: %d\n", webServiceCount)
+	if counts["web_services"] > 0 {
+		fmt.Printf("🌐 Web 服务: %d\n", counts["web_services"])
 	}
-	if portCount > 0 {
-		fmt.Printf("📲 开放端口: %d\n", portCount)
+	if counts["ports"] > 0 {
+		fmt.Printf("📲 开放端口: %d\n", counts["ports"])
 	}
-	if vulnCount > 0 {
-		fmt.Printf("🛡️  漏洞候选: %d\n", vulnCount)
+	if counts["vulnerabilities"] > 0 {
+		fmt.Printf("🛡️  漏洞候选: %d\n", counts["vulnerabilities"])
 	}
-	if screenshotCount > 0 {
-		fmt.Printf("📷 截图: %d\n", screenshotCount)
+	if counts["screenshots"] > 0 {
+		fmt.Printf("📷 截图: %d\n", counts["screenshots"])
 	}
 
 	if !dryRun && database != nil {
@@ -464,5 +513,71 @@ func printSummary(results []engine.Result, startTime time.Time, dryRun bool, dat
 			fmt.Println("🔎 查看截图: go run main.go -report <domain>")
 		}
 	}
+	if len(pluginStatuses) > 0 {
+		fmt.Println()
+		fmt.Println("🧩 插件运行状态:")
+		for _, ps := range pluginStatuses {
+			line := fmt.Sprintf("- %s | 状态:%s | 成功:%d 失败:%d 超时:%d | 耗时:%dms",
+				ps.Scanner, ps.Status, ps.SuccessCount, ps.FailureCount, ps.TimeoutCount, ps.DurationMS)
+			fmt.Println(line)
+			if ps.Error != "" {
+				fmt.Printf("  错误: %s\n", ps.Error)
+			}
+		}
+	}
 	fmt.Println("================================================")
+}
+
+func collectResultCounts(results []engine.Result) map[string]int {
+	counts := map[string]int{
+		"subdomains":      0,
+		"web_services":    0,
+		"ports":           0,
+		"vulnerabilities": 0,
+		"screenshots":     0,
+	}
+
+	for _, result := range results {
+		switch result.Type {
+		case "domain":
+			counts["subdomains"]++
+		case "web_service":
+			counts["web_services"]++
+		case "port_service", "open_port":
+			counts["ports"]++
+		case "vulnerability":
+			counts["vulnerabilities"]++
+		case "screenshot":
+			if data, ok := result.Data.(map[string]interface{}); ok {
+				if count, ok := data["screenshot_count"].(int); ok {
+					counts["screenshots"] += count
+				}
+			}
+		}
+	}
+
+	return counts
+}
+
+func getStringFromMap(m map[string]interface{}, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func getIntFromMap(m map[string]interface{}, key string) int {
+	if v, ok := m[key]; ok {
+		switch vv := v.(type) {
+		case int:
+			return vv
+		case int64:
+			return int(vv)
+		case float64:
+			return int(vv)
+		}
+	}
+	return 0
 }
