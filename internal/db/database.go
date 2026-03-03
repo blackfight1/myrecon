@@ -1,6 +1,8 @@
 package db
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -10,36 +12,34 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// Database 数据库连接管理
+// Database wraps gorm DB.
 type Database struct {
 	DB *gorm.DB
 }
 
-// NewDatabase 创建数据库连接
+// NewDatabase creates database connection.
 func NewDatabase(dsn string) (*Database, error) {
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+	database, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %v", err)
 	}
 
-	// 自动迁移
-	if err := db.AutoMigrate(&Asset{}, &Port{}); err != nil {
+	if err := database.AutoMigrate(&Asset{}, &Port{}, &Vulnerability{}); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %v", err)
 	}
 
-	return &Database{DB: db}, nil
+	return &Database{DB: database}, nil
 }
 
-// SaveOrUpdateAsset 保存或更新资产信息
+// SaveOrUpdateAsset saves or updates asset info.
 func (d *Database) SaveOrUpdateAsset(data map[string]interface{}) error {
 	domain, ok := data["domain"].(string)
 	if !ok || domain == "" {
 		return fmt.Errorf("domain is required")
 	}
 
-	// 准备技术栈 JSON 数据
 	var techJSON []byte
 	if technologies, exists := data["technologies"]; exists {
 		if techSlice, ok := technologies.([]string); ok && len(techSlice) > 0 {
@@ -51,14 +51,11 @@ func (d *Database) SaveOrUpdateAsset(data map[string]interface{}) error {
 		techJSON, _ = json.Marshal([]string{})
 	}
 
-	// 查找现有记录
 	var existingAsset Asset
 	result := d.DB.Where("domain = ?", domain).First(&existingAsset)
-
 	now := time.Now()
 
 	if result.Error == gorm.ErrRecordNotFound {
-		// 创建新记录
 		asset := Asset{
 			Domain:       domain,
 			URL:          getStringValue(data, "url"),
@@ -68,16 +65,11 @@ func (d *Database) SaveOrUpdateAsset(data map[string]interface{}) error {
 			Technologies: techJSON,
 			LastSeen:     now,
 		}
-
 		if err := d.DB.Create(&asset).Error; err != nil {
 			return fmt.Errorf("failed to create asset: %v", err)
 		}
 	} else if result.Error == nil {
-		// 更新现有记录
-		updates := map[string]interface{}{
-			"last_seen": now,
-		}
-
+		updates := map[string]interface{}{"last_seen": now}
 		if url := getStringValue(data, "url"); url != "" {
 			updates["url"] = url
 		}
@@ -90,7 +82,7 @@ func (d *Database) SaveOrUpdateAsset(data map[string]interface{}) error {
 		if title := getStringValue(data, "title"); title != "" {
 			updates["title"] = title
 		}
-		if len(techJSON) > 2 { // 不是空数组 []
+		if len(techJSON) > 2 {
 			updates["technologies"] = techJSON
 		}
 
@@ -104,7 +96,7 @@ func (d *Database) SaveOrUpdateAsset(data map[string]interface{}) error {
 	return nil
 }
 
-// GetAssetCount 获取资产总数
+// GetAssetCount returns total asset count.
 func (d *Database) GetAssetCount() (int64, error) {
 	var count int64
 	if err := d.DB.Model(&Asset{}).Count(&count).Error; err != nil {
@@ -113,7 +105,7 @@ func (d *Database) GetAssetCount() (int64, error) {
 	return count, nil
 }
 
-// GetRecentAssets 获取最近添加的资产
+// GetRecentAssets returns assets created after given time.
 func (d *Database) GetRecentAssets(since time.Time) ([]Asset, error) {
 	var assets []Asset
 	if err := d.DB.Where("created_at > ?", since).Find(&assets).Error; err != nil {
@@ -122,7 +114,7 @@ func (d *Database) GetRecentAssets(since time.Time) ([]Asset, error) {
 	return assets, nil
 }
 
-// SaveOrUpdatePort 保存或更新端口信息
+// SaveOrUpdatePort saves or updates port info.
 func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 	ip := getStringValue(data, "ip")
 	port := getIntValue(data, "port")
@@ -132,17 +124,11 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 		return fmt.Errorf("ip and port are required")
 	}
 
-	// 先查找或创建对应的 Asset
 	var asset Asset
 	if domain != "" {
 		result := d.DB.Where("domain = ?", domain).First(&asset)
 		if result.Error == gorm.ErrRecordNotFound {
-			// 创建新的 Asset
-			asset = Asset{
-				Domain:   domain,
-				IP:       ip,
-				LastSeen: time.Now(),
-			}
+			asset = Asset{Domain: domain, IP: ip, LastSeen: time.Now()}
 			if err := d.DB.Create(&asset).Error; err != nil {
 				return fmt.Errorf("failed to create asset: %v", err)
 			}
@@ -150,15 +136,9 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 			return fmt.Errorf("database query error: %v", result.Error)
 		}
 	} else {
-		// 如果没有域名，尝试通过 IP 查找
 		result := d.DB.Where("ip = ?", ip).First(&asset)
 		if result.Error == gorm.ErrRecordNotFound {
-			// 创建新的 Asset（以 IP 作为 domain）
-			asset = Asset{
-				Domain:   ip,
-				IP:       ip,
-				LastSeen: time.Now(),
-			}
+			asset = Asset{Domain: ip, IP: ip, LastSeen: time.Now()}
 			if err := d.DB.Create(&asset).Error; err != nil {
 				return fmt.Errorf("failed to create asset: %v", err)
 			}
@@ -167,17 +147,14 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 		}
 	}
 
-	// 查找现有端口记录
 	var existingPort Port
 	result := d.DB.Where("asset_id = ? AND ip = ? AND port = ?", asset.ID, ip, port).First(&existingPort)
-
 	now := time.Now()
 
 	if result.Error == gorm.ErrRecordNotFound {
-		// 创建新端口记录
 		portRecord := Port{
 			AssetID:  asset.ID,
-			Domain:   domain, // 保存子域名
+			Domain:   domain,
 			IP:       ip,
 			Port:     port,
 			Protocol: getStringValue(data, "protocol"),
@@ -189,16 +166,11 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 		if portRecord.Protocol == "" {
 			portRecord.Protocol = "tcp"
 		}
-
 		if err := d.DB.Create(&portRecord).Error; err != nil {
 			return fmt.Errorf("failed to create port: %v", err)
 		}
 	} else if result.Error == nil {
-		// 更新现有端口记录
-		updates := map[string]interface{}{
-			"last_seen": now,
-		}
-
+		updates := map[string]interface{}{"last_seen": now}
 		if service := getStringValue(data, "service"); service != "" {
 			updates["service"] = service
 		}
@@ -208,7 +180,6 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 		if banner := getStringValue(data, "banner"); banner != "" {
 			updates["banner"] = banner
 		}
-
 		if err := d.DB.Model(&existingPort).Updates(updates).Error; err != nil {
 			return fmt.Errorf("failed to update port: %v", err)
 		}
@@ -219,7 +190,112 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 	return nil
 }
 
-// GetPortCount 获取端口总数
+// SaveOrUpdateVulnerability saves or updates vulnerability finding by fingerprint.
+func (d *Database) SaveOrUpdateVulnerability(data map[string]interface{}) error {
+	templateID := getStringValue(data, "template_id")
+	matchedAt := getStringValue(data, "matched_at")
+	if templateID == "" || matchedAt == "" {
+		return fmt.Errorf("template_id and matched_at are required")
+	}
+
+	domain := getStringValue(data, "domain")
+	host := getStringValue(data, "host")
+	fingerprint := getStringValue(data, "fingerprint")
+	if fingerprint == "" {
+		raw := templateID + "|" + matchedAt + "|" + host
+		sum := sha1.Sum([]byte(raw))
+		fingerprint = hex.EncodeToString(sum[:])
+	}
+
+	now := time.Now()
+
+	var asset *Asset
+	if domain != "" {
+		var a Asset
+		result := d.DB.Where("domain = ?", domain).First(&a)
+		if result.Error == nil {
+			asset = &a
+		}
+	}
+
+	var rawJSON []byte
+	if raw := getStringValue(data, "raw"); raw != "" {
+		rawJSON = []byte(raw)
+	} else {
+		rawJSON, _ = json.Marshal(data)
+	}
+
+	var existing Vulnerability
+	result := d.DB.Where("fingerprint = ?", fingerprint).First(&existing)
+
+	if result.Error == gorm.ErrRecordNotFound {
+		record := Vulnerability{
+			Domain:       domain,
+			Host:         host,
+			URL:          getStringValue(data, "url"),
+			IP:           getStringValue(data, "ip"),
+			TemplateID:   templateID,
+			TemplateName: getStringValue(data, "template_name"),
+			Severity:     getStringValue(data, "severity"),
+			CVE:          getStringValue(data, "cve"),
+			MatcherName:  getStringValue(data, "matcher_name"),
+			Description:  getStringValue(data, "description"),
+			Reference:    getStringValue(data, "reference"),
+			TemplateURL:  getStringValue(data, "template_url"),
+			MatchedAt:    matchedAt,
+			Fingerprint:  fingerprint,
+			Raw:          rawJSON,
+			LastSeen:     now,
+		}
+		if asset != nil {
+			record.AssetID = &asset.ID
+		}
+		if record.URL == "" {
+			record.URL = matchedAt
+		}
+
+		if err := d.DB.Create(&record).Error; err != nil {
+			return fmt.Errorf("failed to create vulnerability: %v", err)
+		}
+	} else if result.Error == nil {
+		updates := map[string]interface{}{
+			"last_seen":     now,
+			"severity":      getStringValue(data, "severity"),
+			"template_name": getStringValue(data, "template_name"),
+			"cve":           getStringValue(data, "cve"),
+			"matcher_name":  getStringValue(data, "matcher_name"),
+			"description":   getStringValue(data, "description"),
+			"reference":     getStringValue(data, "reference"),
+			"template_url":  getStringValue(data, "template_url"),
+			"raw":           rawJSON,
+		}
+		if url := getStringValue(data, "url"); url != "" {
+			updates["url"] = url
+		}
+		if ip := getStringValue(data, "ip"); ip != "" {
+			updates["ip"] = ip
+		}
+		if domain != "" {
+			updates["domain"] = domain
+		}
+		if host != "" {
+			updates["host"] = host
+		}
+		if asset != nil {
+			updates["asset_id"] = asset.ID
+		}
+
+		if err := d.DB.Model(&existing).Updates(updates).Error; err != nil {
+			return fmt.Errorf("failed to update vulnerability: %v", err)
+		}
+	} else {
+		return fmt.Errorf("database query error: %v", result.Error)
+	}
+
+	return nil
+}
+
+// GetPortCount returns total port count.
 func (d *Database) GetPortCount() (int64, error) {
 	var count int64
 	if err := d.DB.Model(&Port{}).Count(&count).Error; err != nil {
@@ -228,7 +304,16 @@ func (d *Database) GetPortCount() (int64, error) {
 	return count, nil
 }
 
-// GetRecentPorts 获取最近添加的端口
+// GetVulnerabilityCount returns total vulnerability count.
+func (d *Database) GetVulnerabilityCount() (int64, error) {
+	var count int64
+	if err := d.DB.Model(&Vulnerability{}).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// GetRecentPorts returns ports created after given time.
 func (d *Database) GetRecentPorts(since time.Time) ([]Port, error) {
 	var ports []Port
 	if err := d.DB.Where("created_at > ?", since).Find(&ports).Error; err != nil {
@@ -237,7 +322,7 @@ func (d *Database) GetRecentPorts(since time.Time) ([]Port, error) {
 	return ports, nil
 }
 
-// GetAssetByDomain 根据域名获取资产
+// GetAssetByDomain returns asset by domain.
 func (d *Database) GetAssetByDomain(domain string) (*Asset, error) {
 	var asset Asset
 	if err := d.DB.Where("domain = ?", domain).First(&asset).Error; err != nil {
@@ -246,7 +331,6 @@ func (d *Database) GetAssetByDomain(domain string) (*Asset, error) {
 	return &asset, nil
 }
 
-// 辅助函数
 func getStringValue(data map[string]interface{}, key string) string {
 	if value, exists := data[key]; exists {
 		if str, ok := value.(string); ok {
