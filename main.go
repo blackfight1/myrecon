@@ -191,7 +191,7 @@ func main() {
 	scanStartTime := time.Now()
 	if notifier.Enabled() {
 		if err := notifier.SendReconStart(len(input), modulesList, *dryRun); err != nil {
-			fmt.Printf("⚠️  通知发送失败(开始): %v\n", err)
+			fmt.Printf("⚠️  钉钉通知发送失败(开始): %v\n", err)
 		}
 	}
 
@@ -199,10 +199,10 @@ func main() {
 		msg := fmt.Sprintf(format, args...)
 		if notifier.Enabled() {
 			if err := notifier.SendReconEnd(false, time.Since(scanStartTime), map[string]int{}, msg); err != nil {
-				fmt.Printf("⚠️  通知发送失败(结束): %v\n", err)
+				fmt.Printf("⚠️  钉钉通知发送失败(结束): %v\n", err)
 			}
 		}
-		log.Fatalf("%s", msg)
+		log.Fatalf("❌ 扫描失败: %s", msg)
 	}
 
 	var database *db.Database
@@ -249,7 +249,7 @@ func main() {
 	if notifier.Enabled() {
 		stats := collectResultCounts(results)
 		if err := notifier.SendReconEnd(true, time.Since(scanStartTime), stats, ""); err != nil {
-			fmt.Printf("⚠️  通知发送失败(结束): %v\n", err)
+			fmt.Printf("⚠️  钉钉通知发送失败(结束): %v\n", err)
 		}
 	}
 
@@ -485,16 +485,25 @@ func printRunInfo(subs, ports, witness, nuclei, dryRun bool, inputCount int) {
 		mods = append(mods, "nuclei")
 	}
 
-	fmt.Printf("🎯 输入: %d 条\n", inputCount)
-	fmt.Printf("📋 模块: %s\n", strings.Join(mods, " -> "))
+	modeText := "normal"
 	if dryRun {
-		fmt.Println("🧪 模式: 测试（不写入数据库）")
+		modeText = "dry-run"
 	}
+
+	fmt.Println("================================================")
+	fmt.Println("🚀 开始执行 scan 模式")
+	fmt.Printf("📥 输入数量: %d\n", inputCount)
+	fmt.Printf("🧩 执行模块: %s\n", strings.Join(mods, " -> "))
+	fmt.Printf("🛠️  运行模式: %s\n", modeText)
+	if dryRun {
+		fmt.Println("🧪 测试模式：结果不会写入数据库")
+	}
+	fmt.Println("================================================")
 	fmt.Println()
 }
 
 func runSubsOnly(domains []string) ([]engine.Result, error) {
-	fmt.Println("📗 子域名收集...")
+	fmt.Println("==> [阶段] 子域名收集")
 	pipeline := engine.NewPipeline()
 
 	isBatchMode := len(domains) > 1
@@ -507,7 +516,7 @@ func runSubsOnly(domains []string) ([]engine.Result, error) {
 }
 
 func runPortsOnly(subdomains []string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("📲 端口扫描...")
+	fmt.Println("==> [阶段] 端口扫描")
 	pipeline := engine.NewPipeline()
 
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
@@ -521,7 +530,7 @@ func runPortsOnly(subdomains []string, nucleiEnabled bool) ([]engine.Result, err
 }
 
 func runWitnessOnly(urls []string, screenshotDir string) ([]engine.Result, error) {
-	fmt.Println("📷 Web 截图...")
+	fmt.Println("==> [阶段] Web 截图")
 	gowitnessPlugin := plugins.NewGowitnessPlugin(screenshotDir)
 
 	var input []string
@@ -535,7 +544,7 @@ func runWitnessOnly(urls []string, screenshotDir string) ([]engine.Result, error
 }
 
 func runSubsAndPorts(domains []string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("📗 子域名收集 + 📲 端口扫描...")
+	fmt.Println("==> [阶段] 子域名收集 + 端口扫描")
 	pipeline := engine.NewPipeline()
 
 	isBatchMode := len(domains) > 1
@@ -555,7 +564,7 @@ func runSubsAndPorts(domains []string, nucleiEnabled bool) ([]engine.Result, err
 }
 
 func runSubsAndWitness(domains []string, screenshotDir string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("📗 子域名收集 + 📷 截图...")
+	fmt.Println("==> [阶段] 子域名收集 + Web 截图")
 	pipeline := engine.NewPipeline()
 
 	isBatchMode := len(domains) > 1
@@ -574,7 +583,7 @@ func runSubsAndWitness(domains []string, screenshotDir string, nucleiEnabled boo
 }
 
 func runPortsAndWitness(subdomains []string, screenshotDir string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("📲 端口扫描 + 📷 截图...")
+	fmt.Println("==> [阶段] 端口扫描 + Web 截图")
 	pipeline := engine.NewPipeline()
 
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
@@ -589,7 +598,7 @@ func runPortsAndWitness(subdomains []string, screenshotDir string, nucleiEnabled
 }
 
 func runFullPipeline(domains []string, screenshotDir string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("🔍 完整扫描流程...")
+	fmt.Println("==> [阶段] 完整扫描流程")
 	pipeline := engine.NewPipeline()
 
 	isBatchMode := len(domains) > 1
@@ -622,7 +631,7 @@ func extractDomainFromURL(rawURL string) string {
 }
 
 func saveResults(database *db.Database, results []engine.Result) {
-	fmt.Println("💾 保存结果到数据库...")
+	fmt.Println("==> [入库] 写入结果到数据库")
 
 	for _, result := range results {
 		switch result.Type {
@@ -644,6 +653,7 @@ func saveResults(database *db.Database, results []engine.Result) {
 			}
 		}
 	}
+	fmt.Println("==> [入库] 写入完成")
 }
 
 func printSummary(results []engine.Result, startTime time.Time, dryRun bool, database *db.Database, beforeAsset, beforePort, beforeVuln int64, screenshotDir string, witnessEnabled bool) {
@@ -680,31 +690,23 @@ func printSummary(results []engine.Result, startTime time.Time, dryRun bool, dat
 	}
 
 	fmt.Println()
-	fmt.Println("================= 📊 扫描完成 =================")
-	fmt.Printf("⏱️  耗时: %v\n", time.Since(startTime).Round(time.Second))
-	if counts["subdomains"] > 0 {
-		fmt.Printf("📗 子域名: %d\n", counts["subdomains"])
-	}
-	if counts["web_services"] > 0 {
-		fmt.Printf("🌐 Web 服务: %d\n", counts["web_services"])
-	}
-	if counts["ports"] > 0 {
-		fmt.Printf("📲 开放端口: %d\n", counts["ports"])
-	}
-	if counts["vulnerabilities"] > 0 {
-		fmt.Printf("🛡️  漏洞候选: %d\n", counts["vulnerabilities"])
-	}
-	if counts["screenshots"] > 0 {
-		fmt.Printf("📷 截图: %d\n", counts["screenshots"])
-	}
+	fmt.Println("================================================")
+	fmt.Println("✅ 扫描完成")
+	fmt.Printf("⏱️  总耗时: %v\n", time.Since(startTime).Round(time.Second))
+	fmt.Printf("📗 子域名: %d\n", counts["subdomains"])
+	fmt.Printf("🌐 Web 服务: %d\n", counts["web_services"])
+	fmt.Printf("📲 开放端口: %d\n", counts["ports"])
+	fmt.Printf("🛡️  漏洞候选: %d\n", counts["vulnerabilities"])
+	fmt.Printf("📷 截图: %d\n", counts["screenshots"])
 
 	if !dryRun && database != nil {
 		afterAsset, _ := database.GetAssetCount()
 		afterPort, _ := database.GetPortCount()
 		afterVuln, _ := database.GetVulnerabilityCount()
-		fmt.Printf("💾 资产: %d -> %d\n", beforeAsset, afterAsset)
-		fmt.Printf("💾 端口: %d -> %d\n", beforePort, afterPort)
-		fmt.Printf("💾 漏洞: %d -> %d\n", beforeVuln, afterVuln)
+		fmt.Println("💾 数据库变化:")
+		fmt.Printf("- assets: %d -> %d\n", beforeAsset, afterAsset)
+		fmt.Printf("- ports: %d -> %d\n", beforePort, afterPort)
+		fmt.Printf("- vulnerabilities: %d -> %d\n", beforeVuln, afterVuln)
 	}
 
 	if witnessEnabled {
@@ -717,11 +719,11 @@ func printSummary(results []engine.Result, startTime time.Time, dryRun bool, dat
 		fmt.Println()
 		fmt.Println("🧩 插件运行状态:")
 		for _, ps := range pluginStatuses {
-			line := fmt.Sprintf("- %s | 状态:%s | 成功:%d 失败:%d 超时:%d | 耗时:%dms",
+			line := fmt.Sprintf("- %s | status=%s | success=%d fail=%d timeout=%d | duration=%dms",
 				ps.Scanner, ps.Status, ps.SuccessCount, ps.FailureCount, ps.TimeoutCount, ps.DurationMS)
 			fmt.Println(line)
 			if ps.Error != "" {
-				fmt.Printf("  错误: %s\n", ps.Error)
+				fmt.Printf("  error: %s\n", ps.Error)
 			}
 		}
 	}

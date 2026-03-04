@@ -358,6 +358,13 @@ go run main.go -report example.com -report-host 0.0.0.0 -report-port 8080
 - 首次运行 `nuclei` 前建议执行 `nuclei -update-templates`。
 - 钉钉机器人如开启加签，必须同时配置 `DINGTALK_SECRET`。
 
+## 终端输出说明
+
+- `scan` 模式启动时会打印：输入数量、执行模块、运行模式（normal/dry-run）
+- 扫描过程中会打印阶段提示：`[阶段]` 和入库提示：`[入库]`
+- 扫描结束后会统一打印：总耗时、子域/Web/端口/漏洞/截图统计
+- 若插件返回运行状态，会打印每个插件的 success/fail/timeout/duration
+
 ## 后续维护约定
 
 后续如果功能或参数有变更，请同步更新本 README，至少包含：
