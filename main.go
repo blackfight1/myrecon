@@ -15,6 +15,7 @@ import (
 )
 
 func main() {
+	runMode := flag.String("mode", "scan", "运行模式: scan 或 monitor")
 	domain := flag.String("d", "", "单个目标域名")
 	domainList := flag.String("dL", "", "域名列表文件")
 	inputFile := flag.String("i", "", "输入文件（ports/witness 模块独立运行）")
@@ -25,6 +26,7 @@ func main() {
 	screenshotDir := flag.String("screenshot-dir", "screenshots", "截图存储目录")
 	enableNuclei := flag.Bool("nuclei", false, "启用 Nuclei 漏洞扫描（CVE 优先）")
 	enableNotify := flag.Bool("notify", false, "启用钉钉开始/结束通知（读取 DINGTALK_WEBHOOK）")
+	monitorInterval := flag.String("monitor-interval", "6h", "监控间隔，例如 30m / 1h / 6h")
 
 	reportDomain := flag.String("report", "", "启动截图查看服务")
 	reportHost := flag.String("report-host", "0.0.0.0", "截图服务监听地址")
@@ -32,6 +34,10 @@ func main() {
 	listScreenshots := flag.Bool("list-screenshots", false, "列出所有有截图的域名")
 
 	flag.Parse()
+	mode := strings.ToLower(strings.TrimSpace(*runMode))
+	if err := validateModeAndConflicts(mode, *domain, *domainList, *inputFile, *modules, *reportDomain, *listScreenshots); err != nil {
+		log.Fatalf("参数冲突: %v", err)
+	}
 
 	if *listScreenshots {
 		domains, err := plugins.ListScreenshotDomains(*screenshotDir)
@@ -47,6 +53,16 @@ func main() {
 			}
 			fmt.Println("\n使用 go run main.go -report <domain> 启动查看服务")
 		}
+		return
+	}
+
+	if mode == "monitor" {
+		interval, err := time.ParseDuration(*monitorInterval)
+		if err != nil || interval <= 0 {
+			log.Fatalf("monitor-interval 无效: %s", *monitorInterval)
+		}
+		notifier := plugins.NewDingTalkNotifierFromEnv(*enableNotify)
+		runMonitorLoop(strings.TrimSpace(*domain), interval, *dryRun, notifier)
 		return
 	}
 
@@ -230,6 +246,8 @@ func printUsage() {
 	fmt.Println("Hunter - 资产搜集引擎")
 	fmt.Println()
 	fmt.Println("使用方法:")
+	fmt.Println("  普通扫描:     go run main.go -mode scan -d example.com")
+	fmt.Println("  监控模式:     go run main.go -mode monitor -d example.com -monitor-interval 6h")
 	fmt.Println("  完整扫描:     go run main.go -d example.com")
 	fmt.Println("  批量扫描:     go run main.go -dL domains.txt")
 	fmt.Println()
@@ -245,12 +263,46 @@ func printUsage() {
 	fmt.Println("  go run main.go -m subs,ports -d example.com")
 	fmt.Println()
 	fmt.Println("其他参数:")
+	fmt.Println("  -mode              运行模式: scan 或 monitor（默认 scan）")
 	fmt.Println("  --dry-run           测试模式，不写入数据库")
 	fmt.Println("  -nuclei             启用 Nuclei 漏洞扫描（CVE 优先）")
 	fmt.Println("  -notify             启用钉钉开始/结束通知（环境变量 DINGTALK_WEBHOOK）")
+	fmt.Println("  -monitor-interval   监控间隔（默认 6h）")
 	fmt.Println("  -screenshot-dir     截图存储目录（默认 screenshots）")
 	fmt.Println("  -report <domain>    启动截图查看服务")
 	fmt.Println("  -list-screenshots   列出所有有截图的域名")
+}
+
+func validateModeAndConflicts(mode, domain, domainList, inputFile, modules, reportDomain string, listScreenshots bool) error {
+	switch mode {
+	case "scan", "monitor":
+	default:
+		return fmt.Errorf("未知 mode: %s（可用: scan, monitor）", mode)
+	}
+
+	if reportDomain != "" && listScreenshots {
+		return fmt.Errorf("-report 与 -list-screenshots 不能同时使用")
+	}
+
+	if mode == "monitor" {
+		if domain == "" {
+			return fmt.Errorf("monitor 模式必须使用 -d 指定单个域名")
+		}
+		if domainList != "" {
+			return fmt.Errorf("monitor 模式不支持 -dL")
+		}
+		if inputFile != "" {
+			return fmt.Errorf("monitor 模式不支持 -i")
+		}
+		if strings.TrimSpace(modules) != "" {
+			return fmt.Errorf("monitor 模式不支持 -m（固定执行 subs+ports）")
+		}
+		if reportDomain != "" || listScreenshots {
+			return fmt.Errorf("monitor 模式不支持 -report/-list-screenshots")
+		}
+	}
+
+	return nil
 }
 
 func buildModules(subs, ports, witness, nuclei bool) []string {

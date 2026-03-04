@@ -112,3 +112,86 @@ type Vulnerability struct {
 func (Vulnerability) TableName() string {
 	return "vulnerabilities"
 }
+
+// MonitorRun stores one monitoring execution record.
+type MonitorRun struct {
+	ID            uint           `gorm:"primarykey" json:"id"`
+	RootDomain    string         `gorm:"index;not null" json:"root_domain"`
+	Status        string         `gorm:"index;not null" json:"status"`
+	StartedAt     time.Time      `json:"started_at"`
+	FinishedAt    *time.Time     `json:"finished_at"`
+	DurationSec   int            `json:"duration_sec"`
+	ErrorMessage  string         `gorm:"type:text" json:"error_message"`
+	NewLiveCount  int            `json:"new_live_count"`
+	WebChanged    int            `json:"web_changed_count"`
+	PortOpened    int            `json:"port_opened_count"`
+	PortClosed    int            `json:"port_closed_count"`
+	ServiceChange int            `json:"service_changed_count"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// TableName table name.
+func (MonitorRun) TableName() string {
+	return "monitor_runs"
+}
+
+// AssetChange stores live subdomain/web fingerprint changes.
+type AssetChange struct {
+	ID           uint           `gorm:"primarykey" json:"id"`
+	RunID        uint           `gorm:"index;not null" json:"run_id"`
+	RootDomain   string         `gorm:"index;not null" json:"root_domain"`
+	ChangeType   string         `gorm:"index;not null" json:"change_type"`
+	Domain       string         `gorm:"index;not null" json:"domain"`
+	URL          string         `gorm:"type:text" json:"url"`
+	StatusCode   int            `json:"status_code"`
+	Title        string         `gorm:"type:text" json:"title"`
+	Technologies JSONB          `gorm:"type:jsonb" json:"technologies"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// TableName table name.
+func (AssetChange) TableName() string {
+	return "asset_changes"
+}
+
+// PortChange stores port delta events.
+type PortChange struct {
+	ID         uint           `gorm:"primarykey" json:"id"`
+	RunID      uint           `gorm:"index;not null" json:"run_id"`
+	RootDomain string         `gorm:"index;not null" json:"root_domain"`
+	ChangeType string         `gorm:"index;not null" json:"change_type"`
+	Domain     string         `gorm:"index" json:"domain"`
+	IP         string         `gorm:"index;not null" json:"ip"`
+	Port       int            `gorm:"index;not null" json:"port"`
+	Protocol   string         `json:"protocol"`
+	Service    string         `json:"service"`
+	Version    string         `json:"version"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// TableName table name.
+func (PortChange) TableName() string {
+	return "port_changes"
+}
+
+// MonitorTarget stores monitor target baseline state.
+type MonitorTarget struct {
+	ID           uint           `gorm:"primarykey" json:"id"`
+	RootDomain   string         `gorm:"uniqueIndex;not null" json:"root_domain"`
+	BaselineDone bool           `gorm:"default:false" json:"baseline_done"`
+	LastRunAt    *time.Time     `json:"last_run_at"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// TableName table name.
+func (MonitorTarget) TableName() string {
+	return "monitor_targets"
+}

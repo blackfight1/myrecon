@@ -26,7 +26,7 @@ func NewDatabase(dsn string) (*Database, error) {
 		return nil, fmt.Errorf("failed to connect to database: %v", err)
 	}
 
-	if err := database.AutoMigrate(&Asset{}, &Port{}, &Vulnerability{}); err != nil {
+	if err := database.AutoMigrate(&Asset{}, &Port{}, &Vulnerability{}, &MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorTarget{}); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %v", err)
 	}
 
@@ -329,6 +329,105 @@ func (d *Database) GetAssetByDomain(domain string) (*Asset, error) {
 		return nil, err
 	}
 	return &asset, nil
+}
+
+// CreateMonitorRun creates a new monitor run record.
+func (d *Database) CreateMonitorRun(rootDomain string) (*MonitorRun, error) {
+	run := &MonitorRun{
+		RootDomain: rootDomain,
+		Status:     "running",
+		StartedAt:  time.Now(),
+	}
+	if err := d.DB.Create(run).Error; err != nil {
+		return nil, err
+	}
+	return run, nil
+}
+
+// CompleteMonitorRun marks a monitor run as completed.
+func (d *Database) CompleteMonitorRun(runID uint, status string, errMsg string, newLive, webChanged, opened, closed, svcChanged int) error {
+	finished := time.Now()
+	durationSec := 0
+	var run MonitorRun
+	if err := d.DB.First(&run, runID).Error; err == nil {
+		durationSec = int(finished.Sub(run.StartedAt).Seconds())
+	}
+
+	updates := map[string]interface{}{
+		"status":         status,
+		"finished_at":    finished,
+		"duration_sec":   durationSec,
+		"error_message":  errMsg,
+		"new_live_count": newLive,
+		"web_changed":    webChanged,
+		"port_opened":    opened,
+		"port_closed":    closed,
+		"service_change": svcChanged,
+	}
+	return d.DB.Model(&MonitorRun{}).Where("id = ?", runID).Updates(updates).Error
+}
+
+// GetLiveAssetsByRootDomain returns live web assets by root domain.
+func (d *Database) GetLiveAssetsByRootDomain(rootDomain string) ([]Asset, error) {
+	var assets []Asset
+	pattern := "%." + rootDomain
+	if err := d.DB.
+		Where("(domain = ? OR domain LIKE ?) AND url <> ''", rootDomain, pattern).
+		Find(&assets).Error; err != nil {
+		return nil, err
+	}
+	return assets, nil
+}
+
+// GetPortsByRootDomain returns ports by root domain.
+func (d *Database) GetPortsByRootDomain(rootDomain string) ([]Port, error) {
+	var ports []Port
+	pattern := "%." + rootDomain
+	if err := d.DB.
+		Where("domain = ? OR domain LIKE ?", rootDomain, pattern).
+		Find(&ports).Error; err != nil {
+		return nil, err
+	}
+	return ports, nil
+}
+
+// SaveAssetChange saves a web asset change event.
+func (d *Database) SaveAssetChange(change *AssetChange) error {
+	return d.DB.Create(change).Error
+}
+
+// SavePortChange saves a port change event.
+func (d *Database) SavePortChange(change *PortChange) error {
+	return d.DB.Create(change).Error
+}
+
+// GetOrCreateMonitorTarget returns monitor target record for root domain.
+func (d *Database) GetOrCreateMonitorTarget(rootDomain string) (*MonitorTarget, error) {
+	var target MonitorTarget
+	result := d.DB.Where("root_domain = ?", rootDomain).First(&target)
+	if result.Error == gorm.ErrRecordNotFound {
+		target = MonitorTarget{
+			RootDomain:   rootDomain,
+			BaselineDone: false,
+		}
+		if err := d.DB.Create(&target).Error; err != nil {
+			return nil, err
+		}
+		return &target, nil
+	}
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &target, nil
+}
+
+// UpdateMonitorTarget updates baseline and last run time.
+func (d *Database) UpdateMonitorTarget(rootDomain string, baselineDone bool, lastRunAt time.Time) error {
+	updates := map[string]interface{}{
+		"baseline_done": baselineDone,
+		"last_run_at":   lastRunAt,
+	}
+	return d.DB.Model(&MonitorTarget{}).Where("root_domain = ?", rootDomain).Updates(updates).Error
 }
 
 func getStringValue(data map[string]interface{}, key string) string {

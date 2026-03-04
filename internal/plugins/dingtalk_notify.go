@@ -89,6 +89,30 @@ func (n *DingTalkNotifier) SendReconEnd(success bool, duration time.Duration, st
 	return n.sendText(content)
 }
 
+// SendMonitorChanges sends monitor delta summary.
+func (n *DingTalkNotifier) SendMonitorChanges(rootDomain string, changes map[string]int, highlights []string) error {
+	if !n.Enabled() {
+		return nil
+	}
+
+	content := fmt.Sprintf(
+		"[Hunter] 监控变化通知\n域名: %s\n新存活子域: %d\nWeb变化: %d\n端口新增: %d\n端口关闭: %d\n服务变化: %d\n时间: %s",
+		rootDomain,
+		changes["new_live_subdomains"],
+		changes["web_changed"],
+		changes["port_opened"],
+		changes["port_closed"],
+		changes["service_changed"],
+		time.Now().Format("2006-01-02 15:04:05"),
+	)
+
+	if len(highlights) > 0 {
+		content += "\n明细:\n- " + strings.Join(highlights, "\n- ")
+	}
+
+	return n.sendText(content)
+}
+
 func (n *DingTalkNotifier) sendText(content string) error {
 	payload := map[string]interface{}{
 		"msgtype": "text",
