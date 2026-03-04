@@ -134,6 +134,29 @@ go run main.go -mode scan -d example.com -notify
 go run main.go -mode monitor -d example.com -monitor-interval 6h -notify
 ```
 
+### 监控管理
+
+```bash
+# 列出当前监控域名
+go run . -mode monitor -monitor-list
+
+# 停止某个域名监控
+go run . -mode monitor -monitor-stop example.com
+
+# 删除某个域名的监控数据（仅监控相关表）
+go run . -mode monitor -monitor-delete example.com
+```
+
+### Scan 数据管理
+
+```bash
+# 列出 scan 数据中的所有域名
+go run . -mode scan -scan-list-domains
+
+# 删除某个域名的所有数据（资产/端口/漏洞/监控相关）
+go run . -mode scan -scan-delete-domain example.com
+```
+
 说明：监控模式会循环执行 `subs+ports`，并检测：
 
 - 新存活子域（含标题、状态码、技术栈）
@@ -144,6 +167,13 @@ go run main.go -mode monitor -d example.com -monitor-interval 6h -notify
 
 - 第一次监控运行仅建立基线（`baseline_done=true`），只发送开始/结束通知
 - 从第二次运行开始，才发送变化通知
+
+监控调度策略：
+
+- 监控改为任务化调度（`monitor_tasks`），不再按单域名 sleep 循环
+- worker 周期轮询到期任务并执行
+- 失败自动重试并退避（30s -> 120s -> 600s）
+- 超过最大重试后标记失败，并在下个监控周期重新创建任务
 
 ### 批量扫描
 
@@ -185,6 +215,11 @@ cat urls.txt | go run main.go -m witness
 | `-nuclei` | 启用 Nuclei 漏洞扫描 |
 | `-notify` | 启用钉钉开始/结束通知（读取 `DINGTALK_WEBHOOK`） |
 | `-monitor-interval` | 监控间隔（默认 `6h`） |
+| `-monitor-list` | 列出当前监控域名 |
+| `-monitor-stop` | 停止某个域名监控 |
+| `-monitor-delete` | 删除某个域名监控数据（监控表） |
+| `-scan-list-domains` | 列出 scan 数据中的所有域名 |
+| `-scan-delete-domain` | 删除某个域名的所有数据 |
 | `-report` | 启动 gowitness 报告服务 |
 | `-report-host` | 报告服务监听地址 |
 | `-report-port` | 报告服务端口 |
@@ -223,6 +258,7 @@ cat urls.txt | go run main.go -m witness
 - `asset_changes`：子域/Web变化明细
 - `port_changes`：端口变化明细
 - `monitor_targets`：监控目标状态（是否已完成基线）
+- `monitor_tasks`：监控调度任务（pending/running/success/failed/canceled）
 
 ## 常用查询
 
@@ -238,6 +274,67 @@ SELECT domain, template_id, severity, cve, matched_at, last_seen
 FROM vulnerabilities
 ORDER BY updated_at DESC
 LIMIT 50;
+```
+
+## 数据删除与清理
+
+```bash
+# 进入 PostgreSQL
+docker compose exec postgres psql -U hunter -d hunter
+```
+
+### 1) 清空所有扫描数据（保留表结构）
+
+```sql
+TRUNCATE TABLE
+  vulnerabilities,
+  port_changes,
+  asset_changes,
+  monitor_runs,
+  monitor_tasks,
+  monitor_targets,
+  ports,
+  assets
+RESTART IDENTITY CASCADE;
+```
+
+### 2) 按根域名删除数据（示例：example.com）
+
+```sql
+-- 先删变化与漏洞，再删端口和资产
+DELETE FROM vulnerabilities
+WHERE domain = 'example.com' OR domain LIKE '%.example.com';
+
+DELETE FROM port_changes
+WHERE root_domain = 'example.com';
+
+DELETE FROM asset_changes
+WHERE root_domain = 'example.com';
+
+DELETE FROM monitor_runs
+WHERE root_domain = 'example.com';
+
+DELETE FROM monitor_tasks
+WHERE root_domain = 'example.com';
+
+DELETE FROM monitor_targets
+WHERE root_domain = 'example.com';
+
+DELETE FROM ports
+WHERE domain = 'example.com' OR domain LIKE '%.example.com';
+
+DELETE FROM assets
+WHERE domain = 'example.com' OR domain LIKE '%.example.com';
+```
+
+### 3) 仅重置监控状态（保留资产数据）
+
+```sql
+DELETE FROM port_changes WHERE root_domain = 'example.com';
+DELETE FROM asset_changes WHERE root_domain = 'example.com';
+DELETE FROM monitor_runs WHERE root_domain = 'example.com';
+DELETE FROM monitor_tasks WHERE root_domain = 'example.com';
+DELETE FROM monitor_targets WHERE root_domain = 'example.com';
 ```
 
 ## 截图查看

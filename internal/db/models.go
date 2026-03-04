@@ -184,6 +184,7 @@ func (PortChange) TableName() string {
 type MonitorTarget struct {
 	ID           uint           `gorm:"primarykey" json:"id"`
 	RootDomain   string         `gorm:"uniqueIndex;not null" json:"root_domain"`
+	Enabled      bool           `gorm:"default:true;index" json:"enabled"`
 	BaselineDone bool           `gorm:"default:false" json:"baseline_done"`
 	LastRunAt    *time.Time     `json:"last_run_at"`
 	CreatedAt    time.Time      `json:"created_at"`
@@ -194,4 +195,26 @@ type MonitorTarget struct {
 // TableName table name.
 func (MonitorTarget) TableName() string {
 	return "monitor_targets"
+}
+
+// MonitorTask stores scheduled monitor jobs.
+type MonitorTask struct {
+	ID          uint           `gorm:"primarykey" json:"id"`
+	RootDomain  string         `gorm:"index;not null" json:"root_domain"`
+	Status      string         `gorm:"index;not null" json:"status"` // pending/running/success/failed/canceled
+	RunAt       time.Time      `gorm:"index;not null" json:"run_at"`
+	IntervalSec int            `gorm:"not null" json:"interval_sec"`
+	Attempt     int            `gorm:"not null;default:0" json:"attempt"`
+	MaxAttempts int            `gorm:"not null;default:3" json:"max_attempts"`
+	LastError   string         `gorm:"type:text" json:"last_error"`
+	StartedAt   *time.Time     `json:"started_at"`
+	FinishedAt  *time.Time     `json:"finished_at"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// TableName table name.
+func (MonitorTask) TableName() string {
+	return "monitor_tasks"
 }

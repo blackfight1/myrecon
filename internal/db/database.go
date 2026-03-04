@@ -9,6 +9,7 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -26,7 +27,7 @@ func NewDatabase(dsn string) (*Database, error) {
 		return nil, fmt.Errorf("failed to connect to database: %v", err)
 	}
 
-	if err := database.AutoMigrate(&Asset{}, &Port{}, &Vulnerability{}, &MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorTarget{}); err != nil {
+	if err := database.AutoMigrate(&Asset{}, &Port{}, &Vulnerability{}, &MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorTarget{}, &MonitorTask{}); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %v", err)
 	}
 
@@ -408,6 +409,7 @@ func (d *Database) GetOrCreateMonitorTarget(rootDomain string) (*MonitorTarget, 
 	if result.Error == gorm.ErrRecordNotFound {
 		target = MonitorTarget{
 			RootDomain:   rootDomain,
+			Enabled:      true,
 			BaselineDone: false,
 		}
 		if err := d.DB.Create(&target).Error; err != nil {
@@ -428,6 +430,287 @@ func (d *Database) UpdateMonitorTarget(rootDomain string, baselineDone bool, las
 		"last_run_at":   lastRunAt,
 	}
 	return d.DB.Model(&MonitorTarget{}).Where("root_domain = ?", rootDomain).Updates(updates).Error
+}
+
+// ListMonitorTargets returns all monitor targets.
+func (d *Database) ListMonitorTargets() ([]MonitorTarget, error) {
+	var targets []MonitorTarget
+	if err := d.DB.Order("root_domain asc").Find(&targets).Error; err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+// StopMonitorTarget disables monitoring for the given root domain.
+func (d *Database) StopMonitorTarget(rootDomain string) error {
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&MonitorTarget{}).
+			Where("root_domain = ?", rootDomain).
+			Update("enabled", false)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("monitor target not found: %s", rootDomain)
+		}
+
+		now := time.Now()
+		if err := tx.Model(&MonitorTask{}).
+			Where("root_domain = ? AND status IN ?", rootDomain, []string{"pending", "running"}).
+			Updates(map[string]interface{}{
+				"status":      "canceled",
+				"finished_at": now,
+			}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+// DeleteMonitorDataByRootDomain removes monitor-only data for a root domain.
+func (d *Database) DeleteMonitorDataByRootDomain(rootDomain string) error {
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorTask{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("root_domain = ?", rootDomain).Delete(&PortChange{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("root_domain = ?", rootDomain).Delete(&AssetChange{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorRun{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorTarget{}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+// EnableMonitorTarget enables monitor target and ensures one pending task exists.
+func (d *Database) EnableMonitorTarget(rootDomain string, intervalSec, maxAttempts int) error {
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		var target MonitorTarget
+		result := tx.Where("root_domain = ?", rootDomain).First(&target)
+		if result.Error == gorm.ErrRecordNotFound {
+			target = MonitorTarget{
+				RootDomain:   rootDomain,
+				Enabled:      true,
+				BaselineDone: false,
+			}
+			if err := tx.Create(&target).Error; err != nil {
+				return err
+			}
+		} else if result.Error != nil {
+			return result.Error
+		} else {
+			if err := tx.Model(&target).Updates(map[string]interface{}{
+				"enabled": true,
+			}).Error; err != nil {
+				return err
+			}
+		}
+
+		var count int64
+		if err := tx.Model(&MonitorTask{}).
+			Where("root_domain = ? AND status IN ?", rootDomain, []string{"pending", "running"}).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			task := MonitorTask{
+				RootDomain:  rootDomain,
+				Status:      "pending",
+				RunAt:       time.Now(),
+				IntervalSec: intervalSec,
+				MaxAttempts: maxAttempts,
+				Attempt:     0,
+			}
+			if err := tx.Create(&task).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ClaimDueMonitorTask atomically claims one due pending task.
+func (d *Database) ClaimDueMonitorTask() (*MonitorTask, error) {
+	var claimed *MonitorTask
+	err := d.DB.Transaction(func(tx *gorm.DB) error {
+		var task MonitorTask
+		now := time.Now()
+		result := tx.Model(&MonitorTask{}).
+			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Joins("JOIN monitor_targets mt ON mt.root_domain = monitor_tasks.root_domain").
+			Where("monitor_tasks.status = ? AND monitor_tasks.run_at <= ? AND mt.enabled = ?", "pending", now, true).
+			Order("monitor_tasks.run_at asc").
+			First(&task)
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil
+		}
+		if result.Error != nil {
+			return result.Error
+		}
+
+		if err := tx.Model(&MonitorTask{}).
+			Where("id = ?", task.ID).
+			Updates(map[string]interface{}{
+				"status":     "running",
+				"started_at": now,
+			}).Error; err != nil {
+			return err
+		}
+		task.Status = "running"
+		task.StartedAt = &now
+		claimed = &task
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
+// CompleteMonitorTaskSuccess marks task success and enqueues next cycle task.
+func (d *Database) CompleteMonitorTaskSuccess(taskID uint) error {
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		var task MonitorTask
+		if err := tx.First(&task, taskID).Error; err != nil {
+			return err
+		}
+		now := time.Now()
+		if err := tx.Model(&task).Updates(map[string]interface{}{
+			"status":      "success",
+			"finished_at": now,
+			"last_error":  "",
+		}).Error; err != nil {
+			return err
+		}
+
+		var target MonitorTarget
+		if err := tx.Where("root_domain = ?", task.RootDomain).First(&target).Error; err == nil {
+			if !target.Enabled {
+				return nil
+			}
+		}
+
+		next := MonitorTask{
+			RootDomain:  task.RootDomain,
+			Status:      "pending",
+			RunAt:       now.Add(time.Duration(task.IntervalSec) * time.Second),
+			IntervalSec: task.IntervalSec,
+			MaxAttempts: task.MaxAttempts,
+			Attempt:     0,
+		}
+		return tx.Create(&next).Error
+	})
+}
+
+// HandleMonitorTaskFailure retries with backoff or marks failed and schedules next cycle.
+func (d *Database) HandleMonitorTaskFailure(task *MonitorTask, errMsg string) error {
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+		nextAttempt := task.Attempt + 1
+		if nextAttempt < task.MaxAttempts {
+			backoffSec := calcBackoffSec(nextAttempt)
+			return tx.Model(&MonitorTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+				"status":      "pending",
+				"attempt":     nextAttempt,
+				"run_at":      now.Add(time.Duration(backoffSec) * time.Second),
+				"last_error":  errMsg,
+				"started_at":  nil,
+				"finished_at": nil,
+			}).Error
+		}
+
+		if err := tx.Model(&MonitorTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+			"status":      "failed",
+			"finished_at": now,
+			"last_error":  errMsg,
+		}).Error; err != nil {
+			return err
+		}
+
+		var target MonitorTarget
+		if err := tx.Where("root_domain = ?", task.RootDomain).First(&target).Error; err == nil {
+			if !target.Enabled {
+				return nil
+			}
+		}
+
+		next := MonitorTask{
+			RootDomain:  task.RootDomain,
+			Status:      "pending",
+			RunAt:       now.Add(time.Duration(task.IntervalSec) * time.Second),
+			IntervalSec: task.IntervalSec,
+			MaxAttempts: task.MaxAttempts,
+			Attempt:     0,
+		}
+		return tx.Create(&next).Error
+	})
+}
+
+func calcBackoffSec(attempt int) int {
+	steps := []int{30, 120, 600}
+	if attempt <= 0 {
+		return steps[0]
+	}
+	idx := attempt - 1
+	if idx >= len(steps) {
+		return steps[len(steps)-1]
+	}
+	return steps[idx]
+}
+
+// ListAssetDomains returns distinct domains from assets table.
+func (d *Database) ListAssetDomains() ([]string, error) {
+	var domains []string
+	if err := d.DB.Model(&Asset{}).
+		Distinct("domain").
+		Where("domain <> ''").
+		Order("domain asc").
+		Pluck("domain", &domains).Error; err != nil {
+		return nil, err
+	}
+	return domains, nil
+}
+
+// DeleteAllDataByRootDomain removes all related scan/monitor data for a root domain.
+func (d *Database) DeleteAllDataByRootDomain(rootDomain string) error {
+	pattern := "%." + rootDomain
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorTask{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("domain = ? OR domain LIKE ? OR host = ? OR host LIKE ?", rootDomain, pattern, rootDomain, pattern).
+			Delete(&Vulnerability{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("domain = ? OR domain LIKE ?", rootDomain, pattern).
+			Delete(&Port{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("domain = ? OR domain LIKE ?", rootDomain, pattern).
+			Delete(&Asset{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("root_domain = ?", rootDomain).Delete(&PortChange{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("root_domain = ?", rootDomain).Delete(&AssetChange{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorRun{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorTarget{}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 func getStringValue(data map[string]interface{}, key string) string {

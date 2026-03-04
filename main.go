@@ -27,6 +27,11 @@ func main() {
 	enableNuclei := flag.Bool("nuclei", false, "启用 Nuclei 漏洞扫描（CVE 优先）")
 	enableNotify := flag.Bool("notify", false, "启用钉钉开始/结束通知（读取 DINGTALK_WEBHOOK）")
 	monitorInterval := flag.String("monitor-interval", "6h", "监控间隔，例如 30m / 1h / 6h")
+	monitorList := flag.Bool("monitor-list", false, "列出当前监控域名")
+	monitorStop := flag.String("monitor-stop", "", "停止某个域名监控（例如 -monitor-stop example.com）")
+	monitorDelete := flag.String("monitor-delete", "", "删除某个域名监控数据（例如 -monitor-delete example.com）")
+	scanListDomains := flag.Bool("scan-list-domains", false, "列出 scan 数据中的所有域名")
+	scanDeleteDomain := flag.String("scan-delete-domain", "", "删除某个域名的所有数据（例如 -scan-delete-domain example.com）")
 
 	reportDomain := flag.String("report", "", "启动截图查看服务")
 	reportHost := flag.String("report-host", "0.0.0.0", "截图服务监听地址")
@@ -35,8 +40,92 @@ func main() {
 
 	flag.Parse()
 	mode := strings.ToLower(strings.TrimSpace(*runMode))
-	if err := validateModeAndConflicts(mode, *domain, *domainList, *inputFile, *modules, *reportDomain, *listScreenshots); err != nil {
+	if err := validateModeAndConflicts(mode, *domain, *domainList, *inputFile, *modules, *reportDomain, *listScreenshots, *monitorList, *monitorStop, *monitorDelete, *scanListDomains, *scanDeleteDomain); err != nil {
 		log.Fatalf("参数冲突: %v", err)
+	}
+
+	if mode == "monitor" && (*monitorList || strings.TrimSpace(*monitorStop) != "" || strings.TrimSpace(*monitorDelete) != "") {
+		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
+		database, err := db.NewDatabase(dsn)
+		if err != nil {
+			log.Fatalf("数据库连接失败: %v", err)
+		}
+
+		if *monitorList {
+			targets, err := database.ListMonitorTargets()
+			if err != nil {
+				log.Fatalf("获取监控域名失败: %v", err)
+			}
+			if len(targets) == 0 {
+				fmt.Println("暂无监控域名")
+			} else {
+				fmt.Println("当前监控域名:")
+				for _, t := range targets {
+					status := "stopped"
+					if t.Enabled {
+						status = "running"
+					}
+					baseline := "no"
+					if t.BaselineDone {
+						baseline = "yes"
+					}
+					lastRun := "-"
+					if t.LastRunAt != nil {
+						lastRun = t.LastRunAt.Format("2006-01-02 15:04:05")
+					}
+					fmt.Printf("- %s | status=%s | baseline_done=%s | last_run=%s\n", t.RootDomain, status, baseline, lastRun)
+				}
+			}
+		}
+
+		if strings.TrimSpace(*monitorStop) != "" {
+			target := strings.TrimSpace(*monitorStop)
+			if err := database.StopMonitorTarget(target); err != nil {
+				log.Fatalf("停止监控失败: %v", err)
+			}
+			fmt.Printf("已停止监控: %s\n", target)
+		}
+
+		if strings.TrimSpace(*monitorDelete) != "" {
+			target := strings.TrimSpace(*monitorDelete)
+			if err := database.DeleteMonitorDataByRootDomain(target); err != nil {
+				log.Fatalf("删除监控数据失败: %v", err)
+			}
+			fmt.Printf("已删除监控数据: %s\n", target)
+		}
+		return
+	}
+
+	if mode == "scan" && (*scanListDomains || strings.TrimSpace(*scanDeleteDomain) != "") {
+		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
+		database, err := db.NewDatabase(dsn)
+		if err != nil {
+			log.Fatalf("数据库连接失败: %v", err)
+		}
+
+		if *scanListDomains {
+			domains, err := database.ListAssetDomains()
+			if err != nil {
+				log.Fatalf("获取域名列表失败: %v", err)
+			}
+			if len(domains) == 0 {
+				fmt.Println("暂无域名数据")
+			} else {
+				fmt.Println("已有域名:")
+				for _, d := range domains {
+					fmt.Printf("- %s\n", d)
+				}
+			}
+		}
+
+		if strings.TrimSpace(*scanDeleteDomain) != "" {
+			target := strings.TrimSpace(*scanDeleteDomain)
+			if err := database.DeleteAllDataByRootDomain(target); err != nil {
+				log.Fatalf("删除域名数据失败: %v", err)
+			}
+			fmt.Printf("已删除域名全部数据: %s\n", target)
+		}
+		return
 	}
 
 	if *listScreenshots {
@@ -246,8 +335,13 @@ func printUsage() {
 	fmt.Println("Hunter - 资产搜集引擎")
 	fmt.Println()
 	fmt.Println("使用方法:")
-	fmt.Println("  普通扫描:     go run main.go -mode scan -d example.com")
-	fmt.Println("  监控模式:     go run main.go -mode monitor -d example.com -monitor-interval 6h")
+	fmt.Println("  普通扫描:     go run . -mode scan -d example.com")
+	fmt.Println("  监控模式:     go run . -mode monitor -d example.com -monitor-interval 6h")
+	fmt.Println("  scan管理:     go run . -mode scan -scan-list-domains")
+	fmt.Println("  scan删除:     go run . -mode scan -scan-delete-domain example.com")
+	fmt.Println("  列出监控:     go run . -mode monitor -monitor-list")
+	fmt.Println("  停止监控:     go run . -mode monitor -monitor-stop example.com")
+	fmt.Println("  删除监控:     go run . -mode monitor -monitor-delete example.com")
 	fmt.Println("  完整扫描:     go run main.go -d example.com")
 	fmt.Println("  批量扫描:     go run main.go -dL domains.txt")
 	fmt.Println()
@@ -268,12 +362,17 @@ func printUsage() {
 	fmt.Println("  -nuclei             启用 Nuclei 漏洞扫描（CVE 优先）")
 	fmt.Println("  -notify             启用钉钉开始/结束通知（环境变量 DINGTALK_WEBHOOK）")
 	fmt.Println("  -monitor-interval   监控间隔（默认 6h）")
+	fmt.Println("  -monitor-list       列出当前监控域名")
+	fmt.Println("  -monitor-stop       停止某个域名监控")
+	fmt.Println("  -monitor-delete     删除某个域名监控数据")
+	fmt.Println("  -scan-list-domains  列出 scan 数据中的所有域名")
+	fmt.Println("  -scan-delete-domain 删除某个域名的所有数据")
 	fmt.Println("  -screenshot-dir     截图存储目录（默认 screenshots）")
 	fmt.Println("  -report <domain>    启动截图查看服务")
 	fmt.Println("  -list-screenshots   列出所有有截图的域名")
 }
 
-func validateModeAndConflicts(mode, domain, domainList, inputFile, modules, reportDomain string, listScreenshots bool) error {
+func validateModeAndConflicts(mode, domain, domainList, inputFile, modules, reportDomain string, listScreenshots bool, monitorList bool, monitorStop, monitorDelete string, scanListDomains bool, scanDeleteDomain string) error {
 	switch mode {
 	case "scan", "monitor":
 	default:
@@ -282,6 +381,55 @@ func validateModeAndConflicts(mode, domain, domainList, inputFile, modules, repo
 
 	if reportDomain != "" && listScreenshots {
 		return fmt.Errorf("-report 与 -list-screenshots 不能同时使用")
+	}
+
+	monitorOps := 0
+	if monitorList {
+		monitorOps++
+	}
+	if strings.TrimSpace(monitorStop) != "" {
+		monitorOps++
+	}
+	if strings.TrimSpace(monitorDelete) != "" {
+		monitorOps++
+	}
+	if monitorOps > 1 {
+		return fmt.Errorf("-monitor-list/-monitor-stop/-monitor-delete 只能使用一个")
+	}
+	if monitorOps > 0 {
+		if mode != "monitor" {
+			return fmt.Errorf("监控管理参数需要在 -mode monitor 下使用")
+		}
+		if reportDomain != "" || listScreenshots {
+			return fmt.Errorf("监控管理参数不支持与 -report/-list-screenshots 同时使用")
+		}
+		if strings.TrimSpace(domain) != "" || strings.TrimSpace(domainList) != "" || strings.TrimSpace(inputFile) != "" || strings.TrimSpace(modules) != "" {
+			return fmt.Errorf("监控管理参数不支持与 -d/-dL/-i/-m 同时使用")
+		}
+		return nil
+	}
+
+	scanOps := 0
+	if scanListDomains {
+		scanOps++
+	}
+	if strings.TrimSpace(scanDeleteDomain) != "" {
+		scanOps++
+	}
+	if scanOps > 1 {
+		return fmt.Errorf("-scan-list-domains/-scan-delete-domain 只能使用一个")
+	}
+	if scanOps > 0 {
+		if mode != "scan" {
+			return fmt.Errorf("scan 管理参数需要在 -mode scan 下使用")
+		}
+		if reportDomain != "" || listScreenshots {
+			return fmt.Errorf("scan 管理参数不支持与 -report/-list-screenshots 同时使用")
+		}
+		if strings.TrimSpace(domain) != "" || strings.TrimSpace(domainList) != "" || strings.TrimSpace(inputFile) != "" || strings.TrimSpace(modules) != "" {
+			return fmt.Errorf("scan 管理参数不支持与 -d/-dL/-i/-m 同时使用")
+		}
+		return nil
 	}
 
 	if mode == "monitor" {
