@@ -508,8 +508,7 @@ func runSubsOnly(domains []string) ([]engine.Result, error) {
 
 	isBatchMode := len(domains) > 1
 	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewSamoscoutPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewSubdogPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
 	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
 
 	return pipeline.Execute(domains)
@@ -549,8 +548,7 @@ func runSubsAndPorts(domains []string, nucleiEnabled bool) ([]engine.Result, err
 
 	isBatchMode := len(domains) > 1
 	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewSamoscoutPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewSubdogPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
 	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
 
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
@@ -569,8 +567,7 @@ func runSubsAndWitness(domains []string, screenshotDir string, nucleiEnabled boo
 
 	isBatchMode := len(domains) > 1
 	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewSamoscoutPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewSubdogPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
 	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
 
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
@@ -603,8 +600,7 @@ func runFullPipeline(domains []string, screenshotDir string, nucleiEnabled bool)
 
 	isBatchMode := len(domains) > 1
 	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewSamoscoutPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewSubdogPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
 	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
 
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
