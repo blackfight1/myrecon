@@ -1,4 +1,4 @@
-package plugins
+package port
 
 import (
 	"bufio"
@@ -11,23 +11,22 @@ import (
 	"hunter/internal/engine"
 )
 
-// NmapPlugin 实现 Nmap 服务识别扫描器
+// NmapPlugin performs service fingerprinting on open ports discovered by naabu.
 type NmapPlugin struct{}
 
-// NewNmapPlugin 创建 Nmap 插件实例
+// NewNmapPlugin creates an Nmap plugin instance.
 func NewNmapPlugin() *NmapPlugin {
 	return &NmapPlugin{}
 }
 
-// Name 返回插件名称
+// Name returns plugin name.
 func (n *NmapPlugin) Name() string {
 	return "Nmap"
 }
 
-// Execute 执行 Nmap 服务识别
-// 输入格式：从 Naabu 结果中提取的 IP:Port 信息
+// Execute runs nmap service detection.
+// Expected input format: "ip:port:host" or "ip:port".
 func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
-	// 检查 nmap 是否存在
 	if _, err := exec.LookPath("nmap"); err != nil {
 		return nil, fmt.Errorf("nmap not found in PATH. Please install nmap and ensure it's in your PATH")
 	}
@@ -36,21 +35,21 @@ func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
 		return []engine.Result{}, nil
 	}
 
-	// 解析输入，按 IP 分组端口
-	// 输入格式: "ip:port:host" 或 "ip:port"
-	ipPorts := make(map[string][]int)  // IP -> []Port
-	ipHosts := make(map[string]string) // IP -> Host (域名)
+	ipPorts := make(map[string][]int)
+	ipHosts := make(map[string]string)
 
 	for _, item := range input {
 		parts := strings.Split(item, ":")
 		if len(parts) < 2 {
 			continue
 		}
+
 		ip := parts[0]
 		port, err := strconv.Atoi(parts[1])
 		if err != nil {
 			continue
 		}
+
 		ipPorts[ip] = append(ipPorts[ip], port)
 		if len(parts) >= 3 && parts[2] != "" {
 			ipHosts[ip] = parts[2]
@@ -61,29 +60,22 @@ func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
 		return []engine.Result{}, nil
 	}
 
-	fmt.Printf("[Nmap] 正在对 %d 个 IP 进行服务识别...\n", len(ipPorts))
+	fmt.Printf("[Nmap] Running service detection against %d IPs...\n", len(ipPorts))
 
 	var results []engine.Result
 	scannedCount := 0
 
-	// 对每个 IP 执行 nmap 服务识别
 	for ip, ports := range ipPorts {
 		scannedCount++
 
-		// 构建端口列表字符串
 		portStrs := make([]string, len(ports))
 		for i, p := range ports {
 			portStrs[i] = strconv.Itoa(p)
 		}
 		portList := strings.Join(portStrs, ",")
 
-		fmt.Printf("[Nmap] (%d/%d) 扫描 %s 的 %d 个端口...\n", scannedCount, len(ipPorts), ip, len(ports))
+		fmt.Printf("[Nmap] (%d/%d) Scanning %s on %d ports...\n", scannedCount, len(ipPorts), ip, len(ports))
 
-		// 执行 nmap 命令
-		// -sV: 服务版本探测
-		// -Pn: 跳过主机发现（已知端口开放）
-		// -T4: 加快扫描速度
-		// --open: 只显示开放端口
 		cmd := exec.Command("nmap",
 			"-sV",
 			"-Pn",
@@ -95,26 +87,25 @@ func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
 
 		output, err := cmd.Output()
 		if err != nil {
-			fmt.Printf("[Nmap] 扫描 %s 时出错: %v\n", ip, err)
+			fmt.Printf("[Nmap] Scan failed for %s: %v\n", ip, err)
 			continue
 		}
 
-		// 解析 nmap 输出
 		host := ipHosts[ip]
 		portResults := parseNmapOutput(string(output), ip, host)
 		results = append(results, portResults...)
 	}
 
-	fmt.Printf("[Nmap] 服务识别完成，共识别 %d 个服务\n", len(results))
+	fmt.Printf("[Nmap] Service detection finished, identified %d services\n", len(results))
 	return results, nil
 }
 
-// parseNmapOutput 解析 nmap 输出
+// parseNmapOutput parses open port lines from nmap output.
 func parseNmapOutput(output string, ip string, host string) []engine.Result {
 	var results []engine.Result
 
-	// 匹配端口行，格式如: "22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu"
-	// 正则: 端口/协议  状态  服务名  版本信息(可选)
+	// Example matched line:
+	// "22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu"
 	portRegex := regexp.MustCompile(`(\d+)/(\w+)\s+open\s+(\S+)\s*(.*)`)
 
 	scanner := bufio.NewScanner(strings.NewReader(output))

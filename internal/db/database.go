@@ -653,6 +653,42 @@ func (d *Database) HandleMonitorTaskFailure(task *MonitorTask, errMsg string) er
 	})
 }
 
+// RecoverStaleRunningTasks reclaims monitor tasks stuck in running state.
+// Stale tasks are treated as failures and follow the same retry/backoff policy.
+func (d *Database) RecoverStaleRunningTasks(staleAfter time.Duration) (int, error) {
+	if staleAfter <= 0 {
+		staleAfter = 2 * time.Hour
+	}
+	cutoff := time.Now().Add(-staleAfter)
+
+	var staleTasks []MonitorTask
+	if err := d.DB.
+		Joins("JOIN monitor_targets mt ON mt.root_domain = monitor_tasks.root_domain").
+		Where("monitor_tasks.status = ? AND monitor_tasks.started_at IS NOT NULL AND monitor_tasks.started_at <= ? AND mt.enabled = ?", "running", cutoff, true).
+		Find(&staleTasks).Error; err != nil {
+		return 0, err
+	}
+	if len(staleTasks) == 0 {
+		return 0, nil
+	}
+
+	recovered := 0
+	for i := range staleTasks {
+		task := staleTasks[i]
+		startedAt := "unknown"
+		if task.StartedAt != nil {
+			startedAt = task.StartedAt.Format(time.RFC3339)
+		}
+		errMsg := fmt.Sprintf("stale running task recovered (started_at=%s)", startedAt)
+		if err := d.HandleMonitorTaskFailure(&task, errMsg); err != nil {
+			return recovered, err
+		}
+		recovered++
+	}
+
+	return recovered, nil
+}
+
 func calcBackoffSec(attempt int) int {
 	steps := []int{30, 120, 600}
 	if attempt <= 0 {
@@ -663,6 +699,52 @@ func calcBackoffSec(attempt int) int {
 		return steps[len(steps)-1]
 	}
 	return steps[idx]
+}
+
+// HasRecentChangeRun reports whether there is a successful monitor run with
+// non-zero changes for the same root domain in the given time window.
+func (d *Database) HasRecentChangeRun(rootDomain string, excludeRunID uint, since time.Time) (bool, error) {
+	query := d.DB.Model(&MonitorRun{}).
+		Where("root_domain = ? AND status = ? AND finished_at IS NOT NULL AND finished_at >= ?", rootDomain, "success", since).
+		Where("(new_live_count > 0 OR web_changed > 0 OR port_opened > 0 OR port_closed > 0 OR service_change > 0)")
+	if excludeRunID > 0 {
+		query = query.Where("id <> ?", excludeRunID)
+	}
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// GetPreviousPortCloseState returns the close state for a specific port in the
+// previous successful monitor run: "", "closed_pending", or "closed".
+func (d *Database) GetPreviousPortCloseState(rootDomain string, currentRunID uint, ip string, port int) (string, error) {
+	var prevRun MonitorRun
+	q := d.DB.Where("root_domain = ? AND status = ?", rootDomain, "success")
+	if currentRunID > 0 {
+		q = q.Where("id < ?", currentRunID)
+	}
+	if err := q.Order("id desc").First(&prevRun).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return "", nil
+		}
+		return "", err
+	}
+
+	var pc PortChange
+	err := d.DB.
+		Where("run_id = ? AND ip = ? AND port = ? AND change_type IN ?", prevRun.ID, ip, port, []string{"closed_pending", "closed"}).
+		Order("id desc").
+		First(&pc).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return "", nil
+		}
+		return "", err
+	}
+	return pc.ChangeType, nil
 }
 
 // ListAssetDomains returns distinct domains from assets table.

@@ -1,0 +1,65 @@
+package plugins
+
+import (
+	"hunter/internal/engine"
+	"hunter/internal/plugins/notify"
+	pluginport "hunter/internal/plugins/port"
+	"hunter/internal/plugins/subdomain"
+	"hunter/internal/plugins/vuln"
+	"hunter/internal/plugins/web"
+)
+
+// DingTalkNotifier re-exports the notifier type for backward compatibility.
+type DingTalkNotifier = notify.DingTalkNotifier
+
+func NewDingTalkNotifierFromEnv(enabled bool) *DingTalkNotifier {
+	return notify.NewDingTalkNotifierFromEnv(enabled)
+}
+
+func NewSubfinderPlugin(batchMode bool) engine.Scanner {
+	return subdomain.NewSubfinderPlugin(batchMode)
+}
+
+func NewBBOTPlugin(passiveOnly bool) engine.Scanner {
+	return subdomain.NewBBOTPlugin(passiveOnly)
+}
+
+func NewFindomainPlugin() engine.Scanner {
+	return subdomain.NewFindomainPlugin()
+}
+
+func NewShosubgoPlugin() engine.Scanner {
+	return subdomain.NewShosubgoPlugin()
+}
+
+func NewHttpxPlugin() engine.Scanner {
+	return web.NewHttpxPlugin()
+}
+
+func NewGowitnessPlugin(baseDir string) engine.Scanner {
+	return web.NewGowitnessPlugin(baseDir)
+}
+
+func NewNaabuPlugin() engine.Scanner {
+	return pluginport.NewNaabuPlugin()
+}
+
+func NewNmapPlugin() engine.Scanner {
+	return pluginport.NewNmapPlugin()
+}
+
+func NewNucleiPlugin() engine.Scanner {
+	return vuln.NewNucleiPlugin()
+}
+
+func StartReportServer(baseDir, rootDomain, host string, port int) error {
+	return web.StartReportServer(baseDir, rootDomain, host, port)
+}
+
+func ListScreenshotDomains(baseDir string) ([]string, error) {
+	return web.ListScreenshotDomains(baseDir)
+}
+
+func ExtractRootDomain(subdomain string) string {
+	return web.ExtractRootDomain(subdomain)
+}

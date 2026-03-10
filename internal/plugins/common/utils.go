@@ -1,11 +1,11 @@
-package plugins
+package common
 
 import (
 	"os"
 )
 
-// createTempFile 创建临时文件并写入内容
-func createTempFile(pattern string, lines []string) (string, error) {
+// CreateTempFile creates a temp file and writes lines into it.
+func CreateTempFile(pattern string, lines []string) (string, error) {
 	tmpFile, err := os.CreateTemp("", pattern)
 	if err != nil {
 		return "", err
@@ -23,7 +23,7 @@ func createTempFile(pattern string, lines []string) (string, error) {
 	return tmpFile.Name(), nil
 }
 
-// removeTempFile 删除临时文件
-func removeTempFile(path string) {
+// RemoveTempFile removes a temp file if it exists.
+func RemoveTempFile(path string) {
 	os.Remove(path)
 }

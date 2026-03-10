@@ -1,4 +1,4 @@
-package plugins
+package port
 
 import (
 	"bufio"
@@ -11,29 +11,28 @@ import (
 	"hunter/internal/engine"
 )
 
-// NaabuPlugin 实现 Naabu 端口扫描器
+// NaabuPlugin performs port discovery.
 type NaabuPlugin struct{}
 
-// NaabuResult Naabu 输出结果结构
+// NaabuResult represents one JSONL line from naabu output.
 type NaabuResult struct {
 	Host string `json:"host"`
 	IP   string `json:"ip"`
 	Port int    `json:"port"`
 }
 
-// NewNaabuPlugin 创建 Naabu 插件实例
+// NewNaabuPlugin creates a Naabu plugin instance.
 func NewNaabuPlugin() *NaabuPlugin {
 	return &NaabuPlugin{}
 }
 
-// Name 返回插件名称
+// Name returns plugin name.
 func (n *NaabuPlugin) Name() string {
 	return "Naabu"
 }
 
-// Execute 执行 Naabu 端口扫描（排除 80/443 端口）
+// Execute runs naabu and excludes 80/443 since httpx already covers web services.
 func (n *NaabuPlugin) Execute(input []string) ([]engine.Result, error) {
-	// 检查 naabu 是否存在
 	if _, err := exec.LookPath("naabu"); err != nil {
 		return nil, fmt.Errorf("naabu not found in PATH. Please install naabu and ensure it's in your PATH")
 	}
@@ -42,28 +41,21 @@ func (n *NaabuPlugin) Execute(input []string) ([]engine.Result, error) {
 		return []engine.Result{}, nil
 	}
 
-	fmt.Printf("[Naabu] 正在对 %d 个目标进行端口扫描（top1000，排除80/443）...\n", len(input))
+	fmt.Printf("[Naabu] Scanning %d targets (top-ports 1000, excluding 80/443)...\n", len(input))
 
-	// 创建临时文件存储目标列表
 	tmpFile, err := os.CreateTemp("", "naabu_input_*.txt")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp file: %v", err)
 	}
 	defer os.Remove(tmpFile.Name())
 
-	// 写入目标到临时文件
 	for _, target := range input {
 		if _, err := tmpFile.WriteString(target + "\n"); err != nil {
 			return nil, fmt.Errorf("failed to write to temp file: %v", err)
 		}
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
-	// 执行 naabu 命令
-	// -top-ports 1000: 扫描 top 1000 端口
-	// -exclude-ports 80,443: 排除 80 和 443 端口（httpx 已处理）
-	// -json: JSON 输出
-	// -silent: 静默模式
 	cmd := exec.Command("naabu",
 		"-list", tmpFile.Name(),
 		"-top-ports", "1000",
@@ -85,7 +77,6 @@ func (n *NaabuPlugin) Execute(input []string) ([]engine.Result, error) {
 	scanner := bufio.NewScanner(stdout)
 	portCount := 0
 
-	// 实时解析 JSONL 输出
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -98,10 +89,8 @@ func (n *NaabuPlugin) Execute(input []string) ([]engine.Result, error) {
 		}
 
 		portCount++
-
-		// 实时显示进度
 		if portCount%10 == 0 || portCount == 1 {
-			fmt.Printf("[Naabu] 已发现 %d 个开放端口\n", portCount)
+			fmt.Printf("[Naabu] Discovered %d open ports\n", portCount)
 		}
 
 		results = append(results, engine.Result{
@@ -115,10 +104,10 @@ func (n *NaabuPlugin) Execute(input []string) ([]engine.Result, error) {
 	}
 
 	if err := cmd.Wait(); err != nil {
-		// naabu 可能会因为某些目标无法访问而返回非零退出码
-		fmt.Printf("[Naabu] 命令执行完成\n")
+		// Keep behavior tolerant: naabu may return non-zero when some hosts are unreachable.
+		fmt.Printf("[Naabu] Command finished with warning\n")
 	}
 
-	fmt.Printf("[Naabu] 端口扫描完成，发现 %d 个开放端口\n", portCount)
+	fmt.Printf("[Naabu] Port scan completed, found %d open ports\n", portCount)
 	return results, nil
 }

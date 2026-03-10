@@ -1,22 +1,25 @@
-package plugins
+package vuln
 
 import (
 	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 	"time"
 
 	"hunter/internal/engine"
+	"hunter/internal/plugins/common"
 )
 
-// NucleiPlugin runs nuclei vulnerability scans (CVE-focused by default).
+// NucleiPlugin runs nuclei scans with tuned exclusions for noisy templates.
 type NucleiPlugin struct {
-	tags     string
-	severity string
+	excludeProtocolTypes []string
+	excludeTemplateIDs   []string
+	outputFile           string
 }
 
 // NucleiResult is a subset of nuclei JSONL output fields.
@@ -36,11 +39,20 @@ type NucleiResult struct {
 	} `json:"info"`
 }
 
-// NewNucleiPlugin creates a nuclei plugin with sane defaults for bug bounty.
+// NewNucleiPlugin creates a nuclei plugin instance.
 func NewNucleiPlugin() *NucleiPlugin {
 	return &NucleiPlugin{
-		tags:     "cve",
-		severity: "medium,high,critical",
+		// Use -ept to exclude protocol/template types (ssl/dns),
+		// and -eid to exclude noisy template IDs.
+		excludeProtocolTypes: []string{"ssl", "dns"},
+		excludeTemplateIDs: []string{
+			"https-to-http-redirect",
+			"xss-deprecated-header",
+			"form-detection",
+			"missing-sri",
+			"cookies-without-httponly-secure",
+		},
+		outputFile: "result_nuclei",
 	}
 }
 
@@ -80,20 +92,23 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 		return []engine.Result{}, nil
 	}
 
-	fmt.Printf("[Nuclei] Scanning %d live targets for CVEs...\n", len(targets))
+	fmt.Printf("[Nuclei] Scanning %d live targets...\n", len(targets))
 
-	tmpFile, err := createTempFile("nuclei_targets_*.txt", targets)
+	tmpFile, err := common.CreateTempFile("nuclei_targets_*.txt", targets)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp file: %v", err)
 	}
-	defer removeTempFile(tmpFile)
+	defer common.RemoveTempFile(tmpFile)
+
+	_ = os.Remove(n.outputFile)
 
 	cmd := exec.Command("nuclei",
 		"-l", tmpFile,
 		"-jsonl",
 		"-silent",
-		"-tags", n.tags,
-		"-severity", n.severity,
+		"-ept", strings.Join(n.excludeProtocolTypes, ","),
+		"-eid", strings.Join(n.excludeTemplateIDs, ","),
+		"-o", n.outputFile,
 		"-timeout", "10",
 		"-retries", "1",
 	)
@@ -116,43 +131,9 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 		if line == "" {
 			continue
 		}
-
-		var nResult NucleiResult
-		if err := json.Unmarshal([]byte(line), &nResult); err != nil {
-			continue
+		if result, ok := parseNucleiJSONLLine(line); ok {
+			results = append(results, result)
 		}
-
-		domain := extractDomainFromTarget(nResult.MatchedAt)
-		if domain == "" {
-			domain = extractDomainFromTarget(nResult.Host)
-		}
-
-		references := ""
-		if len(nResult.Info.Reference) > 0 {
-			references = strings.Join(nResult.Info.Reference, ",")
-		}
-
-		cve := extractCVE(nResult.TemplateID + " " + nResult.Template + " " + nResult.Info.Name + " " + nResult.Info.Description)
-
-		results = append(results, engine.Result{
-			Type: "vulnerability",
-			Data: map[string]interface{}{
-				"template_id":   nResult.TemplateID,
-				"template_name": nResult.Info.Name,
-				"severity":      strings.ToLower(nResult.Info.Severity),
-				"matched_at":    nResult.MatchedAt,
-				"host":          nResult.Host,
-				"domain":        domain,
-				"ip":            nResult.IP,
-				"matcher_name":  nResult.MatcherName,
-				"description":   nResult.Info.Description,
-				"reference":     references,
-				"template_url":  nResult.TemplateURL,
-				"cve":           cve,
-				"raw":           line,
-				"discovered_at": time.Now(),
-			},
-		})
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -160,6 +141,11 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 	}
 
 	waitErr := cmd.Wait()
+	if len(results) == 0 {
+		if fileResults, err := parseNucleiResultFile(n.outputFile); err == nil {
+			results = append(results, fileResults...)
+		}
+	}
 	if waitErr != nil && len(results) == 0 {
 		return nil, fmt.Errorf("nuclei execution failed: %v", waitErr)
 	}
@@ -169,6 +155,70 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 
 	fmt.Printf("[Nuclei] Scan complete, found %d potential vulnerabilities\n", len(results))
 	return results, nil
+}
+
+func parseNucleiResultFile(path string) ([]engine.Result, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	results := make([]engine.Result, 0, 64)
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if result, ok := parseNucleiJSONLLine(line); ok {
+			results = append(results, result)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func parseNucleiJSONLLine(line string) (engine.Result, bool) {
+	var nResult NucleiResult
+	if err := json.Unmarshal([]byte(line), &nResult); err != nil {
+		return engine.Result{}, false
+	}
+
+	domain := extractDomainFromTarget(nResult.MatchedAt)
+	if domain == "" {
+		domain = extractDomainFromTarget(nResult.Host)
+	}
+
+	references := ""
+	if len(nResult.Info.Reference) > 0 {
+		references = strings.Join(nResult.Info.Reference, ",")
+	}
+
+	cve := extractCVE(nResult.TemplateID + " " + nResult.Template + " " + nResult.Info.Name + " " + nResult.Info.Description)
+
+	return engine.Result{
+		Type: "vulnerability",
+		Data: map[string]interface{}{
+			"template_id":   nResult.TemplateID,
+			"template_name": nResult.Info.Name,
+			"severity":      strings.ToLower(nResult.Info.Severity),
+			"matched_at":    nResult.MatchedAt,
+			"host":          nResult.Host,
+			"domain":        domain,
+			"ip":            nResult.IP,
+			"matcher_name":  nResult.MatcherName,
+			"description":   nResult.Info.Description,
+			"reference":     references,
+			"template_url":  nResult.TemplateURL,
+			"cve":           cve,
+			"raw":           line,
+			"discovered_at": time.Now(),
+		},
+	}, true
 }
 
 func extractDomainFromTarget(target string) string {

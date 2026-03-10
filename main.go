@@ -508,7 +508,7 @@ func runSubsOnly(domains []string) ([]engine.Result, error) {
 
 	isBatchMode := len(domains) > 1
 	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewAmassPlugin(true))
+	pipeline.AddDomainScanner(plugins.NewFindomainPlugin())
 	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
 	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
 
@@ -549,7 +549,7 @@ func runSubsAndPorts(domains []string, nucleiEnabled bool) ([]engine.Result, err
 
 	isBatchMode := len(domains) > 1
 	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewAmassPlugin(true))
+	pipeline.AddDomainScanner(plugins.NewFindomainPlugin())
 	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
 	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
 
@@ -569,7 +569,7 @@ func runSubsAndWitness(domains []string, screenshotDir string, nucleiEnabled boo
 
 	isBatchMode := len(domains) > 1
 	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewAmassPlugin(true))
+	pipeline.AddDomainScanner(plugins.NewFindomainPlugin())
 	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
 	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
 
@@ -603,7 +603,7 @@ func runFullPipeline(domains []string, screenshotDir string, nucleiEnabled bool)
 
 	isBatchMode := len(domains) > 1
 	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewAmassPlugin(true))
+	pipeline.AddDomainScanner(plugins.NewFindomainPlugin())
 	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
 	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
 

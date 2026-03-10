@@ -12,6 +12,11 @@ import (
 	"hunter/internal/plugins"
 )
 
+const (
+	monitorTaskStaleAfter       = 90 * time.Minute
+	monitorChangeNotifyCooldown = 10 * time.Minute
+)
+
 type liveAssetSnapshot struct {
 	Domain       string
 	URL          string
@@ -69,6 +74,12 @@ func runMonitorLoop(rootDomain string, interval time.Duration, dryRun bool, noti
 	}
 }
 func runDueMonitorTasks(database *db.Database, dryRun bool, notifier *plugins.DingTalkNotifier) {
+	if recovered, err := database.RecoverStaleRunningTasks(monitorTaskStaleAfter); err != nil {
+		fmt.Printf("⚠️  回收卡死监控任务失败: %v\n", err)
+	} else if recovered > 0 {
+		fmt.Printf("♻️  已回收 %d 个卡死监控任务\n", recovered)
+	}
+
 	for {
 		if !runOneDueMonitorTask(database, dryRun, notifier) {
 			return
@@ -178,13 +189,25 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 	if notifier.Enabled() {
 		_ = notifier.SendReconEnd(true, time.Since(start), stats, "")
 		if !baselineMode && hasMonitorChanges(changeSummary) {
-			_ = notifier.SendMonitorChanges(rootDomain, map[string]int{
-				"new_live_subdomains": changeSummary.NewLiveSubdomains,
-				"web_changed":         changeSummary.WebChanged,
-				"port_opened":         changeSummary.PortOpened,
-				"port_closed":         changeSummary.PortClosed,
-				"service_changed":     changeSummary.ServiceChanged,
-			}, changeSummary.Highlights)
+			shouldSend := true
+			if run != nil {
+				recent, err := database.HasRecentChangeRun(rootDomain, run.ID, time.Now().Add(-monitorChangeNotifyCooldown))
+				if err != nil {
+					fmt.Printf("⚠️  检查告警冷却窗口失败: %v\n", err)
+				} else if recent {
+					shouldSend = false
+					fmt.Printf("🔕 变化通知已去抖: %s 在 %s 内已发送过变化告警\n", rootDomain, monitorChangeNotifyCooldown)
+				}
+			}
+			if shouldSend {
+				_ = notifier.SendMonitorChanges(rootDomain, map[string]int{
+					"new_live_subdomains": changeSummary.NewLiveSubdomains,
+					"web_changed":         changeSummary.WebChanged,
+					"port_opened":         changeSummary.PortOpened,
+					"port_closed":         changeSummary.PortClosed,
+					"service_changed":     changeSummary.ServiceChanged,
+				}, changeSummary.Highlights)
+			}
 		}
 	}
 }
@@ -359,20 +382,49 @@ func detectAndPersistChanges(
 		if _, exists := currentPorts[key]; exists {
 			continue
 		}
-		summary.PortClosed++
-		summary.Highlights = append(summary.Highlights, fmt.Sprintf("端口关闭: %s:%d", prev.IP, prev.Port))
-		if runID > 0 {
-			_ = database.SavePortChange(&db.PortChange{
-				RunID:      runID,
-				RootDomain: rootDomain,
-				ChangeType: "closed",
-				Domain:     prev.Domain,
-				IP:         prev.IP,
-				Port:       prev.Port,
-				Protocol:   prev.Protocol,
-				Service:    prev.Service,
-				Version:    prev.Version,
-			})
+
+		prevCloseState, err := database.GetPreviousPortCloseState(rootDomain, runID, prev.IP, prev.Port)
+		if err != nil {
+			fmt.Printf("⚠️  读取端口关闭状态失败(%s:%d): %v\n", prev.IP, prev.Port, err)
+			prevCloseState = ""
+		}
+
+		switch prevCloseState {
+		case "closed":
+			// Already confirmed closed in previous run; suppress repeated alerts.
+			continue
+		case "closed_pending":
+			// Second consecutive absence confirms closure.
+			summary.PortClosed++
+			summary.Highlights = append(summary.Highlights, fmt.Sprintf("端口关闭: %s:%d", prev.IP, prev.Port))
+			if runID > 0 {
+				_ = database.SavePortChange(&db.PortChange{
+					RunID:      runID,
+					RootDomain: rootDomain,
+					ChangeType: "closed",
+					Domain:     prev.Domain,
+					IP:         prev.IP,
+					Port:       prev.Port,
+					Protocol:   prev.Protocol,
+					Service:    prev.Service,
+					Version:    prev.Version,
+				})
+			}
+		default:
+			// First time absent: record pending only, no alert yet.
+			if runID > 0 {
+				_ = database.SavePortChange(&db.PortChange{
+					RunID:      runID,
+					RootDomain: rootDomain,
+					ChangeType: "closed_pending",
+					Domain:     prev.Domain,
+					IP:         prev.IP,
+					Port:       prev.Port,
+					Protocol:   prev.Protocol,
+					Service:    prev.Service,
+					Version:    prev.Version,
+				})
+			}
 		}
 	}
 
@@ -426,4 +478,3 @@ func equalStringSet(a, b []string) bool {
 	sort.Strings(bc)
 	return strings.Join(ac, ",") == strings.Join(bc, ",")
 }
-

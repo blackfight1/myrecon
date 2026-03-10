@@ -1,4 +1,4 @@
-package plugins
+package notify
 
 import (
 	"bytes"
@@ -96,7 +96,7 @@ func (n *DingTalkNotifier) SendMonitorChanges(rootDomain string, changes map[str
 	}
 
 	content := fmt.Sprintf(
-		"[Hunter] 监控变化通知\n域名: %s\n新存活子域: %d\nWeb变化: %d\n端口新增: %d\n端口关闭: %d\n服务变化: %d\n时间: %s",
+		"[Hunter] 监控变化通知\n域名: %s\n新增存活子域: %d\nWeb变化: %d\n端口新增: %d\n端口关闭: %d\n服务变化: %d\n时间: %s",
 		rootDomain,
 		changes["new_live_subdomains"],
 		changes["web_changed"],
