@@ -50,7 +50,7 @@ func (n *DingTalkNotifier) SendReconStart(inputCount int, modules []string, dryR
 	}
 
 	content := fmt.Sprintf(
-		"[Hunter] Recon 开始\n输入数量: %d\n模块: %s\n模式: %s\n时间: %s",
+		"[Hunter] Recon Start\nInputs: %d\nModules: %s\nMode: %s\nTime: %s",
 		inputCount,
 		strings.Join(modules, ","),
 		map[bool]string{true: "dry-run", false: "normal"}[dryRun],
@@ -65,13 +65,13 @@ func (n *DingTalkNotifier) SendReconEnd(success bool, duration time.Duration, st
 		return nil
 	}
 
-	status := "成功"
+	status := "success"
 	if !success {
-		status = "失败"
+		status = "failed"
 	}
 
 	content := fmt.Sprintf(
-		"[Hunter] Recon 结束\n状态: %s\n耗时: %s\n子域名: %d\nWeb服务: %d\n端口: %d\n漏洞: %d\n截图: %d\n时间: %s",
+		"[Hunter] Recon End\nStatus: %s\nDuration: %s\nSubdomains: %d\nWeb services: %d\nPorts: %d\nVulnerabilities: %d\nScreenshots: %d\nTime: %s",
 		status,
 		duration.Round(time.Second).String(),
 		stats["subdomains"],
@@ -83,7 +83,7 @@ func (n *DingTalkNotifier) SendReconEnd(success bool, duration time.Duration, st
 	)
 
 	if errMsg != "" {
-		content += "\n错误: " + errMsg
+		content += "\nError: " + errMsg
 	}
 
 	return n.sendText(content)
@@ -96,7 +96,7 @@ func (n *DingTalkNotifier) SendMonitorChanges(rootDomain string, changes map[str
 	}
 
 	content := fmt.Sprintf(
-		"[Hunter] 监控变化通知\n域名: %s\n新增存活子域: %d\nWeb变化: %d\n端口新增: %d\n端口关闭: %d\n服务变化: %d\n时间: %s",
+		"[Hunter] Monitor Change Alert\nDomain: %s\nNew live subdomains: %d\nWeb changes: %d\nNew open ports: %d\nClosed ports: %d\nService changes: %d\nTime: %s",
 		rootDomain,
 		changes["new_live_subdomains"],
 		changes["web_changed"],
@@ -107,7 +107,7 @@ func (n *DingTalkNotifier) SendMonitorChanges(rootDomain string, changes map[str
 	)
 
 	if len(highlights) > 0 {
-		content += "\n明细:\n- " + strings.Join(highlights, "\n- ")
+		content += "\nHighlights:\n- " + strings.Join(highlights, "\n- ")
 	}
 
 	return n.sendText(content)

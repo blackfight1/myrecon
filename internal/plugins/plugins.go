@@ -32,6 +32,14 @@ func NewShosubgoPlugin() engine.Scanner {
 	return subdomain.NewShosubgoPlugin()
 }
 
+func NewDictgenPlugin(maxWords int) engine.Scanner {
+	return subdomain.NewDictgenPlugin(maxWords)
+}
+
+func NewDNSXBruteforcePlugin(rootDomains []string, resolversFile string) engine.Scanner {
+	return subdomain.NewDNSXBruteforcePlugin(rootDomains, resolversFile)
+}
+
 func NewHttpxPlugin() engine.Scanner {
 	return web.NewHttpxPlugin()
 }

@@ -43,7 +43,7 @@ type monitorChangeSummary struct {
 	Highlights        []string
 }
 
-func runMonitorLoop(rootDomain string, interval time.Duration, dryRun bool, notifier *plugins.DingTalkNotifier) {
+func runMonitorLoop(rootDomain string, interval time.Duration, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) {
 	dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
 	database, err := db.NewDatabase(dsn)
 	if err != nil {
@@ -64,16 +64,16 @@ func runMonitorLoop(rootDomain string, interval time.Duration, dryRun bool, noti
 	fmt.Printf("🔁 监控调度已启动: %s | 间隔: %s\n", rootDomain, interval.String())
 
 	// Try immediately once.
-	runDueMonitorTasks(database, dryRun, notifier)
+	runDueMonitorTasks(database, dryRun, activeSubs, dictSize, dnsResolvers, notifier)
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		runDueMonitorTasks(database, dryRun, notifier)
+		runDueMonitorTasks(database, dryRun, activeSubs, dictSize, dnsResolvers, notifier)
 	}
 }
-func runDueMonitorTasks(database *db.Database, dryRun bool, notifier *plugins.DingTalkNotifier) {
+func runDueMonitorTasks(database *db.Database, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) {
 	if recovered, err := database.RecoverStaleRunningTasks(monitorTaskStaleAfter); err != nil {
 		fmt.Printf("⚠️  回收卡死监控任务失败: %v\n", err)
 	} else if recovered > 0 {
@@ -81,13 +81,13 @@ func runDueMonitorTasks(database *db.Database, dryRun bool, notifier *plugins.Di
 	}
 
 	for {
-		if !runOneDueMonitorTask(database, dryRun, notifier) {
+		if !runOneDueMonitorTask(database, dryRun, activeSubs, dictSize, dnsResolvers, notifier) {
 			return
 		}
 	}
 }
 
-func runOneDueMonitorTask(database *db.Database, dryRun bool, notifier *plugins.DingTalkNotifier) bool {
+func runOneDueMonitorTask(database *db.Database, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) bool {
 	task, err := database.ClaimDueMonitorTask()
 	if err != nil {
 		fmt.Printf("⚠️  抢占监控任务失败: %v\n", err)
@@ -97,17 +97,23 @@ func runOneDueMonitorTask(database *db.Database, dryRun bool, notifier *plugins.
 		return false
 	}
 
-	executeMonitorTask(database, task, dryRun, notifier)
+	executeMonitorTask(database, task, dryRun, activeSubs, dictSize, dnsResolvers, notifier)
 	return true
 }
 
-func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool, notifier *plugins.DingTalkNotifier) {
+func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) {
 	start := time.Now()
 	rootDomain := task.RootDomain
 	fmt.Printf("🛰️  执行监控任务: %s (attempt=%d/%d)\n", rootDomain, task.Attempt+1, task.MaxAttempts)
 
 	if notifier.Enabled() {
-		_ = notifier.SendReconStart(1, []string{"subs", "ports", "monitor"}, dryRun)
+		modules := []string{"subs", "ports", "monitor"}
+		if activeSubs {
+			modules = append(modules, "subs-active")
+		}
+		if err := notifier.SendReconStart(1, modules, dryRun); err != nil {
+			fmt.Printf("[WARN] failed to send monitor start notification: %v\n", err)
+		}
 	}
 
 	target, err := database.GetOrCreateMonitorTarget(rootDomain)
@@ -116,7 +122,9 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 		fmt.Printf("⚠️  %s\n", errMsg)
 		_ = database.HandleMonitorTaskFailure(task, errMsg)
 		if notifier.Enabled() {
-			_ = notifier.SendReconEnd(false, time.Since(start), map[string]int{}, errMsg)
+			if err := notifier.SendReconEnd(false, time.Since(start), map[string]int{}, errMsg); err != nil {
+				fmt.Printf("[WARN] failed to send monitor end notification: %v\n", err)
+			}
 		}
 		return
 	}
@@ -130,7 +138,7 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 		fmt.Printf("⚠️  创建监控运行记录失败: %v\n", err)
 	}
 
-	results, scanErr := runSubsAndPorts([]string{rootDomain}, false)
+	results, scanErr := runSubsAndPorts([]string{rootDomain}, false, activeSubs, dictSize, dnsResolvers)
 	if scanErr != nil {
 		errMsg := fmt.Sprintf("监控扫描失败: %v", scanErr)
 		fmt.Printf("⚠️  %s\n", errMsg)
@@ -139,7 +147,9 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 		}
 		_ = database.HandleMonitorTaskFailure(task, errMsg)
 		if notifier.Enabled() {
-			_ = notifier.SendReconEnd(false, time.Since(start), map[string]int{}, errMsg)
+			if err := notifier.SendReconEnd(false, time.Since(start), map[string]int{}, errMsg); err != nil {
+				fmt.Printf("[WARN] failed to send monitor end notification: %v\n", err)
+			}
 		}
 		return
 	}
@@ -187,7 +197,9 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 	)
 
 	if notifier.Enabled() {
-		_ = notifier.SendReconEnd(true, time.Since(start), stats, "")
+		if err := notifier.SendReconEnd(true, time.Since(start), stats, ""); err != nil {
+			fmt.Printf("[WARN] failed to send monitor end notification: %v\n", err)
+		}
 		if !baselineMode && hasMonitorChanges(changeSummary) {
 			shouldSend := true
 			if run != nil {
@@ -200,13 +212,15 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 				}
 			}
 			if shouldSend {
-				_ = notifier.SendMonitorChanges(rootDomain, map[string]int{
+				if err := notifier.SendMonitorChanges(rootDomain, map[string]int{
 					"new_live_subdomains": changeSummary.NewLiveSubdomains,
 					"web_changed":         changeSummary.WebChanged,
 					"port_opened":         changeSummary.PortOpened,
 					"port_closed":         changeSummary.PortClosed,
 					"service_changed":     changeSummary.ServiceChanged,
-				}, changeSummary.Highlights)
+				}, changeSummary.Highlights); err != nil {
+					fmt.Printf("[WARN] failed to send monitor change notification: %v\n", err)
+				}
 			}
 		}
 	}

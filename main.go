@@ -15,51 +15,58 @@ import (
 )
 
 func main() {
-	runMode := flag.String("mode", "scan", "运行模式: scan 或 monitor")
-	domain := flag.String("d", "", "单个目标域名")
-	domainList := flag.String("dL", "", "域名列表文件")
-	inputFile := flag.String("i", "", "输入文件（ports/witness 模块独立运行）")
+	runMode := flag.String("mode", "scan", "Run mode: scan or monitor")
+	domain := flag.String("d", "", "Single target root domain")
+	domainList := flag.String("dL", "", "Root domain list file")
+	inputFile := flag.String("i", "", "Input file for ports/witness modules")
 
-	modules := flag.String("m", "", "选择模块: subs,ports,witness（逗号分隔，默认全部）")
+	modules := flag.String("m", "", "Modules: subs,ports,witness (comma-separated)")
 
-	dryRun := flag.Bool("dry-run", false, "测试模式，不写入数据库")
-	screenshotDir := flag.String("screenshot-dir", "screenshots", "截图存储目录")
-	enableNuclei := flag.Bool("nuclei", false, "启用 Nuclei 漏洞扫描（CVE 优先）")
-	enableNotify := flag.Bool("notify", false, "启用钉钉开始/结束通知（读取 DINGTALK_WEBHOOK）")
-	monitorInterval := flag.String("monitor-interval", "6h", "监控间隔，例如 30m / 1h / 6h")
-	monitorList := flag.Bool("monitor-list", false, "列出当前监控域名")
-	monitorStop := flag.String("monitor-stop", "", "停止某个域名监控（例如 -monitor-stop example.com）")
-	monitorDelete := flag.String("monitor-delete", "", "删除某个域名监控数据（例如 -monitor-delete example.com）")
-	scanListDomains := flag.Bool("scan-list-domains", false, "列出 scan 数据中的所有域名")
-	scanDeleteDomain := flag.String("scan-delete-domain", "", "删除某个域名的所有数据（例如 -scan-delete-domain example.com）")
+	dryRun := flag.Bool("dry-run", false, "Dry-run mode; do not write database")
+	screenshotDir := flag.String("screenshot-dir", "screenshots", "Screenshot output directory")
+	enableNuclei := flag.Bool("nuclei", false, "Enable Nuclei vulnerability scanning")
+	enableActiveSubs := flag.Bool("active-subs", false, "Enable active subdomain bruteforce after passive stage")
+	dictSize := flag.Int("dict-size", 1500, "Dictionary size cap for active subdomain bruteforce")
+	dnsResolvers := flag.String("dns-resolvers", "", "Optional dnsx resolvers file path")
+	enableNotify := flag.Bool("notify", false, "Enable DingTalk start/end notification")
+	monitorInterval := flag.String("monitor-interval", "6h", "Monitor interval, e.g. 30m / 1h / 6h")
+	monitorList := flag.Bool("monitor-list", false, "List current monitor targets")
+	monitorStop := flag.String("monitor-stop", "", "Stop a monitor target, e.g. -monitor-stop example.com")
+	monitorDelete := flag.String("monitor-delete", "", "Delete monitor data of a target")
+	scanListDomains := flag.Bool("scan-list-domains", false, "List all domains in scan data")
+	scanDeleteDomain := flag.String("scan-delete-domain", "", "Delete all scan data by root domain")
 
-	reportDomain := flag.String("report", "", "启动截图查看服务")
-	reportHost := flag.String("report-host", "0.0.0.0", "截图服务监听地址")
-	reportPort := flag.Int("report-port", 7070, "截图服务监听端口")
-	listScreenshots := flag.Bool("list-screenshots", false, "列出所有有截图的域名")
+	reportDomain := flag.String("report", "", "Start screenshot report server for domain")
+	reportHost := flag.String("report-host", "0.0.0.0", "Report server host")
+	reportPort := flag.Int("report-port", 7070, "Report server port")
+	listScreenshots := flag.Bool("list-screenshots", false, "List domains with screenshots")
 
 	flag.Parse()
+	if *enableNotify && strings.TrimSpace(os.Getenv("DINGTALK_WEBHOOK")) == "" {
+		fmt.Println("[WARN] -notify is enabled but DINGTALK_WEBHOOK is not set; notifications will be disabled.")
+	}
+
 	mode := strings.ToLower(strings.TrimSpace(*runMode))
 	if err := validateModeAndConflicts(mode, *domain, *domainList, *inputFile, *modules, *reportDomain, *listScreenshots, *monitorList, *monitorStop, *monitorDelete, *scanListDomains, *scanDeleteDomain); err != nil {
-		log.Fatalf("参数冲突: %v", err)
+		log.Fatalf("鍙傛暟鍐茬獊: %v", err)
 	}
 
 	if mode == "monitor" && (*monitorList || strings.TrimSpace(*monitorStop) != "" || strings.TrimSpace(*monitorDelete) != "") {
 		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
 		database, err := db.NewDatabase(dsn)
 		if err != nil {
-			log.Fatalf("数据库连接失败: %v", err)
+			log.Fatalf("鏁版嵁搴撹繛鎺ュけ璐? %v", err)
 		}
 
 		if *monitorList {
 			targets, err := database.ListMonitorTargets()
 			if err != nil {
-				log.Fatalf("获取监控域名失败: %v", err)
+				log.Fatalf("鑾峰彇鐩戞帶鍩熷悕澶辫触: %v", err)
 			}
 			if len(targets) == 0 {
-				fmt.Println("暂无监控域名")
+				fmt.Println("鏆傛棤鐩戞帶鍩熷悕")
 			} else {
-				fmt.Println("当前监控域名:")
+				fmt.Println("褰撳墠鐩戞帶鍩熷悕:")
 				for _, t := range targets {
 					status := "stopped"
 					if t.Enabled {
@@ -81,17 +88,17 @@ func main() {
 		if strings.TrimSpace(*monitorStop) != "" {
 			target := strings.TrimSpace(*monitorStop)
 			if err := database.StopMonitorTarget(target); err != nil {
-				log.Fatalf("停止监控失败: %v", err)
+				log.Fatalf("鍋滄鐩戞帶澶辫触: %v", err)
 			}
-			fmt.Printf("已停止监控: %s\n", target)
+			fmt.Printf("宸插仠姝㈢洃鎺? %s\n", target)
 		}
 
 		if strings.TrimSpace(*monitorDelete) != "" {
 			target := strings.TrimSpace(*monitorDelete)
 			if err := database.DeleteMonitorDataByRootDomain(target); err != nil {
-				log.Fatalf("删除监控数据失败: %v", err)
+				log.Fatalf("鍒犻櫎鐩戞帶鏁版嵁澶辫触: %v", err)
 			}
-			fmt.Printf("已删除监控数据: %s\n", target)
+			fmt.Printf("宸插垹闄ょ洃鎺ф暟鎹? %s\n", target)
 		}
 		return
 	}
@@ -100,18 +107,18 @@ func main() {
 		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
 		database, err := db.NewDatabase(dsn)
 		if err != nil {
-			log.Fatalf("数据库连接失败: %v", err)
+			log.Fatalf("鏁版嵁搴撹繛鎺ュけ璐? %v", err)
 		}
 
 		if *scanListDomains {
 			domains, err := database.ListAssetDomains()
 			if err != nil {
-				log.Fatalf("获取域名列表失败: %v", err)
+				log.Fatalf("鑾峰彇鍩熷悕鍒楄〃澶辫触: %v", err)
 			}
 			if len(domains) == 0 {
-				fmt.Println("暂无域名数据")
+				fmt.Println("鏆傛棤鍩熷悕鏁版嵁")
 			} else {
-				fmt.Println("已有域名:")
+				fmt.Println("宸叉湁鍩熷悕:")
 				for _, d := range domains {
 					fmt.Printf("- %s\n", d)
 				}
@@ -121,9 +128,9 @@ func main() {
 		if strings.TrimSpace(*scanDeleteDomain) != "" {
 			target := strings.TrimSpace(*scanDeleteDomain)
 			if err := database.DeleteAllDataByRootDomain(target); err != nil {
-				log.Fatalf("删除域名数据失败: %v", err)
+				log.Fatalf("鍒犻櫎鍩熷悕鏁版嵁澶辫触: %v", err)
 			}
-			fmt.Printf("已删除域名全部数据: %s\n", target)
+			fmt.Printf("宸插垹闄ゅ煙鍚嶅叏閮ㄦ暟鎹? %s\n", target)
 		}
 		return
 	}
@@ -131,16 +138,16 @@ func main() {
 	if *listScreenshots {
 		domains, err := plugins.ListScreenshotDomains(*screenshotDir)
 		if err != nil {
-			log.Fatalf("获取截图域名列表失败: %v", err)
+			log.Fatalf("鑾峰彇鎴浘鍩熷悕鍒楄〃澶辫触: %v", err)
 		}
 		if len(domains) == 0 {
-			fmt.Println("暂无截图数据")
+			fmt.Println("鏆傛棤鎴浘鏁版嵁")
 		} else {
-			fmt.Println("📷 已有截图的域名:")
+			fmt.Println("馃摲 宸叉湁鎴浘鐨勫煙鍚?")
 			for _, d := range domains {
 				fmt.Printf("  - %s\n", d)
 			}
-			fmt.Println("\n使用 go run main.go -report <domain> 启动查看服务")
+			fmt.Println("\n浣跨敤 go run main.go -report <domain> 鍚姩鏌ョ湅鏈嶅姟")
 		}
 		return
 	}
@@ -148,16 +155,24 @@ func main() {
 	if mode == "monitor" {
 		interval, err := time.ParseDuration(*monitorInterval)
 		if err != nil || interval <= 0 {
-			log.Fatalf("monitor-interval 无效: %s", *monitorInterval)
+			log.Fatalf("monitor-interval 鏃犳晥: %s", *monitorInterval)
 		}
 		notifier := plugins.NewDingTalkNotifierFromEnv(*enableNotify)
-		runMonitorLoop(strings.TrimSpace(*domain), interval, *dryRun, notifier)
+		runMonitorLoop(
+			strings.TrimSpace(*domain),
+			interval,
+			*dryRun,
+			*enableActiveSubs,
+			clampDictSize(*dictSize),
+			strings.TrimSpace(*dnsResolvers),
+			notifier,
+		)
 		return
 	}
 
 	if *reportDomain != "" {
 		if err := plugins.StartReportServer(*screenshotDir, *reportDomain, *reportHost, *reportPort); err != nil {
-			log.Fatalf("启动截图服务失败: %v", err)
+			log.Fatalf("鍚姩鎴浘鏈嶅姟澶辫触: %v", err)
 		}
 		return
 	}
@@ -179,19 +194,19 @@ func main() {
 		input, err = readLinesFromStdin()
 	}
 	if err != nil {
-		log.Fatalf("读取输入失败: %v", err)
+		log.Fatalf("璇诲彇杈撳叆澶辫触: %v", err)
 	}
 	if len(input) == 0 {
-		log.Fatalf("输入为空")
+		log.Fatalf("杈撳叆涓虹┖")
 	}
 
-	printRunInfo(enableSubs, enablePorts, enableWitness, *enableNuclei, *dryRun, len(input))
-	modulesList := buildModules(enableSubs, enablePorts, enableWitness, *enableNuclei)
+	printRunInfo(enableSubs, enablePorts, enableWitness, *enableNuclei, *enableActiveSubs, *dryRun, len(input))
+	modulesList := buildModules(enableSubs, enablePorts, enableWitness, *enableNuclei, *enableActiveSubs)
 	notifier := plugins.NewDingTalkNotifierFromEnv(*enableNotify)
 	scanStartTime := time.Now()
 	if notifier.Enabled() {
 		if err := notifier.SendReconStart(len(input), modulesList, *dryRun); err != nil {
-			fmt.Printf("⚠️  钉钉通知发送失败(开始): %v\n", err)
+			fmt.Printf("鈿狅笍  閽夐拤閫氱煡鍙戦€佸け璐?寮€濮?: %v\n", err)
 		}
 	}
 
@@ -199,10 +214,10 @@ func main() {
 		msg := fmt.Sprintf(format, args...)
 		if notifier.Enabled() {
 			if err := notifier.SendReconEnd(false, time.Since(scanStartTime), map[string]int{}, msg); err != nil {
-				fmt.Printf("⚠️  钉钉通知发送失败(结束): %v\n", err)
+				fmt.Printf("鈿狅笍  閽夐拤閫氱煡鍙戦€佸け璐?缁撴潫): %v\n", err)
 			}
 		}
-		log.Fatalf("❌ 扫描失败: %s", msg)
+		log.Fatalf("鉂?鎵弿澶辫触: %s", msg)
 	}
 
 	var database *db.Database
@@ -211,35 +226,37 @@ func main() {
 		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
 		database, err = db.NewDatabase(dsn)
 		if err != nil {
-			failExit("数据库连接失败: %v", err)
+			failExit("鏁版嵁搴撹繛鎺ュけ璐? %v", err)
 		}
 		beforeAssetCount, _ = database.GetAssetCount()
 		beforePortCount, _ = database.GetPortCount()
 		beforeVulnCount, _ = database.GetVulnerabilityCount()
 	} else {
-		fmt.Println("🧪 测试模式：结果不会写入数据库")
+		fmt.Println("馃И 娴嬭瘯妯″紡锛氱粨鏋滀笉浼氬啓鍏ユ暟鎹簱")
 	}
 
 	var results []engine.Result
+	clampedDictSize := clampDictSize(*dictSize)
+	dnsResolversFile := strings.TrimSpace(*dnsResolvers)
 	switch {
 	case enableSubs && !enablePorts && !enableWitness:
-		results, err = runSubsOnly(input)
+		results, err = runSubsOnly(input, *enableActiveSubs, clampedDictSize, dnsResolversFile)
 	case !enableSubs && enablePorts && !enableWitness:
 		results, err = runPortsOnly(input, *enableNuclei)
 	case !enableSubs && !enablePorts && enableWitness:
 		results, err = runWitnessOnly(input, *screenshotDir)
 	case enableSubs && enablePorts && !enableWitness:
-		results, err = runSubsAndPorts(input, *enableNuclei)
+		results, err = runSubsAndPorts(input, *enableNuclei, *enableActiveSubs, clampedDictSize, dnsResolversFile)
 	case enableSubs && !enablePorts && enableWitness:
-		results, err = runSubsAndWitness(input, *screenshotDir, *enableNuclei)
+		results, err = runSubsAndWitness(input, *screenshotDir, *enableNuclei, *enableActiveSubs, clampedDictSize, dnsResolversFile)
 	case !enableSubs && enablePorts && enableWitness:
 		results, err = runPortsAndWitness(input, *screenshotDir, *enableNuclei)
 	default:
-		results, err = runFullPipeline(input, *screenshotDir, *enableNuclei)
+		results, err = runFullPipeline(input, *screenshotDir, *enableNuclei, *enableActiveSubs, clampedDictSize, dnsResolversFile)
 	}
 
 	if err != nil {
-		failExit("执行失败: %v", err)
+		failExit("鎵ц澶辫触: %v", err)
 	}
 
 	if !*dryRun && database != nil {
@@ -249,7 +266,7 @@ func main() {
 	if notifier.Enabled() {
 		stats := collectResultCounts(results)
 		if err := notifier.SendReconEnd(true, time.Since(scanStartTime), stats, ""); err != nil {
-			fmt.Printf("⚠️  钉钉通知发送失败(结束): %v\n", err)
+			fmt.Printf("鈿狅笍  閽夐拤閫氱煡鍙戦€佸け璐?缁撴潫): %v\n", err)
 		}
 	}
 
@@ -275,7 +292,7 @@ func parseModules(modules string) (bool, bool, bool) {
 		case "witness":
 			enableWitness = true
 		default:
-			log.Fatalf("未知模块: %s（可用: subs, ports, witness）", m)
+			log.Fatalf("unknown module: %s (valid: subs, ports, witness)", m)
 		}
 	}
 
@@ -332,55 +349,39 @@ func readLinesFromStdin() ([]string, error) {
 }
 
 func printUsage() {
-	fmt.Println("Hunter - 资产搜集引擎")
+	fmt.Println("Hunter - Recon Backend")
 	fmt.Println()
-	fmt.Println("使用方法:")
-	fmt.Println("  普通扫描:     go run . -mode scan -d example.com")
-	fmt.Println("  监控模式:     go run . -mode monitor -d example.com -monitor-interval 6h")
-	fmt.Println("  scan管理:     go run . -mode scan -scan-list-domains")
-	fmt.Println("  scan删除:     go run . -mode scan -scan-delete-domain example.com")
-	fmt.Println("  列出监控:     go run . -mode monitor -monitor-list")
-	fmt.Println("  停止监控:     go run . -mode monitor -monitor-stop example.com")
-	fmt.Println("  删除监控:     go run . -mode monitor -monitor-delete example.com")
-	fmt.Println("  完整扫描:     go run main.go -d example.com")
-	fmt.Println("  批量扫描:     go run main.go -dL domains.txt")
+	fmt.Println("Usage:")
+	fmt.Println("  Scan:              go run . -mode scan -d example.com")
+	fmt.Println("  Monitor:           go run . -mode monitor -d example.com -monitor-interval 6h")
+	fmt.Println("  Batch scan:        go run . -mode scan -dL domains.txt")
+	fmt.Println("  List scan domains: go run . -mode scan -scan-list-domains")
+	fmt.Println("  Delete scan data:  go run . -mode scan -scan-delete-domain example.com")
 	fmt.Println()
-	fmt.Println("模块选择 (-m):")
-	fmt.Println("  subs          子域名收集（输入: 域名）")
-	fmt.Println("  ports         端口扫描（输入: 子域名）")
-	fmt.Println("  witness       Web 截图（输入: URL）")
+	fmt.Println("Modules (-m): subs, ports, witness")
+	fmt.Println("Examples:")
+	fmt.Println("  go run . -m subs -d example.com")
+	fmt.Println("  go run . -m ports -i subdomains.txt -nuclei")
+	fmt.Println("  go run . -m witness -i urls.txt")
+	fmt.Println("  go run . -m subs,ports -d example.com -active-subs -dict-size 800")
 	fmt.Println()
-	fmt.Println("示例:")
-	fmt.Println("  go run main.go -m subs -d example.com")
-	fmt.Println("  go run main.go -m ports -i subdomains.txt")
-	fmt.Println("  go run main.go -m witness -i urls.txt")
-	fmt.Println("  go run main.go -m subs,ports -d example.com")
-	fmt.Println()
-	fmt.Println("其他参数:")
-	fmt.Println("  -mode              运行模式: scan 或 monitor（默认 scan）")
-	fmt.Println("  --dry-run           测试模式，不写入数据库")
-	fmt.Println("  -nuclei             启用 Nuclei 漏洞扫描（CVE 优先）")
-	fmt.Println("  -notify             启用钉钉开始/结束通知（环境变量 DINGTALK_WEBHOOK）")
-	fmt.Println("  -monitor-interval   监控间隔（默认 6h）")
-	fmt.Println("  -monitor-list       列出当前监控域名")
-	fmt.Println("  -monitor-stop       停止某个域名监控")
-	fmt.Println("  -monitor-delete     删除某个域名监控数据")
-	fmt.Println("  -scan-list-domains  列出 scan 数据中的所有域名")
-	fmt.Println("  -scan-delete-domain 删除某个域名的所有数据")
-	fmt.Println("  -screenshot-dir     截图存储目录（默认 screenshots）")
-	fmt.Println("  -report <domain>    启动截图查看服务")
-	fmt.Println("  -list-screenshots   列出所有有截图的域名")
+	fmt.Println("Main flags:")
+	fmt.Println("  -active-subs       Enable active subdomain bruteforce (dictgen + dnsx)")
+	fmt.Println("  -dict-size         Dictionary cap for active bruteforce (default 800)")
+	fmt.Println("  -dns-resolvers     Optional resolvers file for dnsx")
+	fmt.Println("  -nuclei            Enable nuclei scanning")
+	fmt.Println("  -notify            Enable DingTalk notifications")
 }
 
 func validateModeAndConflicts(mode, domain, domainList, inputFile, modules, reportDomain string, listScreenshots bool, monitorList bool, monitorStop, monitorDelete string, scanListDomains bool, scanDeleteDomain string) error {
 	switch mode {
 	case "scan", "monitor":
 	default:
-		return fmt.Errorf("未知 mode: %s（可用: scan, monitor）", mode)
+		return fmt.Errorf("unknown mode: %s (valid: scan, monitor)", mode)
 	}
 
 	if reportDomain != "" && listScreenshots {
-		return fmt.Errorf("-report 与 -list-screenshots 不能同时使用")
+		return fmt.Errorf("-report and -list-screenshots cannot be used together")
 	}
 
 	monitorOps := 0
@@ -394,17 +395,17 @@ func validateModeAndConflicts(mode, domain, domainList, inputFile, modules, repo
 		monitorOps++
 	}
 	if monitorOps > 1 {
-		return fmt.Errorf("-monitor-list/-monitor-stop/-monitor-delete 只能使用一个")
+		return fmt.Errorf("use only one of -monitor-list/-monitor-stop/-monitor-delete")
 	}
 	if monitorOps > 0 {
 		if mode != "monitor" {
-			return fmt.Errorf("监控管理参数需要在 -mode monitor 下使用")
+			return fmt.Errorf("monitor management flags require -mode monitor")
 		}
 		if reportDomain != "" || listScreenshots {
-			return fmt.Errorf("监控管理参数不支持与 -report/-list-screenshots 同时使用")
+			return fmt.Errorf("monitor management flags cannot be used with -report/-list-screenshots")
 		}
 		if strings.TrimSpace(domain) != "" || strings.TrimSpace(domainList) != "" || strings.TrimSpace(inputFile) != "" || strings.TrimSpace(modules) != "" {
-			return fmt.Errorf("监控管理参数不支持与 -d/-dL/-i/-m 同时使用")
+			return fmt.Errorf("monitor management flags cannot be used with -d/-dL/-i/-m")
 		}
 		return nil
 	}
@@ -417,46 +418,49 @@ func validateModeAndConflicts(mode, domain, domainList, inputFile, modules, repo
 		scanOps++
 	}
 	if scanOps > 1 {
-		return fmt.Errorf("-scan-list-domains/-scan-delete-domain 只能使用一个")
+		return fmt.Errorf("use only one of -scan-list-domains/-scan-delete-domain")
 	}
 	if scanOps > 0 {
 		if mode != "scan" {
-			return fmt.Errorf("scan 管理参数需要在 -mode scan 下使用")
+			return fmt.Errorf("scan management flags require -mode scan")
 		}
 		if reportDomain != "" || listScreenshots {
-			return fmt.Errorf("scan 管理参数不支持与 -report/-list-screenshots 同时使用")
+			return fmt.Errorf("scan management flags cannot be used with -report/-list-screenshots")
 		}
 		if strings.TrimSpace(domain) != "" || strings.TrimSpace(domainList) != "" || strings.TrimSpace(inputFile) != "" || strings.TrimSpace(modules) != "" {
-			return fmt.Errorf("scan 管理参数不支持与 -d/-dL/-i/-m 同时使用")
+			return fmt.Errorf("scan management flags cannot be used with -d/-dL/-i/-m")
 		}
 		return nil
 	}
 
 	if mode == "monitor" {
 		if domain == "" {
-			return fmt.Errorf("monitor 模式必须使用 -d 指定单个域名")
+			return fmt.Errorf("monitor mode requires -d")
 		}
 		if domainList != "" {
-			return fmt.Errorf("monitor 模式不支持 -dL")
+			return fmt.Errorf("monitor mode does not support -dL")
 		}
 		if inputFile != "" {
-			return fmt.Errorf("monitor 模式不支持 -i")
+			return fmt.Errorf("monitor mode does not support -i")
 		}
 		if strings.TrimSpace(modules) != "" {
-			return fmt.Errorf("monitor 模式不支持 -m（固定执行 subs+ports）")
+			return fmt.Errorf("monitor mode does not support -m (fixed to subs+ports)")
 		}
 		if reportDomain != "" || listScreenshots {
-			return fmt.Errorf("monitor 模式不支持 -report/-list-screenshots")
+			return fmt.Errorf("monitor mode does not support -report/-list-screenshots")
 		}
 	}
 
 	return nil
 }
 
-func buildModules(subs, ports, witness, nuclei bool) []string {
+func buildModules(subs, ports, witness, nuclei, activeSubs bool) []string {
 	var mods []string
 	if subs {
 		mods = append(mods, "subs")
+		if activeSubs {
+			mods = append(mods, "subs-active")
+		}
 	}
 	if ports {
 		mods = append(mods, "ports")
@@ -470,10 +474,13 @@ func buildModules(subs, ports, witness, nuclei bool) []string {
 	return mods
 }
 
-func printRunInfo(subs, ports, witness, nuclei, dryRun bool, inputCount int) {
+func printRunInfo(subs, ports, witness, nuclei, activeSubs, dryRun bool, inputCount int) {
 	var mods []string
 	if subs {
 		mods = append(mods, "subs")
+		if activeSubs {
+			mods = append(mods, "subs-active")
+		}
 	}
 	if ports {
 		mods = append(mods, "ports")
@@ -491,32 +498,25 @@ func printRunInfo(subs, ports, witness, nuclei, dryRun bool, inputCount int) {
 	}
 
 	fmt.Println("================================================")
-	fmt.Println("🚀 开始执行 scan 模式")
-	fmt.Printf("📥 输入数量: %d\n", inputCount)
-	fmt.Printf("🧩 执行模块: %s\n", strings.Join(mods, " -> "))
-	fmt.Printf("🛠️  运行模式: %s\n", modeText)
+	fmt.Println("馃殌 寮€濮嬫墽琛?scan 妯″紡")
+	fmt.Printf("馃摜 杈撳叆鏁伴噺: %d\n", inputCount)
+	fmt.Printf("馃З 鎵ц妯″潡: %s\n", strings.Join(mods, " -> "))
+	fmt.Printf("馃洜锔? 杩愯妯″紡: %s\n", modeText)
 	if dryRun {
-		fmt.Println("🧪 测试模式：结果不会写入数据库")
+		fmt.Println("馃И 娴嬭瘯妯″紡锛氱粨鏋滀笉浼氬啓鍏ユ暟鎹簱")
 	}
 	fmt.Println("================================================")
 	fmt.Println()
 }
 
-func runSubsOnly(domains []string) ([]engine.Result, error) {
-	fmt.Println("==> [阶段] 子域名收集")
-	pipeline := engine.NewPipeline()
-
-	isBatchMode := len(domains) > 1
-	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewFindomainPlugin())
-	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
-	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
-
-	return pipeline.Execute(domains)
+func runSubsOnly(domains []string, activeSubs bool, dictSize int, dnsResolvers string) ([]engine.Result, error) {
+	fmt.Println("==> [Stage] Subdomain Collection")
+	results, _, err := collectSubdomainsWithOptionalActive(domains, activeSubs, dictSize, dnsResolvers)
+	return results, err
 }
 
 func runPortsOnly(subdomains []string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("==> [阶段] 端口扫描")
+	fmt.Println("==> [闃舵] 绔彛鎵弿")
 	pipeline := engine.NewPipeline()
 
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
@@ -530,7 +530,7 @@ func runPortsOnly(subdomains []string, nucleiEnabled bool) ([]engine.Result, err
 }
 
 func runWitnessOnly(urls []string, screenshotDir string) ([]engine.Result, error) {
-	fmt.Println("==> [阶段] Web 截图")
+	fmt.Println("==> [闃舵] Web 鎴浘")
 	gowitnessPlugin := plugins.NewGowitnessPlugin(screenshotDir)
 
 	var input []string
@@ -543,16 +543,14 @@ func runWitnessOnly(urls []string, screenshotDir string) ([]engine.Result, error
 	return gowitnessPlugin.Execute(input)
 }
 
-func runSubsAndPorts(domains []string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("==> [阶段] 子域名收集 + 端口扫描")
+func runSubsAndPorts(domains []string, nucleiEnabled, activeSubs bool, dictSize int, dnsResolvers string) ([]engine.Result, error) {
+	fmt.Println("==> [Stage] Subdomain Collection + Port Scan")
+	subResults, subdomains, err := collectSubdomainsWithOptionalActive(domains, activeSubs, dictSize, dnsResolvers)
+	if err != nil {
+		return subResults, err
+	}
+
 	pipeline := engine.NewPipeline()
-
-	isBatchMode := len(domains) > 1
-	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewFindomainPlugin())
-	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
-	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
-
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
 	pipeline.AddPortScanner(plugins.NewNaabuPlugin())
 	pipeline.AddPortScanner(plugins.NewNmapPlugin())
@@ -560,30 +558,30 @@ func runSubsAndPorts(domains []string, nucleiEnabled bool) ([]engine.Result, err
 		pipeline.SetVulnScanner(plugins.NewNucleiPlugin())
 	}
 
-	return pipeline.Execute(domains)
+	networkResults, err := pipeline.ExecuteFromSubdomains(subdomains)
+	return append(subResults, networkResults...), err
 }
 
-func runSubsAndWitness(domains []string, screenshotDir string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("==> [阶段] 子域名收集 + Web 截图")
+func runSubsAndWitness(domains []string, screenshotDir string, nucleiEnabled, activeSubs bool, dictSize int, dnsResolvers string) ([]engine.Result, error) {
+	fmt.Println("==> [Stage] Subdomain Collection + Web Screenshot")
+	subResults, subdomains, err := collectSubdomainsWithOptionalActive(domains, activeSubs, dictSize, dnsResolvers)
+	if err != nil {
+		return subResults, err
+	}
+
 	pipeline := engine.NewPipeline()
-
-	isBatchMode := len(domains) > 1
-	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewFindomainPlugin())
-	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
-	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
-
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
 	pipeline.SetScreenshotScanner(plugins.NewGowitnessPlugin(screenshotDir))
 	if nucleiEnabled {
 		pipeline.SetVulnScanner(plugins.NewNucleiPlugin())
 	}
 
-	return pipeline.Execute(domains)
+	networkResults, err := pipeline.ExecuteFromSubdomains(subdomains)
+	return append(subResults, networkResults...), err
 }
 
 func runPortsAndWitness(subdomains []string, screenshotDir string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("==> [阶段] 端口扫描 + Web 截图")
+	fmt.Println("==> [闃舵] 绔彛鎵弿 + Web 鎴浘")
 	pipeline := engine.NewPipeline()
 
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
@@ -597,16 +595,14 @@ func runPortsAndWitness(subdomains []string, screenshotDir string, nucleiEnabled
 	return pipeline.ExecuteFromSubdomains(subdomains)
 }
 
-func runFullPipeline(domains []string, screenshotDir string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("==> [阶段] 完整扫描流程")
+func runFullPipeline(domains []string, screenshotDir string, nucleiEnabled, activeSubs bool, dictSize int, dnsResolvers string) ([]engine.Result, error) {
+	fmt.Println("==> [Stage] Full Pipeline")
+	subResults, subdomains, err := collectSubdomainsWithOptionalActive(domains, activeSubs, dictSize, dnsResolvers)
+	if err != nil {
+		return subResults, err
+	}
+
 	pipeline := engine.NewPipeline()
-
-	isBatchMode := len(domains) > 1
-	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
-	pipeline.AddDomainScanner(plugins.NewFindomainPlugin())
-	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
-	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
-
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
 	pipeline.AddPortScanner(plugins.NewNaabuPlugin())
 	pipeline.AddPortScanner(plugins.NewNmapPlugin())
@@ -615,9 +611,196 @@ func runFullPipeline(domains []string, screenshotDir string, nucleiEnabled bool)
 		pipeline.SetVulnScanner(plugins.NewNucleiPlugin())
 	}
 
-	return pipeline.Execute(domains)
+	networkResults, err := pipeline.ExecuteFromSubdomains(subdomains)
+	return append(subResults, networkResults...), err
 }
 
+func collectSubdomainsWithOptionalActive(rootDomains []string, activeSubs bool, dictSize int, dnsResolvers string) ([]engine.Result, []string, error) {
+	passiveResults, passiveSubdomains, err := runPassiveSubdomainCollection(rootDomains)
+	if err != nil {
+		return passiveResults, nil, err
+	}
+
+	allResults := append([]engine.Result{}, passiveResults...)
+	finalSubdomains := append([]string{}, passiveSubdomains...)
+
+	if !activeSubs {
+		return allResults, finalSubdomains, nil
+	}
+
+	activeResults, activeSubdomains, err := runActiveSubdomainExpansion(rootDomains, passiveSubdomains, dictSize, dnsResolvers)
+	allResults = append(allResults, activeResults...)
+	if err != nil {
+		return allResults, nil, err
+	}
+
+	finalSubdomains = mergeUniqueDomains(passiveSubdomains, activeSubdomains)
+	added := len(finalSubdomains) - len(passiveSubdomains)
+	if added < 0 {
+		added = 0
+	}
+	fmt.Printf("[ActiveSubs] Added %d active subdomains (total=%d)\n", added, len(finalSubdomains))
+	return allResults, finalSubdomains, nil
+}
+
+func runPassiveSubdomainCollection(domains []string) ([]engine.Result, []string, error) {
+	pipeline := engine.NewPipeline()
+	isBatchMode := len(domains) > 1
+
+	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewFindomainPlugin())
+	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
+	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
+
+	results, err := pipeline.Execute(domains)
+	subdomains := extractDomainResults(results)
+	return results, subdomains, err
+}
+
+func runActiveSubdomainExpansion(rootDomains, passiveSubdomains []string, dictSize int, dnsResolvers string) ([]engine.Result, []string, error) {
+	var allResults []engine.Result
+
+	dictPlugin := plugins.NewDictgenPlugin(clampDictSize(dictSize))
+	dictInput := append([]string{}, passiveSubdomains...)
+	dictInput = append(dictInput, rootDomains...)
+
+	dictResults, dictErr := executeScannerWithStatus(dictPlugin, dictInput)
+	allResults = append(allResults, dictResults...)
+	if dictErr != nil {
+		return allResults, nil, dictErr
+	}
+
+	var words []string
+	for _, r := range dictResults {
+		if r.Type != "dict_word" {
+			continue
+		}
+		if w, ok := r.Data.(string); ok && strings.TrimSpace(w) != "" {
+			words = append(words, w)
+		}
+	}
+	if len(words) == 0 {
+		return allResults, []string{}, nil
+	}
+
+	brutePlugin := plugins.NewDNSXBruteforcePlugin(rootDomains, dnsResolvers)
+	bruteResults, bruteErr := executeScannerWithStatus(brutePlugin, words)
+	allResults = append(allResults, bruteResults...)
+
+	if bruteErr != nil {
+		if strings.Contains(bruteErr.Error(), "not found in PATH") {
+			fmt.Printf("[DNSXBruteforce] Tool missing, skip active brute-force: %v\n", bruteErr)
+			return allResults, []string{}, nil
+		}
+		return allResults, nil, bruteErr
+	}
+
+	return allResults, extractDomainResults(bruteResults), nil
+}
+
+func executeScannerWithStatus(scanner engine.Scanner, input []string) ([]engine.Result, error) {
+	start := time.Now()
+	results, err := scanner.Execute(input)
+	status := buildLocalPluginStatusResult(scanner.Name(), len(results), err, time.Since(start))
+	out := make([]engine.Result, 0, len(results)+1)
+	out = append(out, status)
+	out = append(out, results...)
+	return out, err
+}
+
+func buildLocalPluginStatusResult(scannerName string, successCount int, err error, duration time.Duration) engine.Result {
+	failureCount := 0
+	timeoutCount := 0
+	errMsg := ""
+	status := "ok"
+
+	if err != nil {
+		failureCount = 1
+		errMsg = err.Error()
+		status = "error"
+		if isTimeoutErrorLocal(err) {
+			timeoutCount = 1
+		}
+	}
+
+	return engine.Result{
+		Type: "plugin_status",
+		Data: map[string]interface{}{
+			"scanner":       scannerName,
+			"status":        status,
+			"success_count": successCount,
+			"failure_count": failureCount,
+			"timeout_count": timeoutCount,
+			"duration_ms":   duration.Milliseconds(),
+			"error":         errMsg,
+		},
+	}
+}
+
+func isTimeoutErrorLocal(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded")
+}
+
+func extractDomainResults(results []engine.Result) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, 512)
+
+	for _, result := range results {
+		if result.Type != "domain" {
+			continue
+		}
+		subdomain, ok := result.Data.(string)
+		if !ok {
+			continue
+		}
+		subdomain = strings.ToLower(strings.TrimSpace(subdomain))
+		subdomain = strings.TrimSuffix(subdomain, ".")
+		if subdomain == "" || seen[subdomain] {
+			continue
+		}
+		seen[subdomain] = true
+		out = append(out, subdomain)
+	}
+	return out
+}
+
+func mergeUniqueDomains(base []string, extra []string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(base)+len(extra))
+
+	appendDomain := func(items []string) {
+		for _, item := range items {
+			d := strings.ToLower(strings.TrimSpace(item))
+			d = strings.TrimSuffix(d, ".")
+			if d == "" || seen[d] {
+				continue
+			}
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+
+	appendDomain(base)
+	appendDomain(extra)
+	return out
+}
+
+func clampDictSize(v int) int {
+	if v <= 0 {
+		return 1500
+	}
+	if v < 100 {
+		return 100
+	}
+	if v > 5000 {
+		return 5000
+	}
+	return v
+}
 func extractDomainFromURL(rawURL string) string {
 	rawURL = strings.TrimPrefix(rawURL, "http://")
 	rawURL = strings.TrimPrefix(rawURL, "https://")
@@ -631,7 +814,7 @@ func extractDomainFromURL(rawURL string) string {
 }
 
 func saveResults(database *db.Database, results []engine.Result) {
-	fmt.Println("==> [入库] 写入结果到数据库")
+	fmt.Println("==> [鍏ュ簱] 鍐欏叆缁撴灉鍒版暟鎹簱")
 
 	for _, result := range results {
 		switch result.Type {
@@ -653,7 +836,7 @@ func saveResults(database *db.Database, results []engine.Result) {
 			}
 		}
 	}
-	fmt.Println("==> [入库] 写入完成")
+	fmt.Println("==> [鍏ュ簱] 鍐欏叆瀹屾垚")
 }
 
 func printSummary(results []engine.Result, startTime time.Time, dryRun bool, database *db.Database, beforeAsset, beforePort, beforeVuln int64, screenshotDir string, witnessEnabled bool) {
@@ -691,19 +874,19 @@ func printSummary(results []engine.Result, startTime time.Time, dryRun bool, dat
 
 	fmt.Println()
 	fmt.Println("================================================")
-	fmt.Println("✅ 扫描完成")
-	fmt.Printf("⏱️  总耗时: %v\n", time.Since(startTime).Round(time.Second))
-	fmt.Printf("📗 子域名: %d\n", counts["subdomains"])
-	fmt.Printf("🌐 Web 服务: %d\n", counts["web_services"])
-	fmt.Printf("📲 开放端口: %d\n", counts["ports"])
-	fmt.Printf("🛡️  漏洞候选: %d\n", counts["vulnerabilities"])
-	fmt.Printf("📷 截图: %d\n", counts["screenshots"])
+	fmt.Println("鉁?鎵弿瀹屾垚")
+	fmt.Printf("鈴憋笍  鎬昏€楁椂: %v\n", time.Since(startTime).Round(time.Second))
+	fmt.Printf("馃摋 瀛愬煙鍚? %d\n", counts["subdomains"])
+	fmt.Printf("馃寪 Web 鏈嶅姟: %d\n", counts["web_services"])
+	fmt.Printf("馃摬 寮€鏀剧鍙? %d\n", counts["ports"])
+	fmt.Printf("馃洝锔? 婕忔礊鍊欓€? %d\n", counts["vulnerabilities"])
+	fmt.Printf("馃摲 鎴浘: %d\n", counts["screenshots"])
 
 	if !dryRun && database != nil {
 		afterAsset, _ := database.GetAssetCount()
 		afterPort, _ := database.GetPortCount()
 		afterVuln, _ := database.GetVulnerabilityCount()
-		fmt.Println("💾 数据库变化:")
+		fmt.Println("馃捑 鏁版嵁搴撳彉鍖?")
 		fmt.Printf("- assets: %d -> %d\n", beforeAsset, afterAsset)
 		fmt.Printf("- ports: %d -> %d\n", beforePort, afterPort)
 		fmt.Printf("- vulnerabilities: %d -> %d\n", beforeVuln, afterVuln)
@@ -712,12 +895,12 @@ func printSummary(results []engine.Result, startTime time.Time, dryRun bool, dat
 	if witnessEnabled {
 		screenshotDomains, _ := plugins.ListScreenshotDomains(screenshotDir)
 		if len(screenshotDomains) > 0 {
-			fmt.Println("🔎 查看截图: go run main.go -report <domain>")
+			fmt.Println("馃攷 鏌ョ湅鎴浘: go run main.go -report <domain>")
 		}
 	}
 	if len(pluginStatuses) > 0 {
 		fmt.Println()
-		fmt.Println("🧩 插件运行状态:")
+		fmt.Println("馃З 鎻掍欢杩愯鐘舵€?")
 		for _, ps := range pluginStatuses {
 			line := fmt.Sprintf("- %s | status=%s | success=%d fail=%d timeout=%d | duration=%dms",
 				ps.Scanner, ps.Status, ps.SuccessCount, ps.FailureCount, ps.TimeoutCount, ps.DurationMS)
