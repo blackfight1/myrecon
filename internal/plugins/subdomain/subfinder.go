@@ -35,7 +35,6 @@ func (s *SubfinderPlugin) Name() string {
 
 // Execute runs Subfinder for one or more root domains.
 func (s *SubfinderPlugin) Execute(input []string) ([]engine.Result, error) {
-	// Ensure subfinder is installed and available in PATH.
 	if _, err := exec.LookPath("subfinder"); err != nil {
 		return nil, fmt.Errorf("subfinder not found in PATH. Please install subfinder and ensure it's in your PATH")
 	}
@@ -47,11 +46,9 @@ func (s *SubfinderPlugin) Execute(input []string) ([]engine.Result, error) {
 	var results []engine.Result
 	var allHosts []string
 
-	// Batch mode: run once with -dL for multiple domains.
 	if s.batchMode && len(input) > 1 {
-		fmt.Printf("[Subfinder] 鎵归噺妯″紡: 姝ｅ湪鎼滈泦 %d 涓煙鍚嶇殑瀛愬煙鍚?..\n", len(input))
+		fmt.Printf("[Subfinder] Batch mode: collecting subdomains for %d root domains...\n", len(input))
 
-		// Write domains into a temp file for Subfinder -dL input.
 		tmpFile, err := common.CreateTempFile("subfinder_domains_*.txt", input)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temp file: %v", err)
@@ -84,14 +81,13 @@ func (s *SubfinderPlugin) Execute(input []string) ([]engine.Result, error) {
 		}
 
 		if err := cmd.Wait(); err != nil {
-			fmt.Printf("[Subfinder] 鍛戒护鎵ц瀹屾垚\n")
+			fmt.Printf("[Subfinder] Command finished with warning\n")
 		}
 
-		fmt.Printf("[Subfinder] 鎵归噺妯″紡鍙戠幇 %d 涓瓙鍩熷悕\n", len(allHosts))
+		fmt.Printf("[Subfinder] Batch mode found %d subdomains\n", len(allHosts))
 	} else {
-		// Single-domain mode: run Subfinder per input domain.
 		for _, domain := range input {
-			fmt.Printf("[Subfinder] 姝ｅ湪鎼滈泦鍩熷悕: %s\n", domain)
+			fmt.Printf("[Subfinder] Collecting subdomains for: %s\n", domain)
 
 			cmd := exec.Command("subfinder", "-d", domain, "-all", "-json", "-silent")
 			stdout, err := cmd.StdoutPipe()
@@ -125,16 +121,12 @@ func (s *SubfinderPlugin) Execute(input []string) ([]engine.Result, error) {
 				return nil, fmt.Errorf("subfinder execution failed: %v", err)
 			}
 
-			fmt.Printf("[Subfinder] 鍙戠幇 %d 涓煙鍚峔n", len(hosts))
+			fmt.Printf("[Subfinder] Found %d subdomains\n", len(hosts))
 		}
 	}
 
-	// Return all discovered subdomains as engine results.
 	for _, host := range allHosts {
-		results = append(results, engine.Result{
-			Type: "domain",
-			Data: host,
-		})
+		results = append(results, engine.Result{Type: "domain", Data: host})
 	}
 
 	return results, nil

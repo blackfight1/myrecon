@@ -111,7 +111,7 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 
 			if sr.err != nil {
 				if strings.Contains(sr.err.Error(), "not found in PATH") {
-					fmt.Printf("⚠️  [%s] 工具未安装，跳过\n", sr.name)
+					fmt.Printf("[WARN] [%s] tool not found in PATH, skipped\n", sr.name)
 					continue
 				}
 				return nil, sr.err
@@ -202,7 +202,7 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 
 				if err != nil {
 					if strings.Contains(err.Error(), "not found in PATH") {
-						fmt.Printf("⚠️  [%s] 工具未安装，跳过端口扫描链\n", scanner.Name())
+						fmt.Printf("[WARN] [%s] tool not found in PATH, port scan skipped\n", scanner.Name())
 						break
 					}
 					resultChan <- scannerResult{name: "PortScan", err: err, statuses: statusResults, results: portResults}
@@ -248,7 +248,7 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 
 		if sr.err != nil {
 			if strings.Contains(sr.err.Error(), "not found in PATH") {
-				fmt.Printf("⚠️  [%s] 工具未安装，跳过\n", sr.name)
+				fmt.Printf("[WARN] [%s] tool not found in PATH, skipped\n", sr.name)
 				continue
 			}
 			return nil, sr.err
@@ -280,15 +280,15 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 	}
 
 	if p.vulnScanner != nil && len(liveURLs) > 0 {
-		fmt.Printf("🛡️  开始对 %d 个存活 URL 进行漏洞扫描...\n", len(liveURLs))
+		fmt.Printf("[Vuln] scanning %d live URLs...\n", len(liveURLs))
 		start := time.Now()
 		vulnResults, err := p.vulnScanner.Execute(liveURLs)
 		allResults = append(allResults, buildPluginStatusResult(p.vulnScanner.Name(), len(vulnResults), err, time.Since(start)))
 		if err != nil {
 			if strings.Contains(err.Error(), "not found in PATH") {
-				fmt.Printf("⚠️  [%s] 工具未安装，跳过漏洞扫描\n", p.vulnScanner.Name())
+				fmt.Printf("[WARN] [%s] tool not found in PATH, vulnerability scan skipped\n", p.vulnScanner.Name())
 			} else {
-				fmt.Printf("⚠️  漏洞扫描执行失败: %v\n", err)
+				fmt.Printf("[WARN] vulnerability scan failed: %v\n", err)
 			}
 		} else {
 			allResults = append(allResults, vulnResults...)
@@ -296,15 +296,15 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 	}
 
 	if p.screenshotScanner != nil && len(screenshotInputs) > 0 {
-		fmt.Printf("📸 开始对 %d 个存活 URL 进行截图...\n", len(screenshotInputs))
+		fmt.Printf("[Screenshot] capturing %d live URLs...\n", len(screenshotInputs))
 		start := time.Now()
 		screenshotResults, err := p.screenshotScanner.Execute(screenshotInputs)
 		allResults = append(allResults, buildPluginStatusResult(p.screenshotScanner.Name(), len(screenshotResults), err, time.Since(start)))
 		if err != nil {
 			if strings.Contains(err.Error(), "not found in PATH") {
-				fmt.Printf("⚠️  [%s] 工具未安装，跳过截图\n", p.screenshotScanner.Name())
+				fmt.Printf("[WARN] [%s] tool not found in PATH, screenshot skipped\n", p.screenshotScanner.Name())
 			} else {
-				fmt.Printf("⚠️  截图执行失败: %v\n", err)
+				fmt.Printf("[WARN] screenshot failed: %v\n", err)
 			}
 		} else {
 			allResults = append(allResults, screenshotResults...)

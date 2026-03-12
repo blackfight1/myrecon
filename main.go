@@ -48,25 +48,25 @@ func main() {
 
 	mode := strings.ToLower(strings.TrimSpace(*runMode))
 	if err := validateModeAndConflicts(mode, *domain, *domainList, *inputFile, *modules, *reportDomain, *listScreenshots, *monitorList, *monitorStop, *monitorDelete, *scanListDomains, *scanDeleteDomain); err != nil {
-		log.Fatalf("鍙傛暟鍐茬獊: %v", err)
+		log.Fatalf("argument conflict: %v", err)
 	}
 
 	if mode == "monitor" && (*monitorList || strings.TrimSpace(*monitorStop) != "" || strings.TrimSpace(*monitorDelete) != "") {
 		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
 		database, err := db.NewDatabase(dsn)
 		if err != nil {
-			log.Fatalf("鏁版嵁搴撹繛鎺ュけ璐? %v", err)
+			log.Fatalf("database connection failed: %v", err)
 		}
 
 		if *monitorList {
 			targets, err := database.ListMonitorTargets()
 			if err != nil {
-				log.Fatalf("鑾峰彇鐩戞帶鍩熷悕澶辫触: %v", err)
+				log.Fatalf("failed to list monitor targets: %v", err)
 			}
 			if len(targets) == 0 {
-				fmt.Println("鏆傛棤鐩戞帶鍩熷悕")
+				fmt.Println("No monitor targets.")
 			} else {
-				fmt.Println("褰撳墠鐩戞帶鍩熷悕:")
+				fmt.Println("Monitor targets:")
 				for _, t := range targets {
 					status := "stopped"
 					if t.Enabled {
@@ -88,17 +88,17 @@ func main() {
 		if strings.TrimSpace(*monitorStop) != "" {
 			target := strings.TrimSpace(*monitorStop)
 			if err := database.StopMonitorTarget(target); err != nil {
-				log.Fatalf("鍋滄鐩戞帶澶辫触: %v", err)
+				log.Fatalf("failed to stop monitor target: %v", err)
 			}
-			fmt.Printf("宸插仠姝㈢洃鎺? %s\n", target)
+			fmt.Printf("Stopped monitor target: %s\n", target)
 		}
 
 		if strings.TrimSpace(*monitorDelete) != "" {
 			target := strings.TrimSpace(*monitorDelete)
 			if err := database.DeleteMonitorDataByRootDomain(target); err != nil {
-				log.Fatalf("鍒犻櫎鐩戞帶鏁版嵁澶辫触: %v", err)
+				log.Fatalf("failed to delete monitor data: %v", err)
 			}
-			fmt.Printf("宸插垹闄ょ洃鎺ф暟鎹? %s\n", target)
+			fmt.Printf("Deleted monitor data: %s\n", target)
 		}
 		return
 	}
@@ -107,18 +107,18 @@ func main() {
 		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
 		database, err := db.NewDatabase(dsn)
 		if err != nil {
-			log.Fatalf("鏁版嵁搴撹繛鎺ュけ璐? %v", err)
+			log.Fatalf("database connection failed: %v", err)
 		}
 
 		if *scanListDomains {
 			domains, err := database.ListAssetDomains()
 			if err != nil {
-				log.Fatalf("鑾峰彇鍩熷悕鍒楄〃澶辫触: %v", err)
+				log.Fatalf("failed to list asset domains: %v", err)
 			}
 			if len(domains) == 0 {
-				fmt.Println("鏆傛棤鍩熷悕鏁版嵁")
+				fmt.Println("No domain data.")
 			} else {
-				fmt.Println("宸叉湁鍩熷悕:")
+				fmt.Println("Domains:")
 				for _, d := range domains {
 					fmt.Printf("- %s\n", d)
 				}
@@ -128,9 +128,9 @@ func main() {
 		if strings.TrimSpace(*scanDeleteDomain) != "" {
 			target := strings.TrimSpace(*scanDeleteDomain)
 			if err := database.DeleteAllDataByRootDomain(target); err != nil {
-				log.Fatalf("鍒犻櫎鍩熷悕鏁版嵁澶辫触: %v", err)
+				log.Fatalf("failed to delete domain data: %v", err)
 			}
-			fmt.Printf("宸插垹闄ゅ煙鍚嶅叏閮ㄦ暟鎹? %s\n", target)
+			fmt.Printf("Deleted all data for domain: %s\n", target)
 		}
 		return
 	}
@@ -138,16 +138,16 @@ func main() {
 	if *listScreenshots {
 		domains, err := plugins.ListScreenshotDomains(*screenshotDir)
 		if err != nil {
-			log.Fatalf("鑾峰彇鎴浘鍩熷悕鍒楄〃澶辫触: %v", err)
+			log.Fatalf("failed to list screenshot domains: %v", err)
 		}
 		if len(domains) == 0 {
-			fmt.Println("鏆傛棤鎴浘鏁版嵁")
+			fmt.Println("No screenshot data.")
 		} else {
-			fmt.Println("馃摲 宸叉湁鎴浘鐨勫煙鍚?")
+			fmt.Println("Domains with screenshots:")
 			for _, d := range domains {
 				fmt.Printf("  - %s\n", d)
 			}
-			fmt.Println("\n浣跨敤 go run main.go -report <domain> 鍚姩鏌ョ湅鏈嶅姟")
+			fmt.Println("\nUse go run main.go -report <domain> to start report server")
 		}
 		return
 	}
@@ -155,7 +155,7 @@ func main() {
 	if mode == "monitor" {
 		interval, err := time.ParseDuration(*monitorInterval)
 		if err != nil || interval <= 0 {
-			log.Fatalf("monitor-interval 鏃犳晥: %s", *monitorInterval)
+			log.Fatalf("invalid monitor-interval: %s", *monitorInterval)
 		}
 		notifier := plugins.NewDingTalkNotifierFromEnv(*enableNotify)
 		runMonitorLoop(
@@ -172,7 +172,7 @@ func main() {
 
 	if *reportDomain != "" {
 		if err := plugins.StartReportServer(*screenshotDir, *reportDomain, *reportHost, *reportPort); err != nil {
-			log.Fatalf("鍚姩鎴浘鏈嶅姟澶辫触: %v", err)
+			log.Fatalf("failed to start report server: %v", err)
 		}
 		return
 	}
@@ -194,10 +194,10 @@ func main() {
 		input, err = readLinesFromStdin()
 	}
 	if err != nil {
-		log.Fatalf("璇诲彇杈撳叆澶辫触: %v", err)
+		log.Fatalf("failed to read input: %v", err)
 	}
 	if len(input) == 0 {
-		log.Fatalf("杈撳叆涓虹┖")
+		log.Fatalf("empty input")
 	}
 
 	printRunInfo(enableSubs, enablePorts, enableWitness, *enableNuclei, *enableActiveSubs, *dryRun, len(input))
@@ -206,7 +206,7 @@ func main() {
 	scanStartTime := time.Now()
 	if notifier.Enabled() {
 		if err := notifier.SendReconStart(len(input), modulesList, *dryRun); err != nil {
-			fmt.Printf("鈿狅笍  閽夐拤閫氱煡鍙戦€佸け璐?寮€濮?: %v\n", err)
+			fmt.Printf("[WARN] failed to send DingTalk start notification: %v\n", err)
 		}
 	}
 
@@ -214,10 +214,10 @@ func main() {
 		msg := fmt.Sprintf(format, args...)
 		if notifier.Enabled() {
 			if err := notifier.SendReconEnd(false, time.Since(scanStartTime), map[string]int{}, msg); err != nil {
-				fmt.Printf("鈿狅笍  閽夐拤閫氱煡鍙戦€佸け璐?缁撴潫): %v\n", err)
+				fmt.Printf("[WARN] failed to send DingTalk end notification: %v\n", err)
 			}
 		}
-		log.Fatalf("鉂?鎵弿澶辫触: %s", msg)
+		log.Fatalf("scan failed: %s", msg)
 	}
 
 	var database *db.Database
@@ -226,13 +226,13 @@ func main() {
 		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
 		database, err = db.NewDatabase(dsn)
 		if err != nil {
-			failExit("鏁版嵁搴撹繛鎺ュけ璐? %v", err)
+			failExit("database connection failed: %v", err)
 		}
 		beforeAssetCount, _ = database.GetAssetCount()
 		beforePortCount, _ = database.GetPortCount()
 		beforeVulnCount, _ = database.GetVulnerabilityCount()
 	} else {
-		fmt.Println("馃И 娴嬭瘯妯″紡锛氱粨鏋滀笉浼氬啓鍏ユ暟鎹簱")
+		fmt.Println("[DRY-RUN] results will not be written to database")
 	}
 
 	var results []engine.Result
@@ -256,7 +256,7 @@ func main() {
 	}
 
 	if err != nil {
-		failExit("鎵ц澶辫触: %v", err)
+		failExit("execution failed: %v", err)
 	}
 
 	if !*dryRun && database != nil {
@@ -266,7 +266,7 @@ func main() {
 	if notifier.Enabled() {
 		stats := collectResultCounts(results)
 		if err := notifier.SendReconEnd(true, time.Since(scanStartTime), stats, ""); err != nil {
-			fmt.Printf("鈿狅笍  閽夐拤閫氱煡鍙戦€佸け璐?缁撴潫): %v\n", err)
+			fmt.Printf("[WARN] failed to send DingTalk end notification: %v\n", err)
 		}
 	}
 
@@ -498,12 +498,12 @@ func printRunInfo(subs, ports, witness, nuclei, activeSubs, dryRun bool, inputCo
 	}
 
 	fmt.Println("================================================")
-	fmt.Println("馃殌 寮€濮嬫墽琛?scan 妯″紡")
-	fmt.Printf("馃摜 杈撳叆鏁伴噺: %d\n", inputCount)
-	fmt.Printf("馃З 鎵ц妯″潡: %s\n", strings.Join(mods, " -> "))
-	fmt.Printf("馃洜锔? 杩愯妯″紡: %s\n", modeText)
+	fmt.Println("Starting scan mode")
+	fmt.Printf("Input count: %d\n", inputCount)
+	fmt.Printf("Pipeline: %s\n", strings.Join(mods, " -> "))
+	fmt.Printf("Run mode: %s\n", modeText)
 	if dryRun {
-		fmt.Println("馃И 娴嬭瘯妯″紡锛氱粨鏋滀笉浼氬啓鍏ユ暟鎹簱")
+		fmt.Println("[DRY-RUN] results will not be written to database")
 	}
 	fmt.Println("================================================")
 	fmt.Println()
@@ -516,7 +516,7 @@ func runSubsOnly(domains []string, activeSubs bool, dictSize int, dnsResolvers s
 }
 
 func runPortsOnly(subdomains []string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("==> [闃舵] 绔彛鎵弿")
+	fmt.Println("==> [Stage] Port Scan")
 	pipeline := engine.NewPipeline()
 
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
@@ -530,7 +530,7 @@ func runPortsOnly(subdomains []string, nucleiEnabled bool) ([]engine.Result, err
 }
 
 func runWitnessOnly(urls []string, screenshotDir string) ([]engine.Result, error) {
-	fmt.Println("==> [闃舵] Web 鎴浘")
+	fmt.Println("==> [Stage] Web Screenshot")
 	gowitnessPlugin := plugins.NewGowitnessPlugin(screenshotDir)
 
 	var input []string
@@ -581,7 +581,7 @@ func runSubsAndWitness(domains []string, screenshotDir string, nucleiEnabled, ac
 }
 
 func runPortsAndWitness(subdomains []string, screenshotDir string, nucleiEnabled bool) ([]engine.Result, error) {
-	fmt.Println("==> [闃舵] 绔彛鎵弿 + Web 鎴浘")
+	fmt.Println("==> [Stage] Port Scan + Web Screenshot")
 	pipeline := engine.NewPipeline()
 
 	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
@@ -814,7 +814,7 @@ func extractDomainFromURL(rawURL string) string {
 }
 
 func saveResults(database *db.Database, results []engine.Result) {
-	fmt.Println("==> [鍏ュ簱] 鍐欏叆缁撴灉鍒版暟鎹簱")
+	fmt.Println("==> [DB] Writing results to database")
 
 	for _, result := range results {
 		switch result.Type {
@@ -836,7 +836,7 @@ func saveResults(database *db.Database, results []engine.Result) {
 			}
 		}
 	}
-	fmt.Println("==> [鍏ュ簱] 鍐欏叆瀹屾垚")
+	fmt.Println("==> [DB] Write completed")
 }
 
 func printSummary(results []engine.Result, startTime time.Time, dryRun bool, database *db.Database, beforeAsset, beforePort, beforeVuln int64, screenshotDir string, witnessEnabled bool) {
@@ -874,19 +874,19 @@ func printSummary(results []engine.Result, startTime time.Time, dryRun bool, dat
 
 	fmt.Println()
 	fmt.Println("================================================")
-	fmt.Println("鉁?鎵弿瀹屾垚")
-	fmt.Printf("鈴憋笍  鎬昏€楁椂: %v\n", time.Since(startTime).Round(time.Second))
-	fmt.Printf("馃摋 瀛愬煙鍚? %d\n", counts["subdomains"])
-	fmt.Printf("馃寪 Web 鏈嶅姟: %d\n", counts["web_services"])
-	fmt.Printf("馃摬 寮€鏀剧鍙? %d\n", counts["ports"])
-	fmt.Printf("馃洝锔? 婕忔礊鍊欓€? %d\n", counts["vulnerabilities"])
-	fmt.Printf("馃摲 鎴浘: %d\n", counts["screenshots"])
+	fmt.Println("Scan completed")
+	fmt.Printf("Total duration: %v\n", time.Since(startTime).Round(time.Second))
+	fmt.Printf("Subdomains: %d\n", counts["subdomains"])
+	fmt.Printf("Web services: %d\n", counts["web_services"])
+	fmt.Printf("Open ports: %d\n", counts["ports"])
+	fmt.Printf("Vulnerabilities: %d\n", counts["vulnerabilities"])
+	fmt.Printf("Screenshots: %d\n", counts["screenshots"])
 
 	if !dryRun && database != nil {
 		afterAsset, _ := database.GetAssetCount()
 		afterPort, _ := database.GetPortCount()
 		afterVuln, _ := database.GetVulnerabilityCount()
-		fmt.Println("馃捑 鏁版嵁搴撳彉鍖?")
+		fmt.Println("Database changes:")
 		fmt.Printf("- assets: %d -> %d\n", beforeAsset, afterAsset)
 		fmt.Printf("- ports: %d -> %d\n", beforePort, afterPort)
 		fmt.Printf("- vulnerabilities: %d -> %d\n", beforeVuln, afterVuln)
@@ -895,12 +895,12 @@ func printSummary(results []engine.Result, startTime time.Time, dryRun bool, dat
 	if witnessEnabled {
 		screenshotDomains, _ := plugins.ListScreenshotDomains(screenshotDir)
 		if len(screenshotDomains) > 0 {
-			fmt.Println("馃攷 鏌ョ湅鎴浘: go run main.go -report <domain>")
+			fmt.Println("View screenshots: go run main.go -report <domain>")
 		}
 	}
 	if len(pluginStatuses) > 0 {
 		fmt.Println()
-		fmt.Println("馃З 鎻掍欢杩愯鐘舵€?")
+		fmt.Println("Plugin execution status:")
 		for _, ps := range pluginStatuses {
 			line := fmt.Sprintf("- %s | status=%s | success=%d fail=%d timeout=%d | duration=%dms",
 				ps.Scanner, ps.Status, ps.SuccessCount, ps.FailureCount, ps.TimeoutCount, ps.DurationMS)
