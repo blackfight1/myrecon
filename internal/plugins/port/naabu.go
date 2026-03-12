@@ -75,6 +75,7 @@ func (n *NaabuPlugin) Execute(input []string) ([]engine.Result, error) {
 
 	var results []engine.Result
 	scanner := bufio.NewScanner(stdout)
+	seen := make(map[string]bool)
 	portCount := 0
 
 	for scanner.Scan() {
@@ -87,11 +88,16 @@ func (n *NaabuPlugin) Execute(input []string) ([]engine.Result, error) {
 		if err := json.Unmarshal([]byte(line), &naabuResult); err != nil {
 			continue
 		}
+		if naabuResult.IP == "" || naabuResult.Port <= 0 {
+			continue
+		}
+		key := fmt.Sprintf("%s:%d", naabuResult.IP, naabuResult.Port)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 
 		portCount++
-		if portCount%10 == 0 || portCount == 1 {
-			fmt.Printf("[Naabu] Discovered %d open ports\n", portCount)
-		}
 
 		results = append(results, engine.Result{
 			Type: "open_port",

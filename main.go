@@ -656,6 +656,13 @@ func runPassiveSubdomainCollection(domains []string) ([]engine.Result, []string,
 
 	results, err := pipeline.Execute(domains)
 	subdomains := extractDomainResults(results)
+	rawDomainItems := 0
+	for _, r := range results {
+		if r.Type == "domain" {
+			rawDomainItems++
+		}
+	}
+	fmt.Printf("[Subs] Passive merged unique subdomains: %d (raw=%d)\n", len(subdomains), rawDomainItems)
 	return results, subdomains, err
 }
 

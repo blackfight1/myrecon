@@ -91,6 +91,7 @@ func (h *HttpxPlugin) Execute(input []string) ([]engine.Result, error) {
 	var results []engine.Result
 	scanner := bufio.NewScanner(stdout)
 	liveCount := 0
+	seenURLs := make(map[string]bool)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -104,20 +105,21 @@ func (h *HttpxPlugin) Execute(input []string) ([]engine.Result, error) {
 			continue
 		}
 
-		liveCount++
-		if liveCount%10 == 0 || liveCount == 1 {
-			fmt.Printf("[Httpx] Discovered %d live web services\n", liveCount)
-		}
-
 		ip := httpxResult.HostIP
 		if ip == "" && len(httpxResult.A) > 0 {
 			ip = httpxResult.A[0]
 		}
+		url := strings.TrimSpace(httpxResult.URL)
+		if url == "" || seenURLs[url] {
+			continue
+		}
+		seenURLs[url] = true
+		liveCount++
 
 		results = append(results, engine.Result{
 			Type: "web_service",
 			Data: map[string]interface{}{
-				"url":           httpxResult.URL,
+				"url":           url,
 				"status_code":   httpxResult.StatusCode,
 				"title":         httpxResult.Title,
 				"technologies":  httpxResult.Tech,

@@ -1,10 +1,11 @@
 package port
 
 import (
-	"bufio"
+	"bytes"
+	"encoding/xml"
 	"fmt"
 	"os/exec"
-	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -49,6 +50,9 @@ func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
 		if err != nil {
 			continue
 		}
+		if ip == "" || port <= 0 {
+			continue
+		}
 
 		ipPorts[ip] = append(ipPorts[ip], port)
 		if len(parts) >= 3 && parts[2] != "" {
@@ -67,6 +71,10 @@ func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
 
 	for ip, ports := range ipPorts {
 		scannedCount++
+		ports = uniqueSortedPorts(ports)
+		if len(ports) == 0 {
+			continue
+		}
 
 		portStrs := make([]string, len(ports))
 		for i, p := range ports {
@@ -80,19 +88,29 @@ func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
 			"-sV",
 			"-Pn",
 			"-T4",
-			"--open",
 			"-p", portList,
+			"-oX", "-",
 			ip,
 		)
 
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
 		output, err := cmd.Output()
 		if err != nil {
-			fmt.Printf("[Nmap] Scan failed for %s: %v\n", ip, err)
+			if stderr.Len() > 0 {
+				fmt.Printf("[Nmap] Scan failed for %s: %v | %s\n", ip, err, strings.TrimSpace(stderr.String()))
+			} else {
+				fmt.Printf("[Nmap] Scan failed for %s: %v\n", ip, err)
+			}
 			continue
 		}
 
 		host := ipHosts[ip]
-		portResults := parseNmapOutput(string(output), ip, host)
+		portResults, parseErr := parseNmapXMLOutput(output, ip, host)
+		if parseErr != nil {
+			fmt.Printf("[Nmap] Parse failed for %s: %v\n", ip, parseErr)
+			continue
+		}
 		results = append(results, portResults...)
 	}
 
@@ -100,39 +118,120 @@ func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
 	return results, nil
 }
 
-// parseNmapOutput parses open port lines from nmap output.
-func parseNmapOutput(output string, ip string, host string) []engine.Result {
+type nmapRun struct {
+	Hosts []nmapHost `xml:"host"`
+}
+
+type nmapHost struct {
+	Addresses []nmapAddress `xml:"address"`
+	Ports     nmapPorts     `xml:"ports"`
+}
+
+type nmapAddress struct {
+	Addr     string `xml:"addr,attr"`
+	AddrType string `xml:"addrtype,attr"`
+}
+
+type nmapPorts struct {
+	Items []nmapPort `xml:"port"`
+}
+
+type nmapPort struct {
+	Protocol string        `xml:"protocol,attr"`
+	PortID   int           `xml:"portid,attr"`
+	State    nmapPortState `xml:"state"`
+	Service  nmapService   `xml:"service"`
+}
+
+type nmapPortState struct {
+	State string `xml:"state,attr"`
+}
+
+type nmapService struct {
+	Name      string `xml:"name,attr"`
+	Product   string `xml:"product,attr"`
+	Version   string `xml:"version,attr"`
+	ExtraInfo string `xml:"extrainfo,attr"`
+	Tunnel    string `xml:"tunnel,attr"`
+}
+
+func parseNmapXMLOutput(output []byte, fallbackIP string, host string) ([]engine.Result, error) {
+	var doc nmapRun
+	if err := xml.Unmarshal(output, &doc); err != nil {
+		return nil, err
+	}
+
 	var results []engine.Result
-
-	// Example matched line:
-	// "22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu"
-	portRegex := regexp.MustCompile(`(\d+)/(\w+)\s+open\s+(\S+)\s*(.*)`)
-
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	for scanner.Scan() {
-		line := scanner.Text()
-		matches := portRegex.FindStringSubmatch(line)
-		if matches == nil {
+	for _, h := range doc.Hosts {
+		ip := fallbackIP
+		for _, addr := range h.Addresses {
+			if addr.AddrType == "ipv4" && strings.TrimSpace(addr.Addr) != "" {
+				ip = strings.TrimSpace(addr.Addr)
+				break
+			}
+		}
+		if ip == "" {
 			continue
 		}
 
-		port, _ := strconv.Atoi(matches[1])
-		protocol := matches[2]
-		service := matches[3]
-		version := strings.TrimSpace(matches[4])
+		for _, p := range h.Ports.Items {
+			if strings.ToLower(strings.TrimSpace(p.State.State)) != "open" {
+				continue
+			}
+			if p.PortID <= 0 {
+				continue
+			}
 
-		results = append(results, engine.Result{
-			Type: "port_service",
-			Data: map[string]interface{}{
-				"ip":       ip,
-				"port":     port,
-				"protocol": protocol,
-				"service":  service,
-				"version":  version,
-				"domain":   host,
-			},
-		})
+			service := strings.TrimSpace(p.Service.Name)
+			if service == "" {
+				service = "unknown"
+			}
+			tunnel := strings.TrimSpace(p.Service.Tunnel)
+			if tunnel != "" && !strings.Contains(service, "/") {
+				service = tunnel + "/" + service
+			}
+
+			versionParts := make([]string, 0, 3)
+			if s := strings.TrimSpace(p.Service.Product); s != "" {
+				versionParts = append(versionParts, s)
+			}
+			if s := strings.TrimSpace(p.Service.Version); s != "" {
+				versionParts = append(versionParts, s)
+			}
+			if s := strings.TrimSpace(p.Service.ExtraInfo); s != "" {
+				versionParts = append(versionParts, "("+s+")")
+			}
+
+			results = append(results, engine.Result{
+				Type: "port_service",
+				Data: map[string]interface{}{
+					"ip":       ip,
+					"port":     p.PortID,
+					"protocol": strings.TrimSpace(p.Protocol),
+					"service":  service,
+					"version":  strings.Join(versionParts, " "),
+					"domain":   host,
+				},
+			})
+		}
 	}
 
-	return results
+	return results, nil
+}
+
+func uniqueSortedPorts(ports []int) []int {
+	if len(ports) == 0 {
+		return []int{}
+	}
+	seen := make(map[int]bool)
+	out := make([]int, 0, len(ports))
+	for _, p := range ports {
+		if p <= 0 || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	sort.Ints(out)
+	return out
 }

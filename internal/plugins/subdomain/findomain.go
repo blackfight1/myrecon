@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 
 	"hunter/internal/engine"
 )
@@ -61,7 +60,7 @@ func (f *FindomainPlugin) Execute(input []string) ([]engine.Result, error) {
 		}
 	}()
 
-	rawOutput, runErr := cmd.CombinedOutput()
+	_, runErr := cmd.CombinedOutput()
 
 	subdomains, parseErr := readSubdomainsFile(outputFile)
 	if parseErr != nil {
@@ -76,16 +75,6 @@ func (f *FindomainPlugin) Execute(input []string) ([]engine.Result, error) {
 			return nil, fmt.Errorf("findomain execution failed: %v", runErr)
 		}
 		fmt.Printf("[Findomain] Command finished with warning: %v\n", runErr)
-	}
-
-	if len(strings.TrimSpace(string(rawOutput))) > 0 {
-		lines := strings.Split(strings.TrimSpace(string(rawOutput)), "\n")
-		if len(lines) > 0 {
-			lastLine := strings.TrimSpace(lines[len(lines)-1])
-			if lastLine != "" {
-				fmt.Printf("[Findomain] %s\n", lastLine)
-			}
-		}
 	}
 
 	results := make([]engine.Result, 0, len(subdomains))
