@@ -1,25 +1,15 @@
-﻿import { useWorkspace } from "../../context/WorkspaceContext";
-
-interface Props {
+﻿interface ProjectScopeBannerProps {
   title: string;
-  hint?: string;
+  hint: string;
 }
 
-export function ProjectScopeBanner({ title, hint }: Props) {
-  const { activeProject } = useWorkspace();
-  const roots = activeProject?.rootDomains ?? [];
-
+export function ProjectScopeBanner({ title, hint }: ProjectScopeBannerProps) {
   return (
-    <article className="scope-banner">
-      <div>
-        <span className="scope-label">Project Scope</span>
-        <h3>{title}</h3>
-      </div>
-      <div className="scope-values">
-        <strong>{activeProject?.name ?? "No active project"}</strong>
-        <span>{roots.length > 0 ? roots.join(" | ") : "Add root domains in Projects page"}</span>
-      </div>
-      {hint ? <p>{hint}</p> : null}
-    </article>
+    <div className="scope-banner">
+      <span className="scope-icon">⊙</span>
+      <span>
+        <strong>{title}</strong> — {hint}
+      </span>
+    </div>
   );
 }

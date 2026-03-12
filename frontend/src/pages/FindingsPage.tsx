@@ -8,34 +8,28 @@ import { formatDate } from "../lib/format";
 import { matchesProjectDomain } from "../lib/projectScope";
 import type { VulnerabilityRecord } from "../types/models";
 
-const helper = createColumnHelper<VulnerabilityRecord>();
+const col = createColumnHelper<VulnerabilityRecord>();
 
 const columns = [
-  helper.accessor("severity", {
+  col.accessor("severity", {
     header: "Severity",
-    cell: (ctx) => {
-      const severity = (ctx.getValue() || "unknown").toLowerCase();
-      return <span className={`severity-chip severity-${severity}`}>{severity.toUpperCase()}</span>;
+    cell: (c) => {
+      const s = (c.getValue() || "unknown").toLowerCase();
+      return <span className={`severity-chip severity-${s}`}>{s.toUpperCase()}</span>;
     }
   }),
-  helper.accessor("rootDomain", { header: "Root", cell: (ctx) => ctx.getValue() || "-" }),
-  helper.accessor("templateId", { header: "Template ID" }),
-  helper.accessor("cve", { header: "CVE", cell: (ctx) => ctx.getValue() || "-" }),
-  helper.accessor("domain", { header: "Domain", cell: (ctx) => ctx.getValue() || "-" }),
-  helper.accessor("url", { header: "URL", cell: (ctx) => ctx.getValue() || "-" }),
-  helper.accessor("matchedAt", { header: "Matched At", cell: (ctx) => formatDate(ctx.getValue()) }),
-  helper.accessor("fingerprint", { header: "Fingerprint" })
+  col.accessor("rootDomain", { header: "Root", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("templateId", { header: "Template ID", cell: (c) => <span className="cell-mono">{c.getValue()}</span> }),
+  col.accessor("cve", { header: "CVE", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("domain", { header: "Domain", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("url", { header: "URL", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("matchedAt", { header: "Matched", cell: (c) => formatDate(c.getValue()) }),
+  col.accessor("fingerprint", { header: "Fingerprint", cell: (c) => <span className="cell-mono">{c.getValue()}</span> })
 ];
 
 function hostnameFromUrl(input?: string): string | undefined {
-  if (!input) {
-    return undefined;
-  }
-  try {
-    return new URL(input).hostname;
-  } catch {
-    return undefined;
-  }
+  if (!input) return undefined;
+  try { return new URL(input).hostname; } catch { return undefined; }
 }
 
 export function FindingsPage() {
@@ -46,70 +40,60 @@ export function FindingsPage() {
   const [search, setSearch] = useState("");
 
   const scoped = useMemo(() => {
-    return (data ?? []).filter((item) => {
-      return (
-        matchesProjectDomain(item.rootDomain, rootDomains) ||
-        matchesProjectDomain(item.domain, rootDomains) ||
-        matchesProjectDomain(item.host, rootDomains) ||
-        matchesProjectDomain(hostnameFromUrl(item.url), rootDomains)
-      );
-    });
+    return (data ?? []).filter((v) =>
+      matchesProjectDomain(v.rootDomain, rootDomains) || matchesProjectDomain(v.domain, rootDomains) ||
+      matchesProjectDomain(v.host, rootDomains) || matchesProjectDomain(hostnameFromUrl(v.url), rootDomains)
+    );
   }, [data, rootDomains]);
 
   const rows = useMemo(() => {
-    return scoped.filter((finding) => {
-      const findingSeverity = (finding.severity ?? "unknown").toLowerCase();
-      if (severity !== "all" && findingSeverity !== severity) {
-        return false;
-      }
-      if (!search.trim()) {
-        return true;
-      }
+    return scoped.filter((f) => {
+      const fs = (f.severity ?? "unknown").toLowerCase();
+      if (severity !== "all" && fs !== severity) return false;
+      if (!search.trim()) return true;
       const q = search.trim().toLowerCase();
       return (
-        (finding.rootDomain ?? "").toLowerCase().includes(q) ||
-        (finding.domain ?? "").toLowerCase().includes(q) ||
-        (finding.templateId ?? "").toLowerCase().includes(q) ||
-        (finding.cve ?? "").toLowerCase().includes(q) ||
-        (finding.url ?? "").toLowerCase().includes(q) ||
-        finding.fingerprint.toLowerCase().includes(q)
+        (f.rootDomain ?? "").toLowerCase().includes(q) || (f.domain ?? "").toLowerCase().includes(q) ||
+        (f.templateId ?? "").toLowerCase().includes(q) || (f.cve ?? "").toLowerCase().includes(q) ||
+        (f.url ?? "").toLowerCase().includes(q) || f.fingerprint.toLowerCase().includes(q)
       );
     });
   }, [scoped, search, severity]);
 
-  const severityCounts = useMemo(() => {
-    const output = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
-    for (const finding of scoped) {
-      const key = (finding.severity ?? "unknown").toLowerCase();
-      if (key === "critical" || key === "high" || key === "medium" || key === "low") {
-        output[key] += 1;
-      } else {
-        output.unknown += 1;
-      }
+  const sevCounts = useMemo(() => {
+    const o = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
+    for (const f of scoped) {
+      const k = (f.severity ?? "unknown").toLowerCase();
+      if (k === "critical" || k === "high" || k === "medium" || k === "low") o[k]++;
+      else o.unknown++;
     }
-    return output;
+    return o;
   }, [scoped]);
 
   return (
     <section className="page">
-      <h1>Findings</h1>
-      <p className="page-subtitle">Project-aware nuclei triage with severity and fingerprint search.</p>
+      <div className="page-header">
+        <h1 className="page-title">Findings</h1>
+        <p className="page-desc">Project-aware nuclei triage with severity classification and fingerprint search.</p>
+      </div>
 
-      <ProjectScopeBanner
-        title="Findings Scope"
-        hint="Vulnerabilities are matched by root_domain first, then fallback to host/domain/url suffix."
-      />
+      <ProjectScopeBanner title="Findings Scope" hint="Matched by root_domain, then fallback to host/domain/url suffix." />
 
-      <article className="panel control-panel">
+      <div className="stats-row">
+        <div className="stat-card accent-danger"><div className="stat-label">Critical</div><div className="stat-value">{sevCounts.critical}</div></div>
+        <div className="stat-card accent-warning"><div className="stat-label">High</div><div className="stat-value">{sevCounts.high}</div></div>
+        <div className="stat-card"><div className="stat-label">Medium</div><div className="stat-value">{sevCounts.medium}</div></div>
+        <div className="stat-card accent-success"><div className="stat-label">Low</div><div className="stat-value">{sevCounts.low}</div></div>
+        <div className="stat-card"><div className="stat-label">Unknown</div><div className="stat-value">{sevCounts.unknown}</div></div>
+      </div>
+
+      <article className="panel">
         <header className="panel-header">
           <h2>Triage Controls</h2>
-          <span>
-            C:{severityCounts.critical} H:{severityCounts.high} M:{severityCounts.medium} L:{severityCounts.low} U:
-            {severityCounts.unknown}
-          </span>
+          <span className="panel-meta">{scoped.length} total</span>
         </header>
-        <div className="filters-row">
-          <select value={severity} onChange={(event) => setSeverity(event.target.value)}>
+        <div className="filter-bar">
+          <select className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
             <option value="all">All severity</option>
             <option value="critical">Critical</option>
             <option value="high">High</option>
@@ -117,22 +101,19 @@ export function FindingsPage() {
             <option value="low">Low</option>
             <option value="unknown">Unknown</option>
           </select>
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search root/domain/template/CVE/url/fingerprint..."
-          />
+          <input className="form-input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search root/domain/template/CVE/url/fingerprint..." />
+          <span className="filter-summary">{rows.length} matched</span>
         </div>
       </article>
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Vulnerability Candidates</h2>
-          <span>{rows.length} records matched</span>
+          <h2>Vulnerability Records</h2>
+          <span className="panel-meta">{rows.length} records</span>
         </header>
-        {isLoading ? <p className="empty-state">Loading findings...</p> : null}
-        {error ? <p className="empty-state">Failed to load findings.</p> : null}
-        {!isLoading && !error ? <DataTable data={rows} columns={columns} /> : null}
+        {isLoading && <div className="empty-state">Loading findings...</div>}
+        {error && <div className="empty-state">Failed to load findings.</div>}
+        {!isLoading && !error && <DataTable data={rows} columns={columns} />}
       </article>
     </section>
   );

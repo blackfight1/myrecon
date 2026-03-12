@@ -1,108 +1,92 @@
 ﻿import { NavLink, Outlet } from "react-router-dom";
 import { useWorkspace } from "../../context/WorkspaceContext";
 
-const navItems = [
-  { to: "/", label: "Overview", code: "OVR" },
-  { to: "/projects", label: "Projects", code: "PRJ" },
-  { to: "/jobs", label: "Jobs", code: "JOB" },
-  { to: "/assets", label: "Assets", code: "AST" },
-  { to: "/ports", label: "Ports", code: "PRT" },
-  { to: "/findings", label: "Findings", code: "VUL" },
-  { to: "/monitoring", label: "Monitoring", code: "MON" }
-];
-
-const flowNodes = [
-  { id: "passive", label: "Passive Subs" },
-  { id: "dictgen", label: "DictGen" },
-  { id: "active", label: "Active Brute" },
-  { id: "ports", label: "Ports/Service" },
-  { id: "nuclei", label: "Nuclei", danger: true },
-  { id: "monitor", label: "Monitor" }
-];
-
 export function AppShell() {
   const { projects, activeProject, setActiveProject } = useWorkspace();
 
   return (
     <div className="app-root">
+      {/* ── Topbar ── */}
       <header className="topbar">
-        <div className="topbar-main">
+        <div className="topbar-left">
           <div className="brand">
-            <span className="brand-mark">MYRECON::OPS</span>
-            <span className="brand-text">Recon Mission Console</span>
+            <div className="brand-icon">MR</div>
+            <span className="brand-name">MyRecon</span>
           </div>
-          <div className="topbar-controls">
-            <label className="project-picker">
-              <span>Workspace</span>
-              <select
-                value={activeProject?.id ?? ""}
-                onChange={(event) => setActiveProject(event.target.value)}
-                aria-label="Select active project"
-              >
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="topbar-meta">
-              <span className="live-dot" />
-              <span>Realtime Polling</span>
-              <span className="mono-subtle">5s / 10s / 20s</span>
-            </div>
+          <div className="topbar-divider" />
+          <div className="topbar-project-select">
+            <span className="topbar-project-label">Project</span>
+            <select
+              value={activeProject?.id ?? ""}
+              onChange={(e) => setActiveProject(e.target.value)}
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
-        <p className="topbar-hint">
-          Project-scoped recon workflow: passive subdomain collection, optional active expansion, service mapping,
-          vulnerability triage, and monitor delta tracking.
-        </p>
-        <div className="pipeline-flow" aria-label="Recon flow stages">
-          {flowNodes.map((node, index) => (
-            <div key={node.id} className="flow-segment">
-              <span className={node.danger ? "flow-node danger" : "flow-node"}>
-                <span className="flow-dot" />
-                <span>{node.label}</span>
-              </span>
-              {index < flowNodes.length - 1 ? <span className="flow-link" /> : null}
-            </div>
-          ))}
+        <div className="topbar-right">
+          <div className="topbar-status">
+            <span className="status-dot" />
+            <span>Polling Active</span>
+          </div>
         </div>
       </header>
 
+      {/* ── Body ── */}
       <div className="layout">
+        {/* ── Sidebar ── */}
         <aside className="sidebar">
-          <section className="sidebar-block workspace-mini">
-            <h4 className="sidebar-title">Active Workspace</h4>
-            <strong>{activeProject?.name ?? "No project"}</strong>
-            <p className="sidebar-note">{activeProject?.description || "Create project and set root domains."}</p>
-            <div className="sidebar-roots">
-              {(activeProject?.rootDomains ?? []).slice(0, 4).map((root) => (
-                <span key={root}>{root}</span>
-              ))}
-            </div>
-          </section>
+          <nav className="sidebar-nav">
+            <div className="nav-section-title">Overview</div>
+            <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+              <span className="nav-icon">◈</span> Dashboard
+            </NavLink>
 
-          <nav>
-            {navItems.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.to === "/"}
-                className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
-              >
-                <span className="nav-code">{item.code}</span>
-                <span>{item.label}</span>
-              </NavLink>
-            ))}
+            <div className="nav-section-title">Discovery</div>
+            <NavLink to="/assets" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+              <span className="nav-icon">◎</span> Assets
+            </NavLink>
+            <NavLink to="/ports" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+              <span className="nav-icon">⊞</span> Ports
+            </NavLink>
+            <NavLink to="/findings" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+              <span className="nav-icon">⚑</span> Findings
+            </NavLink>
+
+            <div className="nav-section-title">Operations</div>
+            <NavLink to="/jobs" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+              <span className="nav-icon">▷</span> Jobs
+            </NavLink>
+            <NavLink to="/monitoring" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+              <span className="nav-icon">◉</span> Monitoring
+            </NavLink>
+
+            <div className="nav-section-title">Settings</div>
+            <NavLink to="/projects" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+              <span className="nav-icon">⊟</span> Projects
+            </NavLink>
           </nav>
 
-          <section className="sidebar-block sidebar-foot">
-            <div className="tiny-label">Pipeline Scope</div>
-            <div className="tiny-value">{activeProject?.rootDomains.length ?? 0} root domains in current project</div>
-          </section>
+          {activeProject && (
+            <div className="sidebar-footer">
+              <div className="sidebar-project-info">
+                <div className="info-label">Active Scope</div>
+                <div className="info-name">{activeProject.name}</div>
+                <div className="sidebar-roots-list">
+                  {activeProject.rootDomains.map((d) => (
+                    <span key={d} className="root-tag">{d}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </aside>
 
+        {/* ── Main Content ── */}
         <main className="content">
           <Outlet />
         </main>

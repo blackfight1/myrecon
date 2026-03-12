@@ -1,283 +1,112 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useState } from "react";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { parseDomainList } from "../lib/projectScope";
-import { useAssets, useJobs, useVulns } from "../hooks/queries";
-
-function includesRoot(value: string | undefined, roots: string[]): boolean {
-  if (!value || roots.length === 0) {
-    return false;
-  }
-  const domain = value.toLowerCase();
-  return roots.some((root) => domain === root || domain.endsWith(`.${root}`));
-}
+import { formatDate } from "../lib/format";
 
 export function ProjectsPage() {
   const { projects, activeProject, setActiveProject, createProject, updateProject, deleteProject } = useWorkspace();
-  const jobs = useJobs();
-  const assets = useAssets();
-  const vulns = useVulns();
 
+  const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [domainsRaw, setDomainsRaw] = useState("");
+  const [rootDomainsRaw, setRootDomainsRaw] = useState("");
   const [tagsRaw, setTagsRaw] = useState("");
 
-  const [editProjectId, setEditProjectId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editDescription, setEditDescription] = useState("");
-  const [editDomainsRaw, setEditDomainsRaw] = useState("");
-  const [editTagsRaw, setEditTagsRaw] = useState("");
-
-  const projectStats = useMemo(() => {
-    const jobsList = jobs.data ?? [];
-    const assetsList = assets.data ?? [];
-    const vulnsList = vulns.data ?? [];
-
-    return projects.map((project) => {
-      const roots = project.rootDomains;
-      const jobsCount = jobsList.filter((item) => includesRoot(item.rootDomain, roots)).length;
-      const assetsCount = assetsList.filter((item) => includesRoot(item.domain, roots)).length;
-      const vulnsCount = vulnsList.filter((item) => includesRoot(item.rootDomain ?? item.domain, roots)).length;
-      return {
-        id: project.id,
-        jobsCount,
-        assetsCount,
-        vulnsCount
-      };
-    });
-  }, [projects, jobs.data, assets.data, vulns.data]);
-
-  const onCreate = (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!name.trim()) {
-      return;
-    }
-    const domains = parseDomainList(domainsRaw);
-    if (domains.length === 0) {
-      return;
-    }
-
+  const handleCreate = () => {
+    if (!name.trim() || !rootDomainsRaw.trim()) return;
     createProject({
-      name,
-      description,
-      rootDomainsRaw: domainsRaw,
-      tagsRaw
+      name: name.trim(),
+      description: description.trim() || undefined,
+      rootDomainsRaw: rootDomainsRaw.trim(),
+      tagsRaw: tagsRaw.trim() || undefined
     });
-
     setName("");
     setDescription("");
-    setDomainsRaw("");
+    setRootDomainsRaw("");
     setTagsRaw("");
-  };
-
-  const openEdit = (projectId: string) => {
-    const item = projects.find((project) => project.id === projectId);
-    if (!item) {
-      return;
-    }
-    setEditProjectId(projectId);
-    setEditName(item.name);
-    setEditDescription(item.description ?? "");
-    setEditDomainsRaw(item.rootDomains.join("\n"));
-    setEditTagsRaw(item.tags.join(", "));
-  };
-
-  const submitEdit = (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!editProjectId) {
-      return;
-    }
-    if (!editName.trim()) {
-      return;
-    }
-    if (parseDomainList(editDomainsRaw).length === 0) {
-      return;
-    }
-
-    updateProject(editProjectId, {
-      name: editName,
-      description: editDescription,
-      rootDomainsRaw: editDomainsRaw,
-      tagsRaw: editTagsRaw
-    });
-    setEditProjectId(null);
-  };
-
-  const onDelete = (projectId: string, projectName: string) => {
-    if (projects.length <= 1) {
-      return;
-    }
-    const confirmed = window.confirm(`Delete project "${projectName}"? This only removes local workspace data.`);
-    if (!confirmed) {
-      return;
-    }
-    if (editProjectId === projectId) {
-      setEditProjectId(null);
-    }
-    deleteProject(projectId);
+    setShowForm(false);
   };
 
   return (
     <section className="page">
-      <h1>Projects</h1>
-      <p className="page-subtitle">
-        Build recon workspaces by root domain scope. All pipeline pages can be viewed per project before backend API
-        integration.
-      </p>
-
-      <div className="workspace-grid">
-        <article className="panel panel-flat">
-          <header className="panel-header">
-            <h2>Create Project</h2>
-            <span>{projects.length} total</span>
-          </header>
-          <form className="form-grid project-form" onSubmit={onCreate}>
-            <label>
-              Project Name
-              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Bugcrowd Program" />
-            </label>
-            <label>
-              Tags
-              <input
-                value={tagsRaw}
-                onChange={(event) => setTagsRaw(event.target.value)}
-                placeholder="bugbounty, external, p1"
-              />
-            </label>
-            <label className="span-2">
-              Description
-              <input
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                placeholder="Scope, notes, operator handoff"
-              />
-            </label>
-            <label className="span-2">
-              Root Domains
-              <textarea
-                value={domainsRaw}
-                onChange={(event) => setDomainsRaw(event.target.value)}
-                placeholder={"example.com\nexample.org"}
-                rows={5}
-              />
-            </label>
-            <button type="submit" className="btn btn-neon btn-pill">
-              Create Project
-            </button>
-          </form>
-        </article>
-
-        <article className="panel panel-flat">
-          <header className="panel-header">
-            <h2>Active Project</h2>
-            <span>{activeProject?.name ?? "none"}</span>
-          </header>
-          {activeProject ? (
-            <div className="project-active-box">
-              <div className="project-active-header">
-                <strong>{activeProject.name}</strong>
-                <span className="status-chip">{activeProject.rootDomains.length} roots</span>
-              </div>
-              <p>{activeProject.description || "No description."}</p>
-              <div className="tag-row">
-                {activeProject.tags.length > 0 ? activeProject.tags.map((tag) => <span key={tag}>#{tag}</span>) : <span>#untagged</span>}
-              </div>
-              <small>Updated: {new Date(activeProject.updatedAt).toLocaleString()}</small>
-            </div>
-          ) : (
-            <p className="empty-state">No active project.</p>
-          )}
-        </article>
+      <div className="page-header">
+        <h1 className="page-title">Projects</h1>
+        <p className="page-desc">Manage project scopes. The active project filters all pipeline views across the application.</p>
       </div>
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Workspace Catalog</h2>
-          <span>Switch/edit project scopes</span>
+          <h2>Project Registry</h2>
+          <button className="btn btn-sm" onClick={() => setShowForm(!showForm)}>
+            {showForm ? "Cancel" : "+ New Project"}
+          </button>
         </header>
 
-        <div className="project-cards">
-          {projects.map((project) => {
-            const stats = projectStats.find((item) => item.id === project.id);
-            const isEditing = editProjectId === project.id;
+        {showForm && (
+          <div className="form-section">
+            <div className="form-group">
+              <label className="form-label">Name</label>
+              <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. ACME Corp" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Description</label>
+              <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional description" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Root Domains (comma or newline separated)</label>
+              <textarea className="form-input" value={rootDomainsRaw} onChange={(e) => setRootDomainsRaw(e.target.value)} placeholder="example.com, example.org" rows={3} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Tags (comma separated)</label>
+              <input className="form-input" value={tagsRaw} onChange={(e) => setTagsRaw(e.target.value)} placeholder="bug-bounty, client" />
+            </div>
+            <button className="btn" onClick={handleCreate} disabled={!name.trim() || !rootDomainsRaw.trim()}>
+              Create Project
+            </button>
+          </div>
+        )}
 
+        {projects.length === 0 && !showForm && (
+          <div className="empty-state">No projects yet. Create one to start scoping your recon pipeline.</div>
+        )}
+
+        <div className="project-grid">
+          {projects.map((p) => {
+            const isActive = activeProject?.id === p.id;
             return (
-              <section key={project.id} className={project.id === activeProject?.id ? "project-card active" : "project-card"}>
-                <div className="project-card-head">
+              <div key={p.id} className={`project-card ${isActive ? "project-card-active" : ""}`}>
+                <div className="project-card-header">
+                  <h3>{p.name}</h3>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button className={`btn btn-sm ${isActive ? "btn-active" : ""}`} onClick={() => setActiveProject(p.id)}>
+                      {isActive ? "✓ Active" : "Set Active"}
+                    </button>
+                    {projects.length > 1 && (
+                      <button className="btn btn-sm btn-danger" onClick={() => deleteProject(p.id)}>✕</button>
+                    )}
+                  </div>
+                </div>
+                {p.description && <p className="project-card-desc">{p.description}</p>}
+                <div className="project-card-meta">
                   <div>
-                    <strong>{project.name}</strong>
-                    <p>{project.description || "No description."}</p>
+                    <strong>Roots:</strong>{" "}
+                    {p.rootDomains.map((d) => (
+                      <span key={d} className="badge badge-info">{d}</span>
+                    ))}
                   </div>
-                  <div className="project-card-actions">
-                    <button type="button" className="btn btn-ghost" onClick={() => setActiveProject(project.id)}>
-                      {project.id === activeProject?.id ? "In Use" : "Switch"}
-                    </button>
-                    <button type="button" className="btn btn-ghost" onClick={() => openEdit(project.id)}>
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-danger"
-                      onClick={() => onDelete(project.id, project.name)}
-                      disabled={projects.length <= 1}
-                      title={projects.length <= 1 ? "At least one project must remain." : "Delete this project"}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-
-                <div className="project-metrics">
-                  <span>Roots: {project.rootDomains.length}</span>
-                  <span>Jobs: {stats?.jobsCount ?? 0}</span>
-                  <span>Assets: {stats?.assetsCount ?? 0}</span>
-                  <span>Findings: {stats?.vulnsCount ?? 0}</span>
-                </div>
-
-                <div className="project-domain-list mono-subtle">{project.rootDomains.join("  |  ")}</div>
-
-                {isEditing ? (
-                  <form className="edit-project-form" onSubmit={submitEdit}>
-                    <label>
-                      Project Name
-                      <input value={editName} onChange={(event) => setEditName(event.target.value)} placeholder="Workspace name" />
-                    </label>
-                    <label>
-                      Description
-                      <input
-                        value={editDescription}
-                        onChange={(event) => setEditDescription(event.target.value)}
-                        placeholder="Update notes"
-                      />
-                    </label>
-                    <label>
-                      Root Domains
-                      <textarea
-                        rows={4}
-                        value={editDomainsRaw}
-                        onChange={(event) => setEditDomainsRaw(event.target.value)}
-                        placeholder={"example.com\nexample.net"}
-                      />
-                    </label>
-                    <label>
-                      Tags
-                      <input
-                        value={editTagsRaw}
-                        onChange={(event) => setEditTagsRaw(event.target.value)}
-                        placeholder="critical, monitor"
-                      />
-                    </label>
-                    <div className="edit-actions">
-                      <button type="submit" className="btn btn-neon">
-                        Save
-                      </button>
-                      <button type="button" className="btn btn-neutral" onClick={() => setEditProjectId(null)}>
-                        Cancel
-                      </button>
+                  {p.tags.length > 0 && (
+                    <div>
+                      <strong>Tags:</strong>{" "}
+                      {p.tags.map((t) => (
+                        <span key={t} className="badge">{t}</span>
+                      ))}
                     </div>
-                  </form>
-                ) : null}
-              </section>
+                  )}
+                  <div className="project-card-dates">
+                    <span>Created: {formatDate(p.createdAt)}</span>
+                    {p.lastScanAt && <span>Last Scan: {formatDate(p.lastScanAt)}</span>}
+                  </div>
+                </div>
+              </div>
             );
           })}
         </div>

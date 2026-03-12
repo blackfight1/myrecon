@@ -8,27 +8,21 @@ import { matchesProjectDomain } from "../lib/projectScope";
 import type { Asset } from "../types/models";
 import { formatDate, joinList } from "../lib/format";
 
-const helper = createColumnHelper<Asset>();
+const col = createColumnHelper<Asset>();
 
 const columns = [
-  helper.accessor("domain", { header: "Domain" }),
-  helper.accessor("url", { header: "URL", cell: (ctx) => ctx.getValue() || "-" }),
-  helper.accessor("ip", { header: "IP", cell: (ctx) => ctx.getValue() || "-" }),
-  helper.accessor("statusCode", { header: "Status", cell: (ctx) => ctx.getValue() ?? "-" }),
-  helper.accessor("title", { header: "Title", cell: (ctx) => ctx.getValue() || "-" }),
-  helper.accessor("technologies", { header: "Technologies", cell: (ctx) => joinList(ctx.getValue(), " | ") }),
-  helper.accessor("lastSeen", { header: "Last Seen", cell: (ctx) => formatDate(ctx.getValue()) })
+  col.accessor("domain", { header: "Domain" }),
+  col.accessor("url", { header: "URL", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("ip", { header: "IP", cell: (c) => c.getValue() ? <span className="cell-mono">{c.getValue()}</span> : <span className="cell-muted">—</span> }),
+  col.accessor("statusCode", { header: "Status", cell: (c) => { const v = c.getValue(); if (!v) return <span className="cell-muted">—</span>; const cls = v >= 200 && v < 300 ? "badge badge-success" : v >= 400 ? "badge badge-danger" : "badge badge-warning"; return <span className={cls}>{v}</span>; } }),
+  col.accessor("title", { header: "Title", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("technologies", { header: "Tech Stack", cell: (c) => joinList(c.getValue(), " · ") || <span className="cell-muted">—</span> }),
+  col.accessor("lastSeen", { header: "Last Seen", cell: (c) => formatDate(c.getValue()) })
 ];
 
 function hostnameFromUrl(input?: string): string | undefined {
-  if (!input) {
-    return undefined;
-  }
-  try {
-    return new URL(input).hostname;
-  } catch {
-    return undefined;
-  }
+  if (!input) return undefined;
+  try { return new URL(input).hostname; } catch { return undefined; }
 }
 
 export function AssetsPage() {
@@ -39,70 +33,63 @@ export function AssetsPage() {
   const [liveOnly, setLiveOnly] = useState(false);
 
   const scoped = useMemo(() => {
-    return (data ?? []).filter((asset) => {
-      return matchesProjectDomain(asset.domain, rootDomains) || matchesProjectDomain(hostnameFromUrl(asset.url), rootDomains);
-    });
+    return (data ?? []).filter((a) =>
+      matchesProjectDomain(a.domain, rootDomains) || matchesProjectDomain(hostnameFromUrl(a.url), rootDomains)
+    );
   }, [data, rootDomains]);
 
   const rows = useMemo(() => {
-    return scoped.filter((asset) => {
-      if (liveOnly && (!asset.statusCode || asset.statusCode <= 0)) {
-        return false;
-      }
-      if (!search.trim()) {
-        return true;
-      }
+    return scoped.filter((a) => {
+      if (liveOnly && (!a.statusCode || a.statusCode <= 0)) return false;
+      if (!search.trim()) return true;
       const q = search.trim().toLowerCase();
       return (
-        asset.domain.toLowerCase().includes(q) ||
-        (asset.url ?? "").toLowerCase().includes(q) ||
-        (asset.ip ?? "").toLowerCase().includes(q) ||
-        (asset.title ?? "").toLowerCase().includes(q) ||
-        (asset.technologies ?? []).join(",").toLowerCase().includes(q)
+        a.domain.toLowerCase().includes(q) || (a.url ?? "").toLowerCase().includes(q) ||
+        (a.ip ?? "").toLowerCase().includes(q) || (a.title ?? "").toLowerCase().includes(q) ||
+        (a.technologies ?? []).join(",").toLowerCase().includes(q)
       );
     });
   }, [scoped, liveOnly, search]);
 
-  const liveCount = useMemo(
-    () => scoped.filter((asset) => asset.statusCode != null && asset.statusCode > 0).length,
-    [scoped]
-  );
+  const liveCount = useMemo(() => scoped.filter((a) => a.statusCode != null && a.statusCode > 0).length, [scoped]);
 
   return (
     <section className="page">
-      <h1>Asset Surface</h1>
-      <p className="page-subtitle">Project-scoped web asset inventory with response and stack details.</p>
+      <div className="page-header">
+        <h1 className="page-title">Assets</h1>
+        <p className="page-desc">Project-scoped web asset inventory with response status and technology stack details.</p>
+      </div>
 
-      <ProjectScopeBanner title="Asset Scope" hint="Asset table is filtered by root domain suffix matching." />
+      <ProjectScopeBanner title="Asset Scope" hint="Filtered by root domain suffix matching." />
 
-      <article className="panel control-panel">
+      <article className="panel">
         <header className="panel-header">
-          <h2>Asset Filters</h2>
-          <span>
-            live: {liveCount} / total: {scoped.length}
-          </span>
+          <h2>Filters</h2>
+          <span className="panel-meta">live: {liveCount} / total: {scoped.length}</span>
         </header>
-        <div className="filters-row">
+        <div className="filter-bar">
           <input
+            className="form-input"
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search domain, URL, IP, title, technology..."
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search domain, URL, IP, title, tech..."
           />
-          <label className="checkbox">
-            <input type="checkbox" checked={liveOnly} onChange={(event) => setLiveOnly(event.target.checked)} />
+          <label className="form-check">
+            <input type="checkbox" checked={liveOnly} onChange={(e) => setLiveOnly(e.target.checked)} />
             Live only
           </label>
+          <span className="filter-summary">{rows.length} matched</span>
         </div>
       </article>
 
       <article className="panel">
         <header className="panel-header">
           <h2>Asset Inventory</h2>
-          <span>{rows.length} records matched</span>
+          <span className="panel-meta">{rows.length} records</span>
         </header>
-        {isLoading ? <p className="empty-state">Loading assets...</p> : null}
-        {error ? <p className="empty-state">Failed to load assets.</p> : null}
-        {!isLoading && !error ? <DataTable data={rows} columns={columns} /> : null}
+        {isLoading && <div className="empty-state">Loading assets...</div>}
+        {error && <div className="empty-state">Failed to load assets.</div>}
+        {!isLoading && !error && <DataTable data={rows} columns={columns} />}
       </article>
     </section>
   );

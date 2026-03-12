@@ -5,98 +5,97 @@ import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useWorkspace } from "../context/WorkspaceContext";
 import { useMonitorChanges, useMonitorRuns, useMonitorTargets } from "../hooks/queries";
-import { formatDate, formatDurationSec } from "../lib/format";
+import { formatDate } from "../lib/format";
 import { matchesProjectDomain } from "../lib/projectScope";
 import type { MonitorChange, MonitorRun, MonitorTarget } from "../types/models";
 
-const targetHelper = createColumnHelper<MonitorTarget>();
-const runHelper = createColumnHelper<MonitorRun>();
-const changeHelper = createColumnHelper<MonitorChange>();
-
+/* ---------- Monitor Targets table ---------- */
+const tCol = createColumnHelper<MonitorTarget>();
 const targetColumns = [
-  targetHelper.accessor("rootDomain", { header: "Root Domain" }),
-  targetHelper.accessor("enabled", { header: "Enabled", cell: (ctx) => (ctx.getValue() ? "yes" : "no") }),
-  targetHelper.accessor("baselineDone", { header: "Baseline", cell: (ctx) => (ctx.getValue() ? "ready" : "pending") }),
-  targetHelper.accessor("lastRunAt", { header: "Last Run", cell: (ctx) => formatDate(ctx.getValue()) })
+  tCol.accessor("rootDomain", { header: "Root Domain" }),
+  tCol.accessor("enabled", { header: "Enabled", cell: (c) => c.getValue() ? <span className="badge badge-success">ON</span> : <span className="badge badge-danger">OFF</span> }),
+  tCol.accessor("baselineDone", { header: "Baseline", cell: (c) => c.getValue() ? "✓" : "—" }),
+  tCol.accessor("lastRunAt", { header: "Last Run", cell: (c) => formatDate(c.getValue()) }),
+  tCol.accessor("updatedAt", { header: "Updated", cell: (c) => formatDate(c.getValue()) })
 ];
 
+/* ---------- Monitor Runs table ---------- */
+const rCol = createColumnHelper<MonitorRun>();
 const runColumns = [
-  runHelper.accessor("rootDomain", { header: "Root Domain" }),
-  runHelper.accessor("status", { header: "Status", cell: (ctx) => <StatusBadge status={ctx.getValue()} /> }),
-  runHelper.accessor("newLiveCount", { header: "New Live" }),
-  runHelper.accessor("webChanged", { header: "Web Changed" }),
-  runHelper.accessor("portOpened", { header: "Port Opened" }),
-  runHelper.accessor("portClosed", { header: "Port Closed" }),
-  runHelper.accessor("serviceChange", { header: "Service Changed" }),
-  runHelper.accessor("durationSec", { header: "Duration", cell: (ctx) => formatDurationSec(ctx.getValue()) }),
-  runHelper.accessor("startedAt", { header: "Started At", cell: (ctx) => formatDate(ctx.getValue()) })
+  rCol.accessor("id", { header: "ID" }),
+  rCol.accessor("rootDomain", { header: "Root Domain" }),
+  rCol.accessor("status", { header: "Status", cell: (c) => <StatusBadge status={c.getValue()} /> }),
+  rCol.accessor("startedAt", { header: "Started", cell: (c) => formatDate(c.getValue()) }),
+  rCol.accessor("durationSec", { header: "Duration", cell: (c) => `${c.getValue()}s` }),
+  rCol.accessor("newLiveCount", { header: "New Live" }),
+  rCol.accessor("webChanged", { header: "Web Δ" }),
+  rCol.accessor("portOpened", { header: "Port +" }),
+  rCol.accessor("portClosed", { header: "Port −" }),
+  rCol.accessor("serviceChange", { header: "Svc Δ" }),
+  rCol.accessor("errorMessage", { header: "Error", cell: (c) => c.getValue() || <span className="cell-muted">—</span> })
 ];
 
+/* ---------- Monitor Changes table ---------- */
+const cCol = createColumnHelper<MonitorChange>();
 const changeColumns = [
-  changeHelper.accessor("rootDomain", { header: "Root Domain" }),
-  changeHelper.accessor("changeType", { header: "Type" }),
-  changeHelper.accessor("domain", { header: "Domain", cell: (ctx) => ctx.getValue() || "-" }),
-  changeHelper.accessor("ip", { header: "IP", cell: (ctx) => ctx.getValue() || "-" }),
-  changeHelper.accessor("port", { header: "Port", cell: (ctx) => ctx.getValue() ?? "-" }),
-  changeHelper.accessor("createdAt", { header: "Created At", cell: (ctx) => formatDate(ctx.getValue()) })
+  cCol.accessor("runId", { header: "Run" }),
+  cCol.accessor("rootDomain", { header: "Root Domain" }),
+  cCol.accessor("changeType", { header: "Type", cell: (c) => <span className="badge badge-info">{c.getValue()}</span> }),
+  cCol.accessor("domain", { header: "Domain", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  cCol.accessor("ip", { header: "IP", cell: (c) => c.getValue() ? <span className="cell-mono">{c.getValue()}</span> : <span className="cell-muted">—</span> }),
+  cCol.accessor("port", { header: "Port", cell: (c) => c.getValue() ?? <span className="cell-muted">—</span> }),
+  cCol.accessor("statusCode", { header: "Status", cell: (c) => c.getValue() ?? <span className="cell-muted">—</span> }),
+  cCol.accessor("title", { header: "Title", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  cCol.accessor("createdAt", { header: "Time", cell: (c) => formatDate(c.getValue()) })
 ];
 
 export function MonitoringPage() {
   const { activeProject } = useWorkspace();
   const rootDomains = activeProject?.rootDomains ?? [];
 
-  const targets = useMonitorTargets();
-  const runs = useMonitorRuns();
-  const changes = useMonitorChanges();
+  const targetsQ = useMonitorTargets();
+  const runsQ = useMonitorRuns();
+  const changesQ = useMonitorChanges();
 
-  const scopedTargets = useMemo(
-    () => (targets.data ?? []).filter((item) => matchesProjectDomain(item.rootDomain, rootDomains)),
-    [targets.data, rootDomains]
-  );
-  const scopedRuns = useMemo(
-    () => (runs.data ?? []).filter((item) => matchesProjectDomain(item.rootDomain, rootDomains)),
-    [runs.data, rootDomains]
-  );
-  const scopedChanges = useMemo(
-    () => (changes.data ?? []).filter((item) => matchesProjectDomain(item.rootDomain, rootDomains)),
-    [changes.data, rootDomains]
-  );
+  const targets = useMemo(() => (targetsQ.data ?? []).filter((t) => matchesProjectDomain(t.rootDomain, rootDomains)), [targetsQ.data, rootDomains]);
+  const runs = useMemo(() => (runsQ.data ?? []).filter((r) => matchesProjectDomain(r.rootDomain, rootDomains)), [runsQ.data, rootDomains]);
+  const changes = useMemo(() => (changesQ.data ?? []).filter((c) => matchesProjectDomain(c.rootDomain, rootDomains)), [changesQ.data, rootDomains]);
+
+  const loading = targetsQ.isLoading || runsQ.isLoading || changesQ.isLoading;
 
   return (
     <section className="page">
-      <h1>Monitoring</h1>
-      <p className="page-subtitle">Project-scoped monitor targets, run history, and change events.</p>
+      <div className="page-header">
+        <h1 className="page-title">Monitoring</h1>
+        <p className="page-desc">Drift detection system — tracks new hosts, port changes, service mutations and web content shifts.</p>
+      </div>
 
-      <ProjectScopeBanner
-        title="Monitoring Scope"
-        hint="Rows are scoped by monitor root_domain so alerts align with one workspace at a time."
-      />
+      <ProjectScopeBanner title="Monitor Scope" hint="Targets, runs and change events filtered by project root domains." />
+
+      {loading && <div className="empty-state">Loading monitoring data...</div>}
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Targets</h2>
-          <span>{scopedTargets.length} records</span>
+          <h2>Monitor Targets</h2>
+          <span className="panel-meta">{targets.length} targets</span>
         </header>
-        {targets.isError ? <p className="empty-state">Failed to load monitor targets.</p> : null}
-        {!targets.isError ? <DataTable data={scopedTargets} columns={targetColumns} /> : null}
+        <DataTable data={targets} columns={targetColumns} />
       </article>
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Runs</h2>
-          <span>{scopedRuns.length} records</span>
+          <h2>Recent Runs</h2>
+          <span className="panel-meta">{runs.length} runs</span>
         </header>
-        {runs.isError ? <p className="empty-state">Failed to load monitor runs.</p> : null}
-        {!runs.isError ? <DataTable data={scopedRuns} columns={runColumns} /> : null}
+        <DataTable data={runs} columns={runColumns} />
       </article>
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Recent Changes</h2>
-          <span>{scopedChanges.length} records</span>
+          <h2>Change Events</h2>
+          <span className="panel-meta">{changes.length} events</span>
         </header>
-        {changes.isError ? <p className="empty-state">Failed to load monitor changes.</p> : null}
-        {!changes.isError ? <DataTable data={scopedChanges} columns={changeColumns} /> : null}
+        <DataTable data={changes} columns={changeColumns} />
       </article>
     </section>
   );

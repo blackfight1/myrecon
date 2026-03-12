@@ -1,17 +1,17 @@
-import type { ReactNode } from "react";
-
-interface Props {
+interface StatCardProps {
   label: string;
-  value: ReactNode;
+  value: number | string;
   hint?: string;
+  accent?: "blue" | "success" | "warning" | "danger";
 }
 
-export function StatCard({ label, value, hint }: Props) {
+export function StatCard({ label, value, hint, accent }: StatCardProps) {
+  const cls = accent ? `stat-card accent-${accent}` : "stat-card";
   return (
-    <article className="stat-card">
-      <span className="stat-label">{label}</span>
-      <strong className="stat-value">{value}</strong>
-      {hint ? <span className="stat-hint">{hint}</span> : null}
-    </article>
+    <div className={cls}>
+      <div className="stat-label">{label}</div>
+      <div className="stat-value">{value}</div>
+      {hint && <div className="stat-change neutral">{hint}</div>}
+    </div>
   );
 }
