@@ -3,7 +3,7 @@ import { useWorkspace } from "../context/WorkspaceContext";
 import { formatDate } from "../lib/format";
 
 export function ProjectsPage() {
-  const { projects, activeProject, setActiveProject, createProject, updateProject, deleteProject } = useWorkspace();
+  const { projects, activeProject, setActiveProject, createProject, deleteProject } = useWorkspace();
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
