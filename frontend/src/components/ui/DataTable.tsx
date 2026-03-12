@@ -10,7 +10,7 @@ import { useState } from "react";
 
 interface Props<T extends object> {
   data: T[];
-  columns: Array<ColumnDef<T>>;
+  columns: Array<ColumnDef<T, any>>;
 }
 
 export function DataTable<T extends object>({ data, columns }: Props<T>) {

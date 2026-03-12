@@ -68,6 +68,7 @@ export interface PortRecord {
 
 export interface VulnerabilityRecord {
   id: number;
+  rootDomain?: string;
   domain?: string;
   host?: string;
   url?: string;
