@@ -272,7 +272,7 @@ export function DashboardPage() {
       <article className="panel">
         <header className="panel-header">
           <h2>Flow Map</h2>
-          <span>project -> subs -> dictgen -> brute -> ports -> nuclei -> monitor</span>
+          <span>project -&gt; subs -&gt; dictgen -&gt; brute -&gt; ports -&gt; nuclei -&gt; monitor</span>
         </header>
         <div className="workflow-grid">
           <div className="workflow-item">
