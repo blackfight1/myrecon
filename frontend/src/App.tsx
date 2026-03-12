@@ -7,6 +7,8 @@ import { JobsPage } from "./pages/JobsPage";
 import { MonitoringPage } from "./pages/MonitoringPage";
 import { PortsPage } from "./pages/PortsPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
+import { ScreenshotsPage } from "./pages/ScreenshotsPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 export default function App() {
   return (
@@ -18,7 +20,9 @@ export default function App() {
         <Route path="assets" element={<AssetsPage />} />
         <Route path="ports" element={<PortsPage />} />
         <Route path="findings" element={<FindingsPage />} />
+        <Route path="screenshots" element={<ScreenshotsPage />} />
         <Route path="monitoring" element={<MonitoringPage />} />
+        <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

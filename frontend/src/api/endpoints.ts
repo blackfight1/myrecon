@@ -7,6 +7,10 @@ import type {
   MonitorRun,
   MonitorTarget,
   PortRecord,
+  ScreenshotDomain,
+  ScreenshotItem,
+  SystemSettings,
+  ToolStatus,
   TrendPoint,
   VulnerabilityRecord
 } from "../types/models";
@@ -36,5 +40,15 @@ export const endpoints = {
   getVulns: () => apiGet<VulnerabilityRecord[]>("/vulns"),
   getMonitorTargets: () => apiGet<MonitorTarget[]>("/monitor/targets"),
   getMonitorRuns: () => apiGet<MonitorRun[]>("/monitor/runs"),
-  getMonitorChanges: () => apiGet<MonitorChange[]>("/monitor/changes")
+  getMonitorChanges: () => apiGet<MonitorChange[]>("/monitor/changes"),
+
+  // Screenshots
+  getScreenshotDomains: () => apiGet<ScreenshotDomain[]>("/screenshots/domains"),
+  getScreenshots: (rootDomain: string) => apiGet<ScreenshotItem[]>(`/screenshots/${encodeURIComponent(rootDomain)}`),
+
+  // Settings
+  getSettings: () => apiGet<SystemSettings>("/settings"),
+  updateSettings: (body: Partial<SystemSettings>) => apiPost<Partial<SystemSettings>, SystemSettings>("/settings", body),
+  getToolStatus: () => apiGet<ToolStatus[]>("/settings/tools"),
+  testNotification: () => apiPost<object, { success: boolean; message: string }>("/settings/test-notify", {})
 };

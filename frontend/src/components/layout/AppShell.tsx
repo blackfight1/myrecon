@@ -1,8 +1,10 @@
 ﻿import { NavLink, Outlet } from "react-router-dom";
+import { useTheme } from "../../context/ThemeContext";
 import { useWorkspace } from "../../context/WorkspaceContext";
 
 export function AppShell() {
   const { projects, activeProject, setActiveProject } = useWorkspace();
+  const { theme, themes, setTheme } = useTheme();
 
   return (
     <div className="app-root">
@@ -29,9 +31,21 @@ export function AppShell() {
           </div>
         </div>
         <div className="topbar-right">
+          <div className="theme-switcher">
+            {themes.map((t) => (
+              <button
+                key={t.id}
+                className={`theme-btn${theme === t.id ? " active" : ""}`}
+                data-theme={t.id}
+                title={t.label}
+                onClick={() => setTheme(t.id)}
+              />
+            ))}
+          </div>
+          <div className="topbar-divider" />
           <div className="topbar-status">
             <span className="status-dot" />
-            <span>Polling Active</span>
+            <span>Online</span>
           </div>
         </div>
       </header>
@@ -56,6 +70,9 @@ export function AppShell() {
             <NavLink to="/findings" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
               <span className="nav-icon">⚑</span> Findings
             </NavLink>
+            <NavLink to="/screenshots" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+              <span className="nav-icon">⎔</span> Screenshots
+            </NavLink>
 
             <div className="nav-section-title">Operations</div>
             <NavLink to="/jobs" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
@@ -68,6 +85,9 @@ export function AppShell() {
             <div className="nav-section-title">Settings</div>
             <NavLink to="/projects" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
               <span className="nav-icon">⊟</span> Projects
+            </NavLink>
+            <NavLink to="/settings" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+              <span className="nav-icon">⚙</span> Settings
             </NavLink>
           </nav>
 

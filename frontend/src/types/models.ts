@@ -133,3 +133,55 @@ export interface ProjectRecord {
   updatedAt: string;
   lastScanAt?: string;
 }
+
+/* ── Screenshots ── */
+export interface ScreenshotDomain {
+  rootDomain: string;
+  screenshotCount: number;
+  screenshotDir: string;
+  databasePath: string;
+}
+
+export interface ScreenshotItem {
+  id: number;
+  url: string;
+  filename: string;
+  title?: string;
+  statusCode?: number;
+  rootDomain: string;
+  thumbnailUrl: string;
+  fullUrl: string;
+  createdAt?: string;
+}
+
+/* ── Settings ── */
+export interface SystemSettings {
+  database: {
+    host: string;
+    port: number;
+    user: string;
+    dbname: string;
+    sslmode: string;
+    connected: boolean;
+  };
+  notifications: {
+    dingtalkWebhook: string;
+    dingtalkSecret: string;
+    enabled: boolean;
+  };
+  scanner: {
+    screenshotDir: string;
+    dnsResolvers: string;
+    defaultDictSize: number;
+    defaultActiveSubs: boolean;
+    defaultNuclei: boolean;
+  };
+  tools: ToolStatus[];
+}
+
+export interface ToolStatus {
+  name: string;
+  installed: boolean;
+  version?: string;
+  path?: string;
+}
