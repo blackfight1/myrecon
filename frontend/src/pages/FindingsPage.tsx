@@ -1,9 +1,12 @@
-import { createColumnHelper } from "@tanstack/react-table";
+﻿import { createColumnHelper } from "@tanstack/react-table";
 import { useMemo, useState } from "react";
 import { DataTable } from "../components/ui/DataTable";
+import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
+import { useWorkspace } from "../context/WorkspaceContext";
 import { useVulns } from "../hooks/queries";
-import type { VulnerabilityRecord } from "../types/models";
 import { formatDate } from "../lib/format";
+import { matchesProjectDomain } from "../lib/projectScope";
+import type { VulnerabilityRecord } from "../types/models";
 
 const helper = createColumnHelper<VulnerabilityRecord>();
 
@@ -24,14 +27,37 @@ const columns = [
   helper.accessor("fingerprint", { header: "Fingerprint" })
 ];
 
+function hostnameFromUrl(input?: string): string | undefined {
+  if (!input) {
+    return undefined;
+  }
+  try {
+    return new URL(input).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
 export function FindingsPage() {
+  const { activeProject } = useWorkspace();
+  const rootDomains = activeProject?.rootDomains ?? [];
   const { data, isLoading, error } = useVulns();
   const [severity, setSeverity] = useState("all");
   const [search, setSearch] = useState("");
 
+  const scoped = useMemo(() => {
+    return (data ?? []).filter((item) => {
+      return (
+        matchesProjectDomain(item.rootDomain, rootDomains) ||
+        matchesProjectDomain(item.domain, rootDomains) ||
+        matchesProjectDomain(item.host, rootDomains) ||
+        matchesProjectDomain(hostnameFromUrl(item.url), rootDomains)
+      );
+    });
+  }, [data, rootDomains]);
+
   const rows = useMemo(() => {
-    const list = data ?? [];
-    return list.filter((finding) => {
+    return scoped.filter((finding) => {
       const findingSeverity = (finding.severity ?? "unknown").toLowerCase();
       if (severity !== "all" && findingSeverity !== severity) {
         return false;
@@ -49,11 +75,11 @@ export function FindingsPage() {
         finding.fingerprint.toLowerCase().includes(q)
       );
     });
-  }, [data, search, severity]);
+  }, [scoped, search, severity]);
 
   const severityCounts = useMemo(() => {
     const output = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
-    for (const finding of data ?? []) {
+    for (const finding of scoped) {
       const key = (finding.severity ?? "unknown").toLowerCase();
       if (key === "critical" || key === "high" || key === "medium" || key === "low") {
         output[key] += 1;
@@ -62,12 +88,18 @@ export function FindingsPage() {
       }
     }
     return output;
-  }, [data]);
+  }, [scoped]);
 
   return (
     <section className="page">
       <h1>Findings</h1>
-      <p className="page-subtitle">Nuclei findings deduplicated by fingerprint and grouped by root domain.</p>
+      <p className="page-subtitle">Project-aware nuclei triage with severity and fingerprint search.</p>
+
+      <ProjectScopeBanner
+        title="Findings Scope"
+        hint="Vulnerabilities are matched by root_domain first, then fallback to host/domain/url suffix."
+      />
+
       <article className="panel control-panel">
         <header className="panel-header">
           <h2>Triage Controls</h2>
@@ -92,6 +124,7 @@ export function FindingsPage() {
           />
         </div>
       </article>
+
       <article className="panel">
         <header className="panel-header">
           <h2>Vulnerability Candidates</h2>

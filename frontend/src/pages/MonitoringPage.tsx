@@ -1,9 +1,13 @@
-import { createColumnHelper } from "@tanstack/react-table";
+﻿import { createColumnHelper } from "@tanstack/react-table";
+import { useMemo } from "react";
 import { DataTable } from "../components/ui/DataTable";
+import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { useWorkspace } from "../context/WorkspaceContext";
 import { useMonitorChanges, useMonitorRuns, useMonitorTargets } from "../hooks/queries";
-import type { MonitorChange, MonitorRun, MonitorTarget } from "../types/models";
 import { formatDate, formatDurationSec } from "../lib/format";
+import { matchesProjectDomain } from "../lib/projectScope";
+import type { MonitorChange, MonitorRun, MonitorTarget } from "../types/models";
 
 const targetHelper = createColumnHelper<MonitorTarget>();
 const runHelper = createColumnHelper<MonitorRun>();
@@ -38,40 +42,61 @@ const changeColumns = [
 ];
 
 export function MonitoringPage() {
+  const { activeProject } = useWorkspace();
+  const rootDomains = activeProject?.rootDomains ?? [];
+
   const targets = useMonitorTargets();
   const runs = useMonitorRuns();
   const changes = useMonitorChanges();
 
+  const scopedTargets = useMemo(
+    () => (targets.data ?? []).filter((item) => matchesProjectDomain(item.rootDomain, rootDomains)),
+    [targets.data, rootDomains]
+  );
+  const scopedRuns = useMemo(
+    () => (runs.data ?? []).filter((item) => matchesProjectDomain(item.rootDomain, rootDomains)),
+    [runs.data, rootDomains]
+  );
+  const scopedChanges = useMemo(
+    () => (changes.data ?? []).filter((item) => matchesProjectDomain(item.rootDomain, rootDomains)),
+    [changes.data, rootDomains]
+  );
+
   return (
     <section className="page">
       <h1>Monitoring</h1>
-      <p className="page-subtitle">Tracks monitor_targets, monitor_runs, and change events with debounce-aware signals.</p>
+      <p className="page-subtitle">Project-scoped monitor targets, run history, and change events.</p>
+
+      <ProjectScopeBanner
+        title="Monitoring Scope"
+        hint="Rows are scoped by monitor root_domain so alerts align with one workspace at a time."
+      />
 
       <article className="panel">
         <header className="panel-header">
           <h2>Targets</h2>
-          <span>{targets.data?.length ?? 0} records</span>
+          <span>{scopedTargets.length} records</span>
         </header>
         {targets.isError ? <p className="empty-state">Failed to load monitor targets.</p> : null}
-        {!targets.isError ? <DataTable data={targets.data ?? []} columns={targetColumns} /> : null}
+        {!targets.isError ? <DataTable data={scopedTargets} columns={targetColumns} /> : null}
       </article>
 
       <article className="panel">
         <header className="panel-header">
           <h2>Runs</h2>
-          <span>{runs.data?.length ?? 0} records</span>
+          <span>{scopedRuns.length} records</span>
         </header>
         {runs.isError ? <p className="empty-state">Failed to load monitor runs.</p> : null}
-        {!runs.isError ? <DataTable data={runs.data ?? []} columns={runColumns} /> : null}
+        {!runs.isError ? <DataTable data={scopedRuns} columns={runColumns} /> : null}
       </article>
 
       <article className="panel">
         <header className="panel-header">
           <h2>Recent Changes</h2>
-          <span>{changes.data?.length ?? 0} records</span>
+          <span>{scopedChanges.length} records</span>
         </header>
         {changes.isError ? <p className="empty-state">Failed to load monitor changes.</p> : null}
-        {!changes.isError ? <DataTable data={changes.data ?? []} columns={changeColumns} /> : null}
+        {!changes.isError ? <DataTable data={scopedChanges} columns={changeColumns} /> : null}
       </article>
     </section>
   );

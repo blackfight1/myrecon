@@ -1,7 +1,10 @@
-import { createColumnHelper } from "@tanstack/react-table";
+﻿import { createColumnHelper } from "@tanstack/react-table";
 import { useMemo, useState } from "react";
 import { DataTable } from "../components/ui/DataTable";
+import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
+import { useWorkspace } from "../context/WorkspaceContext";
 import { useAssets } from "../hooks/queries";
+import { matchesProjectDomain } from "../lib/projectScope";
 import type { Asset } from "../types/models";
 import { formatDate, joinList } from "../lib/format";
 
@@ -17,14 +20,32 @@ const columns = [
   helper.accessor("lastSeen", { header: "Last Seen", cell: (ctx) => formatDate(ctx.getValue()) })
 ];
 
+function hostnameFromUrl(input?: string): string | undefined {
+  if (!input) {
+    return undefined;
+  }
+  try {
+    return new URL(input).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
 export function AssetsPage() {
+  const { activeProject } = useWorkspace();
+  const rootDomains = activeProject?.rootDomains ?? [];
   const { data, isLoading, error } = useAssets();
   const [search, setSearch] = useState("");
   const [liveOnly, setLiveOnly] = useState(false);
 
+  const scoped = useMemo(() => {
+    return (data ?? []).filter((asset) => {
+      return matchesProjectDomain(asset.domain, rootDomains) || matchesProjectDomain(hostnameFromUrl(asset.url), rootDomains);
+    });
+  }, [data, rootDomains]);
+
   const rows = useMemo(() => {
-    const list = data ?? [];
-    return list.filter((asset) => {
+    return scoped.filter((asset) => {
       if (liveOnly && (!asset.statusCode || asset.statusCode <= 0)) {
         return false;
       }
@@ -40,22 +61,25 @@ export function AssetsPage() {
         (asset.technologies ?? []).join(",").toLowerCase().includes(q)
       );
     });
-  }, [data, liveOnly, search]);
+  }, [scoped, liveOnly, search]);
 
   const liveCount = useMemo(
-    () => (data ?? []).filter((asset) => asset.statusCode != null && asset.statusCode > 0).length,
-    [data]
+    () => scoped.filter((asset) => asset.statusCode != null && asset.statusCode > 0).length,
+    [scoped]
   );
 
   return (
     <section className="page">
       <h1>Asset Surface</h1>
-      <p className="page-subtitle">Inventory of discovered web assets with title, stack fingerprint, and live status.</p>
+      <p className="page-subtitle">Project-scoped web asset inventory with response and stack details.</p>
+
+      <ProjectScopeBanner title="Asset Scope" hint="Asset table is filtered by root domain suffix matching." />
+
       <article className="panel control-panel">
         <header className="panel-header">
           <h2>Asset Filters</h2>
           <span>
-            live: {liveCount} / total: {data?.length ?? 0}
+            live: {liveCount} / total: {scoped.length}
           </span>
         </header>
         <div className="filters-row">
@@ -70,6 +94,7 @@ export function AssetsPage() {
           </label>
         </div>
       </article>
+
       <article className="panel">
         <header className="panel-header">
           <h2>Asset Inventory</h2>

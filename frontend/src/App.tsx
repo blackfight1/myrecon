@@ -6,12 +6,14 @@ import { FindingsPage } from "./pages/FindingsPage";
 import { JobsPage } from "./pages/JobsPage";
 import { MonitoringPage } from "./pages/MonitoringPage";
 import { PortsPage } from "./pages/PortsPage";
+import { ProjectsPage } from "./pages/ProjectsPage";
 
 export default function App() {
   return (
     <Routes>
       <Route path="/" element={<AppShell />}>
         <Route index element={<DashboardPage />} />
+        <Route path="projects" element={<ProjectsPage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="assets" element={<AssetsPage />} />
         <Route path="ports" element={<PortsPage />} />

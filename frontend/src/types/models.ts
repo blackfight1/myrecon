@@ -121,3 +121,15 @@ export interface MonitorChange {
   title?: string;
   createdAt?: string;
 }
+
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  description?: string;
+  rootDomains: string[];
+  tags: string[];
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastScanAt?: string;
+}
