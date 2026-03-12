@@ -14,7 +14,8 @@ interface WorkspaceState {
     rootDomainsRaw: string;
     tagsRaw?: string;
   }) => ProjectRecord;
-  updateProject: (id: string, patch: { description?: string; rootDomainsRaw?: string; tagsRaw?: string; active?: boolean }) => void;
+  updateProject: (id: string, patch: { name?: string; description?: string; rootDomainsRaw?: string; tagsRaw?: string; active?: boolean }) => void;
+  deleteProject: (id: string) => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceState | null>(null);
@@ -125,6 +126,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         switched = Boolean(patch.active);
         return {
           ...item,
+          name: patch.name != null ? patch.name.trim() || item.name : item.name,
           description: patch.description ?? item.description,
           rootDomains: patch.rootDomainsRaw != null ? parseDomainList(patch.rootDomainsRaw) : item.rootDomains,
           tags: patch.tagsRaw != null ? parseTags(patch.tagsRaw) : item.tags,
@@ -137,6 +139,27 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (switched) {
         setActiveProjectId(id);
       }
+      return next;
+    });
+  };
+
+  const deleteProject: WorkspaceState["deleteProject"] = (id) => {
+    setProjects((prev) => {
+      if (prev.length <= 1) {
+        return prev;
+      }
+
+      const nextRaw = prev.filter((item) => item.id !== id);
+      if (nextRaw.length === prev.length) {
+        return prev;
+      }
+
+      const fallbackActiveId =
+        activeProjectId === id ? nextRaw[0]?.id ?? "" : nextRaw.find((item) => item.id === activeProjectId)?.id ?? nextRaw[0]?.id ?? "";
+      const next = nextRaw.map((item) => ({ ...item, active: item.id === fallbackActiveId }));
+
+      setActiveProjectId(fallbackActiveId);
+      saveProjects(next);
       return next;
     });
   };
@@ -156,7 +179,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<WorkspaceState>(
-    () => ({ projects, activeProject, setActiveProject, createProject, updateProject }),
+    () => ({ projects, activeProject, setActiveProject, createProject, updateProject, deleteProject }),
     [projects, activeProject]
   );
 

@@ -110,7 +110,7 @@ export function JobsPage() {
           <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
           Dry run
         </label>
-        <button type="submit" disabled={createJob.isPending || rootDomains.length === 0}>
+        <button type="submit" className="btn btn-neon btn-pill" disabled={createJob.isPending || rootDomains.length === 0}>
           {createJob.isPending ? "Creating..." : "Create Job"}
         </button>
       </form>

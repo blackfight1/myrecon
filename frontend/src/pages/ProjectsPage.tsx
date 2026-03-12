@@ -12,7 +12,7 @@ function includesRoot(value: string | undefined, roots: string[]): boolean {
 }
 
 export function ProjectsPage() {
-  const { projects, activeProject, setActiveProject, createProject, updateProject } = useWorkspace();
+  const { projects, activeProject, setActiveProject, createProject, updateProject, deleteProject } = useWorkspace();
   const jobs = useJobs();
   const assets = useAssets();
   const vulns = useVulns();
@@ -23,6 +23,7 @@ export function ProjectsPage() {
   const [tagsRaw, setTagsRaw] = useState("");
 
   const [editProjectId, setEditProjectId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editDomainsRaw, setEditDomainsRaw] = useState("");
   const [editTagsRaw, setEditTagsRaw] = useState("");
@@ -75,6 +76,7 @@ export function ProjectsPage() {
       return;
     }
     setEditProjectId(projectId);
+    setEditName(item.name);
     setEditDescription(item.description ?? "");
     setEditDomainsRaw(item.rootDomains.join("\n"));
     setEditTagsRaw(item.tags.join(", "));
@@ -85,16 +87,34 @@ export function ProjectsPage() {
     if (!editProjectId) {
       return;
     }
+    if (!editName.trim()) {
+      return;
+    }
     if (parseDomainList(editDomainsRaw).length === 0) {
       return;
     }
 
     updateProject(editProjectId, {
+      name: editName,
       description: editDescription,
       rootDomainsRaw: editDomainsRaw,
       tagsRaw: editTagsRaw
     });
     setEditProjectId(null);
+  };
+
+  const onDelete = (projectId: string, projectName: string) => {
+    if (projects.length <= 1) {
+      return;
+    }
+    const confirmed = window.confirm(`Delete project "${projectName}"? This only removes local workspace data.`);
+    if (!confirmed) {
+      return;
+    }
+    if (editProjectId === projectId) {
+      setEditProjectId(null);
+    }
+    deleteProject(projectId);
   };
 
   return (
@@ -141,7 +161,9 @@ export function ProjectsPage() {
                 rows={5}
               />
             </label>
-            <button type="submit">Create Project</button>
+            <button type="submit" className="btn btn-neon btn-pill">
+              Create Project
+            </button>
           </form>
         </article>
 
@@ -187,11 +209,20 @@ export function ProjectsPage() {
                     <p>{project.description || "No description."}</p>
                   </div>
                   <div className="project-card-actions">
-                    <button type="button" onClick={() => setActiveProject(project.id)}>
+                    <button type="button" className="btn btn-ghost" onClick={() => setActiveProject(project.id)}>
                       {project.id === activeProject?.id ? "In Use" : "Switch"}
                     </button>
-                    <button type="button" onClick={() => openEdit(project.id)}>
+                    <button type="button" className="btn btn-ghost" onClick={() => openEdit(project.id)}>
                       Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      onClick={() => onDelete(project.id, project.name)}
+                      disabled={projects.length <= 1}
+                      title={projects.length <= 1 ? "At least one project must remain." : "Delete this project"}
+                    >
+                      Delete
                     </button>
                   </div>
                 </div>
@@ -207,6 +238,10 @@ export function ProjectsPage() {
 
                 {isEditing ? (
                   <form className="edit-project-form" onSubmit={submitEdit}>
+                    <label>
+                      Project Name
+                      <input value={editName} onChange={(event) => setEditName(event.target.value)} placeholder="Workspace name" />
+                    </label>
                     <label>
                       Description
                       <input
@@ -233,8 +268,10 @@ export function ProjectsPage() {
                       />
                     </label>
                     <div className="edit-actions">
-                      <button type="submit">Save</button>
-                      <button type="button" onClick={() => setEditProjectId(null)}>
+                      <button type="submit" className="btn btn-neon">
+                        Save
+                      </button>
+                      <button type="button" className="btn btn-neutral" onClick={() => setEditProjectId(null)}>
                         Cancel
                       </button>
                     </div>

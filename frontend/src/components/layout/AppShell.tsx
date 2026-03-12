@@ -11,6 +11,15 @@ const navItems = [
   { to: "/monitoring", label: "Monitoring", code: "MON" }
 ];
 
+const flowNodes = [
+  { id: "passive", label: "Passive Subs" },
+  { id: "dictgen", label: "DictGen" },
+  { id: "active", label: "Active Brute" },
+  { id: "ports", label: "Ports/Service" },
+  { id: "nuclei", label: "Nuclei", danger: true },
+  { id: "monitor", label: "Monitor" }
+];
+
 export function AppShell() {
   const { projects, activeProject, setActiveProject } = useWorkspace();
 
@@ -48,18 +57,16 @@ export function AppShell() {
           Project-scoped recon workflow: passive subdomain collection, optional active expansion, service mapping,
           vulnerability triage, and monitor delta tracking.
         </p>
-        <div className="pipeline-strip">
-          <span className="pipeline-chip">passive subs</span>
-          <span className="pipeline-sep">-&gt;</span>
-          <span className="pipeline-chip">dictgen</span>
-          <span className="pipeline-sep">-&gt;</span>
-          <span className="pipeline-chip">active brute</span>
-          <span className="pipeline-sep">-&gt;</span>
-          <span className="pipeline-chip">ports/services</span>
-          <span className="pipeline-sep">-&gt;</span>
-          <span className="pipeline-chip danger">nuclei</span>
-          <span className="pipeline-sep">-&gt;</span>
-          <span className="pipeline-chip">monitor</span>
+        <div className="pipeline-flow" aria-label="Recon flow stages">
+          {flowNodes.map((node, index) => (
+            <div key={node.id} className="flow-segment">
+              <span className={node.danger ? "flow-node danger" : "flow-node"}>
+                <span className="flow-dot" />
+                <span>{node.label}</span>
+              </span>
+              {index < flowNodes.length - 1 ? <span className="flow-link" /> : null}
+            </div>
+          ))}
         </div>
       </header>
 
