@@ -87,6 +87,7 @@ func (Port) TableName() string {
 type Vulnerability struct {
 	ID           uint           `gorm:"primarykey" json:"id"`
 	AssetID      *uint          `gorm:"index" json:"asset_id"`
+	RootDomain   string         `gorm:"index" json:"root_domain"`
 	Domain       string         `gorm:"index" json:"domain"`
 	Host         string         `gorm:"index" json:"host"`
 	URL          string         `gorm:"type:text" json:"url"`

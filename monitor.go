@@ -163,7 +163,20 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 	}
 
 	if !dryRun {
-		saveResults(database, results)
+		if err := saveResults(database, results); err != nil {
+			errMsg := fmt.Sprintf("monitor database write failed: %v", err)
+			fmt.Printf("[ERROR] %s\n", errMsg)
+			if run != nil {
+				_ = database.CompleteMonitorRun(run.ID, "failed", errMsg, 0, 0, 0, 0, 0)
+			}
+			_ = database.HandleMonitorTaskFailure(task, errMsg)
+			if notifier.Enabled() {
+				if err := notifier.SendReconEnd(false, time.Since(start), map[string]int{}, errMsg); err != nil {
+					fmt.Printf("[WARN] failed to send monitor end notification: %v\n", err)
+				}
+			}
+			return
+		}
 	}
 
 	if run != nil {

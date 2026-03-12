@@ -19,7 +19,6 @@ import (
 type NucleiPlugin struct {
 	excludeProtocolTypes []string
 	excludeTemplateIDs   []string
-	outputFile           string
 }
 
 // NucleiResult is a subset of nuclei JSONL output fields.
@@ -52,7 +51,6 @@ func NewNucleiPlugin() *NucleiPlugin {
 			"missing-sri",
 			"cookies-without-httponly-secure",
 		},
-		outputFile: "result_nuclei",
 	}
 }
 
@@ -71,23 +69,7 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 		return []engine.Result{}, nil
 	}
 
-	var targets []string
-	seen := make(map[string]bool)
-	for _, item := range input {
-		target := strings.TrimSpace(item)
-		if target == "" {
-			continue
-		}
-		if strings.Contains(target, "|") {
-			target = strings.SplitN(target, "|", 2)[0]
-		}
-		if target == "" || seen[target] {
-			continue
-		}
-		seen[target] = true
-		targets = append(targets, target)
-	}
-
+	targets, rootDomainHints := normalizeNucleiTargets(input)
 	if len(targets) == 0 {
 		return []engine.Result{}, nil
 	}
@@ -100,7 +82,16 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 	}
 	defer common.RemoveTempFile(tmpFile)
 
-	_ = os.Remove(n.outputFile)
+	resultFile, err := os.CreateTemp("", "nuclei_result_*.jsonl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create nuclei result file: %v", err)
+	}
+	resultPath := resultFile.Name()
+	if err := resultFile.Close(); err != nil {
+		_ = os.Remove(resultPath)
+		return nil, fmt.Errorf("failed to close nuclei result file: %v", err)
+	}
+	defer os.Remove(resultPath)
 
 	cmd := exec.Command("nuclei",
 		"-l", tmpFile,
@@ -108,7 +99,7 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 		"-silent",
 		"-ept", strings.Join(n.excludeProtocolTypes, ","),
 		"-eid", strings.Join(n.excludeTemplateIDs, ","),
-		"-o", n.outputFile,
+		"-o", resultPath,
 		"-timeout", "10",
 		"-retries", "1",
 	)
@@ -131,7 +122,7 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 		if line == "" {
 			continue
 		}
-		if result, ok := parseNucleiJSONLLine(line); ok {
+		if result, ok := parseNucleiJSONLLine(line, rootDomainHints); ok {
 			results = append(results, result)
 		}
 	}
@@ -142,7 +133,7 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 
 	waitErr := cmd.Wait()
 	if len(results) == 0 {
-		if fileResults, err := parseNucleiResultFile(n.outputFile); err == nil {
+		if fileResults, err := parseNucleiResultFile(resultPath, rootDomainHints); err == nil {
 			results = append(results, fileResults...)
 		}
 	}
@@ -157,7 +148,7 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 	return results, nil
 }
 
-func parseNucleiResultFile(path string) ([]engine.Result, error) {
+func parseNucleiResultFile(path string, rootDomainHints map[string]string) ([]engine.Result, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -172,7 +163,7 @@ func parseNucleiResultFile(path string) ([]engine.Result, error) {
 		if line == "" {
 			continue
 		}
-		if result, ok := parseNucleiJSONLLine(line); ok {
+		if result, ok := parseNucleiJSONLLine(line, rootDomainHints); ok {
 			results = append(results, result)
 		}
 	}
@@ -182,9 +173,12 @@ func parseNucleiResultFile(path string) ([]engine.Result, error) {
 	return results, nil
 }
 
-func parseNucleiJSONLLine(line string) (engine.Result, bool) {
+func parseNucleiJSONLLine(line string, rootDomainHints map[string]string) (engine.Result, bool) {
 	var nResult NucleiResult
 	if err := json.Unmarshal([]byte(line), &nResult); err != nil {
+		return engine.Result{}, false
+	}
+	if strings.TrimSpace(nResult.TemplateID) == "" || strings.TrimSpace(nResult.MatchedAt) == "" {
 		return engine.Result{}, false
 	}
 
@@ -192,6 +186,7 @@ func parseNucleiJSONLLine(line string) (engine.Result, bool) {
 	if domain == "" {
 		domain = extractDomainFromTarget(nResult.Host)
 	}
+	rootDomain := lookupRootDomain(nResult, domain, rootDomainHints)
 
 	references := ""
 	if len(nResult.Info.Reference) > 0 {
@@ -209,6 +204,7 @@ func parseNucleiJSONLLine(line string) (engine.Result, bool) {
 			"matched_at":    nResult.MatchedAt,
 			"host":          nResult.Host,
 			"domain":        domain,
+			"root_domain":   rootDomain,
 			"ip":            nResult.IP,
 			"matcher_name":  nResult.MatcherName,
 			"description":   nResult.Info.Description,
@@ -219,6 +215,79 @@ func parseNucleiJSONLLine(line string) (engine.Result, bool) {
 			"discovered_at": time.Now(),
 		},
 	}, true
+}
+
+func normalizeNucleiTargets(input []string) ([]string, map[string]string) {
+	seen := make(map[string]bool)
+	targets := make([]string, 0, len(input))
+	rootDomainHints := make(map[string]string)
+
+	for _, item := range input {
+		entry := strings.TrimSpace(item)
+		if entry == "" {
+			continue
+		}
+
+		target := entry
+		rootHint := ""
+		if strings.Contains(entry, "|") {
+			parts := strings.SplitN(entry, "|", 2)
+			target = strings.TrimSpace(parts[0])
+			rootHint = strings.TrimSpace(parts[1])
+		}
+		if target == "" {
+			continue
+		}
+
+		targetKey := normalizeTargetKey(target)
+		if targetKey == "" || seen[targetKey] {
+			continue
+		}
+		seen[targetKey] = true
+		targets = append(targets, target)
+
+		if rootHint == "" {
+			continue
+		}
+		rootDomain := extractRootDomain(rootHint)
+		if rootDomain == "" {
+			continue
+		}
+		rootDomainHints[targetKey] = rootDomain
+		targetHost := extractDomainFromTarget(target)
+		if targetHost != "" {
+			rootDomainHints[targetHost] = rootDomain
+		}
+	}
+
+	return targets, rootDomainHints
+}
+
+func lookupRootDomain(nResult NucleiResult, domain string, rootDomainHints map[string]string) string {
+	if len(rootDomainHints) > 0 {
+		keys := []string{
+			normalizeTargetKey(nResult.MatchedAt),
+			normalizeTargetKey(nResult.Host),
+			extractDomainFromTarget(nResult.MatchedAt),
+			extractDomainFromTarget(nResult.Host),
+			strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), ".")),
+		}
+		for _, key := range keys {
+			k := strings.ToLower(strings.TrimSpace(key))
+			if k == "" {
+				continue
+			}
+			if rd, ok := rootDomainHints[k]; ok && rd != "" {
+				return rd
+			}
+		}
+	}
+
+	if domain != "" {
+		return extractRootDomain(domain)
+	}
+	host := extractDomainFromTarget(nResult.Host)
+	return extractRootDomain(host)
 }
 
 func extractDomainFromTarget(target string) string {
@@ -240,7 +309,25 @@ func extractDomainFromTarget(target string) string {
 	if idx := strings.Index(host, ":"); idx != -1 {
 		host = host[:idx]
 	}
-	return host
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+}
+
+func normalizeTargetKey(target string) string {
+	key := strings.ToLower(strings.TrimSpace(target))
+	key = strings.TrimSuffix(key, "/")
+	return key
+}
+
+func extractRootDomain(value string) string {
+	host := extractDomainFromTarget(value)
+	if host == "" {
+		return ""
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return host
+	}
+	return parts[len(parts)-2] + "." + parts[len(parts)-1]
 }
 
 func extractCVE(text string) string {

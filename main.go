@@ -260,7 +260,9 @@ func main() {
 	}
 
 	if !*dryRun && database != nil {
-		saveResults(database, results)
+		if err := saveResults(database, results); err != nil {
+			failExit("database write failed: %v", err)
+		}
 	}
 
 	if notifier.Enabled() {
@@ -813,30 +815,51 @@ func extractDomainFromURL(rawURL string) string {
 	return rawURL
 }
 
-func saveResults(database *db.Database, results []engine.Result) {
+func saveResults(database *db.Database, results []engine.Result) error {
 	fmt.Println("==> [DB] Writing results to database")
+
+	failureCount := 0
+	failureSamples := make([]string, 0, 10)
+	recordFailure := func(kind string, err error) {
+		if err == nil {
+			return
+		}
+		failureCount++
+		if len(failureSamples) < 10 {
+			failureSamples = append(failureSamples, fmt.Sprintf("%s: %v", kind, err))
+		}
+	}
 
 	for _, result := range results {
 		switch result.Type {
 		case "domain":
 			if subdomain, ok := result.Data.(string); ok {
-				_ = database.SaveOrUpdateAsset(map[string]interface{}{"domain": subdomain})
+				recordFailure("asset(domain)", database.SaveOrUpdateAsset(map[string]interface{}{"domain": subdomain}))
 			}
 		case "web_service":
 			if data, ok := result.Data.(map[string]interface{}); ok {
-				_ = database.SaveOrUpdateAsset(data)
+				recordFailure("asset(web_service)", database.SaveOrUpdateAsset(data))
 			}
 		case "port_service", "open_port":
 			if data, ok := result.Data.(map[string]interface{}); ok {
-				_ = database.SaveOrUpdatePort(data)
+				recordFailure("port", database.SaveOrUpdatePort(data))
 			}
 		case "vulnerability":
 			if data, ok := result.Data.(map[string]interface{}); ok {
-				_ = database.SaveOrUpdateVulnerability(data)
+				recordFailure("vulnerability", database.SaveOrUpdateVulnerability(data))
 			}
 		}
 	}
-	fmt.Println("==> [DB] Write completed")
+
+	if failureCount > 0 {
+		for _, sample := range failureSamples {
+			fmt.Printf("[DB][ERROR] %s\n", sample)
+		}
+		return fmt.Errorf("write completed with %d errors", failureCount)
+	}
+
+	fmt.Println("==> [DB] Write completed with 0 errors")
+	return nil
 }
 
 func printSummary(results []engine.Result, startTime time.Time, dryRun bool, database *db.Database, beforeAsset, beforePort, beforeVuln int64, screenshotDir string, witnessEnabled bool) {

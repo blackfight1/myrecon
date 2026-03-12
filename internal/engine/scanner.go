@@ -241,7 +241,7 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 	}()
 
 	var screenshotInputs []string
-	var liveURLs []string
+	var vulnInputs []string
 
 	for sr := range resultChan {
 		allResults = append(allResults, sr.statuses...)
@@ -275,14 +275,14 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 			}
 			rootDomain := extractRootDomain(domain)
 			screenshotInputs = append(screenshotInputs, url+"|"+rootDomain)
-			liveURLs = append(liveURLs, url)
+			vulnInputs = append(vulnInputs, url+"|"+rootDomain)
 		}
 	}
 
-	if p.vulnScanner != nil && len(liveURLs) > 0 {
-		fmt.Printf("[Vuln] scanning %d live URLs...\n", len(liveURLs))
+	if p.vulnScanner != nil && len(vulnInputs) > 0 {
+		fmt.Printf("[Vuln] scanning %d live URLs...\n", len(vulnInputs))
 		start := time.Now()
-		vulnResults, err := p.vulnScanner.Execute(liveURLs)
+		vulnResults, err := p.vulnScanner.Execute(vulnInputs)
 		allResults = append(allResults, buildPluginStatusResult(p.vulnScanner.Name(), len(vulnResults), err, time.Since(start)))
 		if err != nil {
 			if strings.Contains(err.Error(), "not found in PATH") {

@@ -5,6 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -201,6 +204,13 @@ func (d *Database) SaveOrUpdateVulnerability(data map[string]interface{}) error 
 
 	domain := getStringValue(data, "domain")
 	host := getStringValue(data, "host")
+	rootDomain := buildRootDomain(
+		getStringValue(data, "root_domain"),
+		domain,
+		host,
+		getStringValue(data, "url"),
+		matchedAt,
+	)
 	fingerprint := getStringValue(data, "fingerprint")
 	if fingerprint == "" {
 		raw := templateID + "|" + matchedAt + "|" + host
@@ -231,6 +241,7 @@ func (d *Database) SaveOrUpdateVulnerability(data map[string]interface{}) error 
 
 	if result.Error == gorm.ErrRecordNotFound {
 		record := Vulnerability{
+			RootDomain:   rootDomain,
 			Domain:       domain,
 			Host:         host,
 			URL:          getStringValue(data, "url"),
@@ -281,6 +292,9 @@ func (d *Database) SaveOrUpdateVulnerability(data map[string]interface{}) error 
 		}
 		if host != "" {
 			updates["host"] = host
+		}
+		if rootDomain != "" {
+			updates["root_domain"] = rootDomain
 		}
 		if asset != nil {
 			updates["asset_id"] = asset.ID
@@ -767,7 +781,10 @@ func (d *Database) DeleteAllDataByRootDomain(rootDomain string) error {
 		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorTask{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("domain = ? OR domain LIKE ? OR host = ? OR host LIKE ?", rootDomain, pattern, rootDomain, pattern).
+		if err := tx.Where(
+			"root_domain = ? OR domain = ? OR domain LIKE ? OR host = ? OR host LIKE ?",
+			rootDomain, rootDomain, pattern, rootDomain, pattern,
+		).
 			Delete(&Vulnerability{}).Error; err != nil {
 			return err
 		}
@@ -814,4 +831,47 @@ func getIntValue(data map[string]interface{}, key string) int {
 		}
 	}
 	return 0
+}
+
+func buildRootDomain(candidates ...string) string {
+	for _, raw := range candidates {
+		host := normalizeHost(raw)
+		if host == "" {
+			continue
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			continue
+		}
+		return extractRootDomain(host)
+	}
+	return ""
+}
+
+func normalizeHost(value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return ""
+	}
+
+	if parsed, err := url.Parse(v); err == nil && parsed.Hostname() != "" {
+		return strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	}
+
+	v = strings.TrimPrefix(v, "http://")
+	v = strings.TrimPrefix(v, "https://")
+	if idx := strings.Index(v, "/"); idx != -1 {
+		v = v[:idx]
+	}
+	if idx := strings.Index(v, ":"); idx != -1 {
+		v = v[:idx]
+	}
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(v), "."))
+}
+
+func extractRootDomain(host string) string {
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return host
+	}
+	return parts[len(parts)-2] + "." + parts[len(parts)-1]
 }
