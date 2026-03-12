@@ -36,10 +36,11 @@ export function DataTable<T extends object>({ data, columns }: Props<T>) {
                   {header.isPlaceholder ? null : (
                     <span className="th-content">
                       {flexRender(header.column.columnDef.header, header.getContext())}
-                      {{
-                        asc: " ^",
-                        desc: " v"
-                      }[header.column.getIsSorted() as string] ?? ""}
+                      {header.column.getIsSorted() === "asc"
+                        ? " ^"
+                        : header.column.getIsSorted() === "desc"
+                          ? " v"
+                          : ""}
                     </span>
                   )}
                 </th>
