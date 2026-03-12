@@ -1,0 +1,24 @@
+import { Navigate, Route, Routes } from "react-router-dom";
+import { AppShell } from "./components/layout/AppShell";
+import { AssetsPage } from "./pages/AssetsPage";
+import { DashboardPage } from "./pages/DashboardPage";
+import { FindingsPage } from "./pages/FindingsPage";
+import { JobsPage } from "./pages/JobsPage";
+import { MonitoringPage } from "./pages/MonitoringPage";
+import { PortsPage } from "./pages/PortsPage";
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<AppShell />}>
+        <Route index element={<DashboardPage />} />
+        <Route path="jobs" element={<JobsPage />} />
+        <Route path="assets" element={<AssetsPage />} />
+        <Route path="ports" element={<PortsPage />} />
+        <Route path="findings" element={<FindingsPage />} />
+        <Route path="monitoring" element={<MonitoringPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
+  );
+}
