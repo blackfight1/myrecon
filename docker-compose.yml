@@ -25,7 +25,7 @@ services:
       context: ./frontend
     container_name: myrecon-frontend
     ports:
-      - "8080:80"
+      - "3000:80"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

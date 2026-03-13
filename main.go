@@ -9,13 +9,15 @@ import (
 	"strings"
 	"time"
 
+	"hunter/internal/api"
 	"hunter/internal/db"
 	"hunter/internal/engine"
 	"hunter/internal/plugins"
 )
 
 func main() {
-	runMode := flag.String("mode", "scan", "Run mode: scan or monitor")
+	runMode := flag.String("mode", "scan", "Run mode: scan, monitor, or web")
+	webAddr := flag.String("web-addr", "0.0.0.0:8080", "API server listen address (web mode)")
 	domain := flag.String("d", "", "Single target root domain")
 	domainList := flag.String("dL", "", "Root domain list file")
 	inputFile := flag.String("i", "", "Input file for ports/witness modules")
@@ -47,6 +49,19 @@ func main() {
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(*runMode))
+
+	// ── Web API Server Mode ──
+	if mode == "web" {
+		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
+		database, err := db.NewDatabase(dsn)
+		if err != nil {
+			log.Fatalf("database connection failed: %v", err)
+		}
+		srv := api.NewServer(database, *screenshotDir)
+		log.Fatal(srv.Start(*webAddr))
+		return
+	}
+
 	if err := validateModeAndConflicts(mode, *domain, *domainList, *inputFile, *modules, *reportDomain, *listScreenshots, *monitorList, *monitorStop, *monitorDelete, *scanListDomains, *scanDeleteDomain); err != nil {
 		log.Fatalf("argument conflict: %v", err)
 	}
