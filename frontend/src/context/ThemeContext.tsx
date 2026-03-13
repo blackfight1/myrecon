@@ -1,12 +1,12 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
-export type ThemeName = "matrix" | "cyberpunk" | "arctic" | "blood";
+export type ThemeName = "blue" | "green" | "purple" | "orange";
 
 const THEMES: { id: ThemeName; label: string }[] = [
-    { id: "matrix", label: "Matrix" },
-    { id: "cyberpunk", label: "Cyberpunk" },
-    { id: "arctic", label: "Arctic" },
-    { id: "blood", label: "Blood" }
+    { id: "blue", label: "Blue" },
+    { id: "green", label: "Green" },
+    { id: "purple", label: "Purple" },
+    { id: "orange", label: "Orange" }
 ];
 
 const STORAGE_KEY = "myrecon.theme";
@@ -20,10 +20,10 @@ interface ThemeState {
 const ThemeContext = createContext<ThemeState | null>(null);
 
 function loadTheme(): ThemeName {
-    if (typeof window === "undefined") return "matrix";
+    if (typeof window === "undefined") return "blue";
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved && THEMES.some((t) => t.id === saved)) return saved as ThemeName;
-    return "matrix";
+    return "blue";
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
