@@ -9,44 +9,44 @@ import { formatDate } from "../lib/format";
 import { matchesProjectDomain } from "../lib/projectScope";
 import type { MonitorChange, MonitorRun, MonitorTarget } from "../types/models";
 
-/* ---------- Monitor Targets table ---------- */
+/* ---------- 监控目标表 ---------- */
 const tCol = createColumnHelper<MonitorTarget>();
 const targetColumns = [
-  tCol.accessor("rootDomain", { header: "Root Domain" }),
-  tCol.accessor("enabled", { header: "Enabled", cell: (c) => c.getValue() ? <span className="badge badge-success">ON</span> : <span className="badge badge-danger">OFF</span> }),
-  tCol.accessor("baselineDone", { header: "Baseline", cell: (c) => c.getValue() ? "✓" : "—" }),
-  tCol.accessor("lastRunAt", { header: "Last Run", cell: (c) => formatDate(c.getValue()) }),
-  tCol.accessor("updatedAt", { header: "Updated", cell: (c) => formatDate(c.getValue()) })
+  tCol.accessor("rootDomain", { header: "根域名" }),
+  tCol.accessor("enabled", { header: "启用状态", cell: (c) => c.getValue() ? <span className="badge badge-success">开启</span> : <span className="badge badge-danger">关闭</span> }),
+  tCol.accessor("baselineDone", { header: "基线", cell: (c) => c.getValue() ? "✓" : "—" }),
+  tCol.accessor("lastRunAt", { header: "上次运行", cell: (c) => formatDate(c.getValue()) }),
+  tCol.accessor("updatedAt", { header: "更新时间", cell: (c) => formatDate(c.getValue()) })
 ];
 
-/* ---------- Monitor Runs table ---------- */
+/* ---------- 监控运行记录表 ---------- */
 const rCol = createColumnHelper<MonitorRun>();
 const runColumns = [
   rCol.accessor("id", { header: "ID" }),
-  rCol.accessor("rootDomain", { header: "Root Domain" }),
-  rCol.accessor("status", { header: "Status", cell: (c) => <StatusBadge status={c.getValue()} /> }),
-  rCol.accessor("startedAt", { header: "Started", cell: (c) => formatDate(c.getValue()) }),
-  rCol.accessor("durationSec", { header: "Duration", cell: (c) => `${c.getValue()}s` }),
-  rCol.accessor("newLiveCount", { header: "New Live" }),
-  rCol.accessor("webChanged", { header: "Web Δ" }),
-  rCol.accessor("portOpened", { header: "Port +" }),
-  rCol.accessor("portClosed", { header: "Port −" }),
-  rCol.accessor("serviceChange", { header: "Svc Δ" }),
-  rCol.accessor("errorMessage", { header: "Error", cell: (c) => c.getValue() || <span className="cell-muted">—</span> })
+  rCol.accessor("rootDomain", { header: "根域名" }),
+  rCol.accessor("status", { header: "状态", cell: (c) => <StatusBadge status={c.getValue()} /> }),
+  rCol.accessor("startedAt", { header: "开始时间", cell: (c) => formatDate(c.getValue()) }),
+  rCol.accessor("durationSec", { header: "耗时", cell: (c) => `${c.getValue()}s` }),
+  rCol.accessor("newLiveCount", { header: "新增存活" }),
+  rCol.accessor("webChanged", { header: "Web 变更" }),
+  rCol.accessor("portOpened", { header: "端口新增" }),
+  rCol.accessor("portClosed", { header: "端口关闭" }),
+  rCol.accessor("serviceChange", { header: "服务变更" }),
+  rCol.accessor("errorMessage", { header: "错误信息", cell: (c) => c.getValue() || <span className="cell-muted">—</span> })
 ];
 
-/* ---------- Monitor Changes table ---------- */
+/* ---------- 变更事件表 ---------- */
 const cCol = createColumnHelper<MonitorChange>();
 const changeColumns = [
-  cCol.accessor("runId", { header: "Run" }),
-  cCol.accessor("rootDomain", { header: "Root Domain" }),
-  cCol.accessor("changeType", { header: "Type", cell: (c) => <span className="badge badge-info">{c.getValue()}</span> }),
-  cCol.accessor("domain", { header: "Domain", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  cCol.accessor("runId", { header: "运行 ID" }),
+  cCol.accessor("rootDomain", { header: "根域名" }),
+  cCol.accessor("changeType", { header: "类型", cell: (c) => <span className="badge badge-info">{c.getValue()}</span> }),
+  cCol.accessor("domain", { header: "域名", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
   cCol.accessor("ip", { header: "IP", cell: (c) => c.getValue() ? <span className="cell-mono">{c.getValue()}</span> : <span className="cell-muted">—</span> }),
-  cCol.accessor("port", { header: "Port", cell: (c) => c.getValue() ?? <span className="cell-muted">—</span> }),
-  cCol.accessor("statusCode", { header: "Status", cell: (c) => c.getValue() ?? <span className="cell-muted">—</span> }),
-  cCol.accessor("title", { header: "Title", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
-  cCol.accessor("createdAt", { header: "Time", cell: (c) => formatDate(c.getValue()) })
+  cCol.accessor("port", { header: "端口", cell: (c) => c.getValue() ?? <span className="cell-muted">—</span> }),
+  cCol.accessor("statusCode", { header: "状态码", cell: (c) => c.getValue() ?? <span className="cell-muted">—</span> }),
+  cCol.accessor("title", { header: "标题", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  cCol.accessor("createdAt", { header: "时间", cell: (c) => formatDate(c.getValue()) })
 ];
 
 export function MonitoringPage() {
@@ -66,34 +66,34 @@ export function MonitoringPage() {
   return (
     <section className="page">
       <div className="page-header">
-        <h1 className="page-title">Monitoring</h1>
-        <p className="page-desc">Drift detection system — tracks new hosts, port changes, service mutations and web content shifts.</p>
+        <h1 className="page-title">变更监控</h1>
+        <p className="page-desc">漂移检测系统 — 追踪新主机、端口变更、服务变化和 Web 内容变动。</p>
       </div>
 
-      <ProjectScopeBanner title="Monitor Scope" hint="Targets, runs and change events filtered by project root domains." />
+      <ProjectScopeBanner title="监控范围" hint="目标、运行记录和变更事件按项目根域名过滤。" />
 
-      {loading && <div className="empty-state">Loading monitoring data...</div>}
+      {loading && <div className="empty-state">正在加载监控数据...</div>}
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Monitor Targets</h2>
-          <span className="panel-meta">{targets.length} targets</span>
+          <h2>监控目标</h2>
+          <span className="panel-meta">{targets.length} 个目标</span>
         </header>
         <DataTable data={targets} columns={targetColumns} />
       </article>
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Recent Runs</h2>
-          <span className="panel-meta">{runs.length} runs</span>
+          <h2>最近运行</h2>
+          <span className="panel-meta">{runs.length} 次运行</span>
         </header>
         <DataTable data={runs} columns={runColumns} />
       </article>
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Change Events</h2>
-          <span className="panel-meta">{changes.length} events</span>
+          <h2>变更事件</h2>
+          <span className="panel-meta">{changes.length} 个事件</span>
         </header>
         <DataTable data={changes} columns={changeColumns} />
       </article>

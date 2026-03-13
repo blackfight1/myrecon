@@ -96,65 +96,65 @@ export function SettingsPage() {
     return (
         <div className="page">
             <div className="page-header">
-                <h1 className="page-title">⊟ Settings</h1>
+                <h1 className="page-title">⊟ 系统设置</h1>
                 <p className="page-desc">
-                    System configuration — database, notifications, scanner defaults, and tool status
+                    系统配置 — 数据库、通知、扫描器默认值和工具状态
                 </p>
             </div>
 
             {settingsQuery.isLoading ? (
-                <div className="empty-state">Loading settings…</div>
+                <div className="empty-state">正在加载设置…</div>
             ) : !settings ? (
                 <div className="empty-state">
                     <div className="empty-icon">⚠</div>
-                    Failed to load settings. Check backend connection.
+                    加载设置失败，请检查后端连接。
                 </div>
             ) : (
                 <>
-                    {/* ── Database ── */}
+                    {/* ── 数据库 ── */}
                     <div className="panel">
                         <div className="panel-header">
-                            <h2>🗄 Database</h2>
+                            <h2>🗄 数据库</h2>
                             <span className={`badge ${settings.database.connected ? "badge-success" : "badge-danger"}`}>
-                                {settings.database.connected ? "Connected" : "Disconnected"}
+                                {settings.database.connected ? "已连接" : "未连接"}
                             </span>
                         </div>
                         <div className="panel-body">
                             <div className="settings-grid">
                                 <div className="setting-row">
-                                    <span className="setting-label">Host</span>
+                                    <span className="setting-label">主机</span>
                                     <span className="setting-value">{settings.database.host}:{settings.database.port}</span>
                                 </div>
                                 <div className="setting-row">
-                                    <span className="setting-label">User</span>
+                                    <span className="setting-label">用户</span>
                                     <span className="setting-value">{settings.database.user}</span>
                                 </div>
                                 <div className="setting-row">
-                                    <span className="setting-label">Database</span>
+                                    <span className="setting-label">数据库名</span>
                                     <span className="setting-value">{settings.database.dbname}</span>
                                 </div>
                                 <div className="setting-row">
-                                    <span className="setting-label">SSL Mode</span>
+                                    <span className="setting-label">SSL 模式</span>
                                     <span className="setting-value">{settings.database.sslmode}</span>
                                 </div>
                             </div>
                             <div className="setting-note">
-                                Database connection is configured via environment or CLI flags. Restart backend to apply changes.
+                                数据库连接通过环境变量或命令行参数配置。更改后需重启后端服务生效。
                             </div>
                         </div>
                     </div>
 
-                    {/* ── Notifications ── */}
+                    {/* ── 通知 ── */}
                     <div className="panel">
                         <div className="panel-header">
-                            <h2>🔔 DingTalk Notifications</h2>
+                            <h2>🔔 钉钉通知</h2>
                             <div style={{ display: "flex", gap: 6 }}>
                                 <span className={`badge ${settings.notifications.enabled ? "badge-success" : "badge-neutral"}`}>
-                                    {settings.notifications.enabled ? "Enabled" : "Disabled"}
+                                    {settings.notifications.enabled ? "已启用" : "未启用"}
                                 </span>
                                 {!editNotify && (
                                     <button className="btn btn-sm" onClick={startEditNotify}>
-                                        Edit
+                                        编辑
                                     </button>
                                 )}
                             </div>
@@ -163,7 +163,7 @@ export function SettingsPage() {
                             {editNotify ? (
                                 <div className="settings-form">
                                     <div className="form-group">
-                                        <label className="form-label">Webhook URL</label>
+                                        <label className="form-label">Webhook 地址</label>
                                         <input
                                             className="form-input"
                                             type="text"
@@ -173,7 +173,7 @@ export function SettingsPage() {
                                         />
                                     </div>
                                     <div className="form-group">
-                                        <label className="form-label">Secret (optional, for signed mode)</label>
+                                        <label className="form-label">Secret（可选，签名模式）</label>
                                         <input
                                             className="form-input"
                                             type="password"
@@ -184,10 +184,10 @@ export function SettingsPage() {
                                     </div>
                                     <div className="form-actions">
                                         <button className="btn btn-primary" onClick={saveNotify} disabled={updateMutation.isPending}>
-                                            Save
+                                            保存
                                         </button>
                                         <button className="btn btn-sm" onClick={() => setEditNotify(false)}>
-                                            Cancel
+                                            取消
                                         </button>
                                     </div>
                                 </div>
@@ -202,7 +202,7 @@ export function SettingsPage() {
                                     <div className="setting-row">
                                         <span className="setting-label">Secret</span>
                                         <span className="setting-value">
-                                            {settings.notifications.dingtalkSecret ? "••••••••" : "Not set"}
+                                            {settings.notifications.dingtalkSecret ? "••••••••" : "未设置"}
                                         </span>
                                     </div>
                                 </div>
@@ -214,7 +214,7 @@ export function SettingsPage() {
                                     onClick={() => { setTestResult(null); testNotifyMutation.mutate(); }}
                                     disabled={testNotifyMutation.isPending || !settings.notifications.enabled}
                                 >
-                                    {testNotifyMutation.isPending ? "Sending…" : "🔔 Test Notification"}
+                                    {testNotifyMutation.isPending ? "发送中…" : "🔔 发送测试通知"}
                                 </button>
                                 {testResult && (
                                     <span className={`badge ${testResult.ok ? "badge-success" : "badge-danger"}`} style={{ marginLeft: 8 }}>
@@ -225,13 +225,13 @@ export function SettingsPage() {
                         </div>
                     </div>
 
-                    {/* ── Scanner Defaults ── */}
+                    {/* ── 扫描器默认值 ── */}
                     <div className="panel">
                         <div className="panel-header">
-                            <h2>⚙ Scanner Defaults</h2>
+                            <h2>⚙ 扫描器默认配置</h2>
                             {!editScanner && (
                                 <button className="btn btn-sm" onClick={startEditScanner}>
-                                    Edit
+                                    编辑
                                 </button>
                             )}
                         </div>
@@ -239,7 +239,7 @@ export function SettingsPage() {
                             {editScanner ? (
                                 <div className="settings-form">
                                     <div className="form-group">
-                                        <label className="form-label">Screenshot Directory</label>
+                                        <label className="form-label">截图存储目录</label>
                                         <input
                                             className="form-input"
                                             type="text"
@@ -249,17 +249,17 @@ export function SettingsPage() {
                                         />
                                     </div>
                                     <div className="form-group">
-                                        <label className="form-label">DNS Resolvers File</label>
+                                        <label className="form-label">DNS 解析器文件</label>
                                         <input
                                             className="form-input"
                                             type="text"
                                             value={dnsResolvers}
                                             onChange={(e) => setDnsResolvers(e.target.value)}
-                                            placeholder="Leave empty for system default"
+                                            placeholder="留空使用系统默认"
                                         />
                                     </div>
                                     <div className="form-group">
-                                        <label className="form-label">Active Bruteforce Dict Size (100–5000)</label>
+                                        <label className="form-label">主动爆破字典大小（100–5000）</label>
                                         <input
                                             className="form-input"
                                             type="number"
@@ -276,7 +276,7 @@ export function SettingsPage() {
                                                 checked={activeSubs}
                                                 onChange={(e) => setActiveSubs(e.target.checked)}
                                             />
-                                            Enable Active Subdomain Bruteforce
+                                            启用主动子域名爆破
                                         </label>
                                         <label className="form-checkbox">
                                             <input
@@ -284,42 +284,42 @@ export function SettingsPage() {
                                                 checked={nuclei}
                                                 onChange={(e) => setNuclei(e.target.checked)}
                                             />
-                                            Enable Nuclei Scanning
+                                            启用 Nuclei 漏洞扫描
                                         </label>
                                     </div>
                                     <div className="form-actions">
                                         <button className="btn btn-primary" onClick={saveScanner} disabled={updateMutation.isPending}>
-                                            Save
+                                            保存
                                         </button>
                                         <button className="btn btn-sm" onClick={() => setEditScanner(false)}>
-                                            Cancel
+                                            取消
                                         </button>
                                     </div>
                                 </div>
                             ) : (
                                 <div className="settings-grid">
                                     <div className="setting-row">
-                                        <span className="setting-label">Screenshot Dir</span>
+                                        <span className="setting-label">截图目录</span>
                                         <span className="setting-value cell-mono">{settings.scanner.screenshotDir}</span>
                                     </div>
                                     <div className="setting-row">
-                                        <span className="setting-label">DNS Resolvers</span>
-                                        <span className="setting-value">{settings.scanner.dnsResolvers || "System default"}</span>
+                                        <span className="setting-label">DNS 解析器</span>
+                                        <span className="setting-value">{settings.scanner.dnsResolvers || "系统默认"}</span>
                                     </div>
                                     <div className="setting-row">
-                                        <span className="setting-label">Dict Size</span>
+                                        <span className="setting-label">字典大小</span>
                                         <span className="setting-value">{settings.scanner.defaultDictSize}</span>
                                     </div>
                                     <div className="setting-row">
-                                        <span className="setting-label">Active Subs</span>
+                                        <span className="setting-label">主动子域名</span>
                                         <span className={`badge ${settings.scanner.defaultActiveSubs ? "badge-success" : "badge-neutral"}`}>
-                                            {settings.scanner.defaultActiveSubs ? "Enabled" : "Disabled"}
+                                            {settings.scanner.defaultActiveSubs ? "已启用" : "未启用"}
                                         </span>
                                     </div>
                                     <div className="setting-row">
                                         <span className="setting-label">Nuclei</span>
                                         <span className={`badge ${settings.scanner.defaultNuclei ? "badge-success" : "badge-neutral"}`}>
-                                            {settings.scanner.defaultNuclei ? "Enabled" : "Disabled"}
+                                            {settings.scanner.defaultNuclei ? "已启用" : "未启用"}
                                         </span>
                                     </div>
                                 </div>
@@ -327,23 +327,23 @@ export function SettingsPage() {
                         </div>
                     </div>
 
-                    {/* ── Tool Status ── */}
+                    {/* ── 工具状态 ── */}
                     <div className="panel">
                         <div className="panel-header">
-                            <h2>🔧 Recon Tool Status</h2>
+                            <h2>🔧 侦察工具状态</h2>
                             <button className="btn btn-sm" onClick={() => toolsQuery.refetch()}>
-                                Refresh
+                                刷新
                             </button>
                         </div>
                         {toolsQuery.isLoading ? (
                             <div className="panel-body">
-                                <div className="empty-state">Checking tools…</div>
+                                <div className="empty-state">正在检测工具…</div>
                             </div>
                         ) : tools.length === 0 ? (
                             <div className="panel-body">
                                 <div className="empty-state">
                                     <div className="empty-icon">🔧</div>
-                                    No tool data available.
+                                    暂无工具数据。
                                 </div>
                             </div>
                         ) : (
@@ -352,10 +352,10 @@ export function SettingsPage() {
                                     <table className="data-table">
                                         <thead>
                                             <tr>
-                                                <th>Tool</th>
-                                                <th>Status</th>
-                                                <th>Version</th>
-                                                <th>Path</th>
+                                                <th>工具</th>
+                                                <th>状态</th>
+                                                <th>版本</th>
+                                                <th>路径</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -364,7 +364,7 @@ export function SettingsPage() {
                                                     <td style={{ fontWeight: 600 }}>{t.name}</td>
                                                     <td>
                                                         <span className={`badge ${t.installed ? "badge-success" : "badge-danger"}`}>
-                                                            {t.installed ? "✓ Installed" : "✕ Missing"}
+                                                            {t.installed ? "✓ 已安装" : "✕ 缺失"}
                                                         </span>
                                                     </td>
                                                     <td className="cell-mono">{t.version || "—"}</td>
@@ -378,10 +378,10 @@ export function SettingsPage() {
                         )}
                         <div className="panel-body">
                             <div className="setting-note">
-                                These tools must be installed and accessible in PATH for full scanning capability.
-                                Required: <code>subfinder</code>, <code>findomain</code>, <code>bbot</code>,
-                                <code>shosubgo</code>, <code>httpx</code>, <code>naabu</code>, <code>nmap</code>,
-                                <code>gowitness</code>. Optional: <code>nuclei</code>, <code>dnsx</code>, <code>dictgen</code>.
+                                这些工具必须已安装并在 PATH 中可访问，才能实现完整的扫描功能。
+                                必需：<code>subfinder</code>、<code>findomain</code>、<code>bbot</code>、
+                                <code>shosubgo</code>、<code>httpx</code>、<code>naabu</code>、<code>nmap</code>、
+                                <code>gowitness</code>。可选：<code>nuclei</code>、<code>dnsx</code>、<code>dictgen</code>。
                             </div>
                         </div>
                     </div>

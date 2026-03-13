@@ -11,13 +11,13 @@ import { formatDate, joinList } from "../lib/format";
 const col = createColumnHelper<Asset>();
 
 const columns = [
-  col.accessor("domain", { header: "Domain" }),
+  col.accessor("domain", { header: "域名" }),
   col.accessor("url", { header: "URL", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
   col.accessor("ip", { header: "IP", cell: (c) => c.getValue() ? <span className="cell-mono">{c.getValue()}</span> : <span className="cell-muted">—</span> }),
-  col.accessor("statusCode", { header: "Status", cell: (c) => { const v = c.getValue(); if (!v) return <span className="cell-muted">—</span>; const cls = v >= 200 && v < 300 ? "badge badge-success" : v >= 400 ? "badge badge-danger" : "badge badge-warning"; return <span className={cls}>{v}</span>; } }),
-  col.accessor("title", { header: "Title", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
-  col.accessor("technologies", { header: "Tech Stack", cell: (c) => joinList(c.getValue(), " · ") || <span className="cell-muted">—</span> }),
-  col.accessor("lastSeen", { header: "Last Seen", cell: (c) => formatDate(c.getValue()) })
+  col.accessor("statusCode", { header: "状态码", cell: (c) => { const v = c.getValue(); if (!v) return <span className="cell-muted">—</span>; const cls = v >= 200 && v < 300 ? "badge badge-success" : v >= 400 ? "badge badge-danger" : "badge badge-warning"; return <span className={cls}>{v}</span>; } }),
+  col.accessor("title", { header: "标题", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("technologies", { header: "技术栈", cell: (c) => joinList(c.getValue(), " · ") || <span className="cell-muted">—</span> }),
+  col.accessor("lastSeen", { header: "最后发现", cell: (c) => formatDate(c.getValue()) })
 ];
 
 function hostnameFromUrl(input?: string): string | undefined {
@@ -56,39 +56,39 @@ export function AssetsPage() {
   return (
     <section className="page">
       <div className="page-header">
-        <h1 className="page-title">Assets</h1>
-        <p className="page-desc">Project-scoped web asset inventory with response status and technology stack details.</p>
+        <h1 className="page-title">资产管理</h1>
+        <p className="page-desc">项目范围内的 Web 资产清单，包含响应状态和技术栈详情。</p>
       </div>
 
-      <ProjectScopeBanner title="Asset Scope" hint="Filtered by root domain suffix matching." />
+      <ProjectScopeBanner title="资产范围" hint="按根域名后缀匹配过滤。" />
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Filters</h2>
-          <span className="panel-meta">live: {liveCount} / total: {scoped.length}</span>
+          <h2>筛选条件</h2>
+          <span className="panel-meta">存活: {liveCount} / 总计: {scoped.length}</span>
         </header>
         <div className="filter-bar">
           <input
             className="form-input"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search domain, URL, IP, title, tech..."
+            placeholder="搜索域名、URL、IP、标题、技术栈..."
           />
           <label className="form-check">
             <input type="checkbox" checked={liveOnly} onChange={(e) => setLiveOnly(e.target.checked)} />
-            Live only
+            仅显示存活
           </label>
-          <span className="filter-summary">{rows.length} matched</span>
+          <span className="filter-summary">匹配 {rows.length} 条</span>
         </div>
       </article>
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Asset Inventory</h2>
-          <span className="panel-meta">{rows.length} records</span>
+          <h2>资产清单</h2>
+          <span className="panel-meta">{rows.length} 条记录</span>
         </header>
-        {isLoading && <div className="empty-state">Loading assets...</div>}
-        {error && <div className="empty-state">Failed to load assets.</div>}
+        {isLoading && <div className="empty-state">正在加载资产数据...</div>}
+        {error && <div className="empty-state">加载资产失败。</div>}
         {!isLoading && !error && <DataTable data={rows} columns={columns} />}
       </article>
     </section>

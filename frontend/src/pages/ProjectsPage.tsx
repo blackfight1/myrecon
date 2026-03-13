@@ -29,81 +29,102 @@ export function ProjectsPage() {
   return (
     <section className="page">
       <div className="page-header">
-        <h1 className="page-title">Projects</h1>
-        <p className="page-desc">Manage project scopes. The active project filters all pipeline views across the application.</p>
+        <h1 className="page-title">项目管理</h1>
+        <p className="page-desc">管理项目范围，当前激活的项目会筛选所有页面中的数据展示。</p>
       </div>
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Project Registry</h2>
+          <h2>项目列表</h2>
           <button className="btn btn-sm" onClick={() => setShowForm(!showForm)}>
-            {showForm ? "Cancel" : "+ New Project"}
+            {showForm ? "取消" : "+ 新建项目"}
           </button>
         </header>
 
         {showForm && (
           <div className="form-section">
-            <div className="form-group">
-              <label className="form-label">Name</label>
-              <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. ACME Corp" />
+            <div className="form-row form-row-2">
+              <div className="form-group">
+                <label className="form-label">项目名称</label>
+                <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：XX公司" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">描述（可选）</label>
+                <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="项目描述信息" />
+              </div>
             </div>
             <div className="form-group">
-              <label className="form-label">Description</label>
-              <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional description" />
+              <label className="form-label">根域名（逗号或换行分隔）</label>
+              <textarea className="form-input form-textarea" value={rootDomainsRaw} onChange={(e) => setRootDomainsRaw(e.target.value)} placeholder="example.com, example.org" rows={3} />
             </div>
             <div className="form-group">
-              <label className="form-label">Root Domains (comma or newline separated)</label>
-              <textarea className="form-input" value={rootDomainsRaw} onChange={(e) => setRootDomainsRaw(e.target.value)} placeholder="example.com, example.org" rows={3} />
+              <label className="form-label">标签（逗号分隔，可选）</label>
+              <input className="form-input" value={tagsRaw} onChange={(e) => setTagsRaw(e.target.value)} placeholder="漏洞赏金, 客户项目" />
             </div>
-            <div className="form-group">
-              <label className="form-label">Tags (comma separated)</label>
-              <input className="form-input" value={tagsRaw} onChange={(e) => setTagsRaw(e.target.value)} placeholder="bug-bounty, client" />
+            <div className="form-actions">
+              <button className="btn" onClick={handleCreate} disabled={!name.trim() || !rootDomainsRaw.trim()}>
+                创建项目
+              </button>
+              <button className="btn btn-ghost" onClick={() => setShowForm(false)}>
+                取消
+              </button>
             </div>
-            <button className="btn" onClick={handleCreate} disabled={!name.trim() || !rootDomainsRaw.trim()}>
-              Create Project
-            </button>
           </div>
         )}
 
         {projects.length === 0 && !showForm && (
-          <div className="empty-state">No projects yet. Create one to start scoping your recon pipeline.</div>
+          <div className="empty-state">
+            <div className="empty-state-icon">⊟</div>
+            <div className="empty-state-text">暂无项目，创建一个项目以开始您的侦察工作。</div>
+          </div>
         )}
 
         <div className="project-grid">
           {projects.map((p) => {
             const isActive = activeProject?.id === p.id;
             return (
-              <div key={p.id} className={`project-card ${isActive ? "project-card-active" : ""}`}>
+              <div key={p.id} className={`project-card${isActive ? " project-card-active" : ""}`}>
                 <div className="project-card-header">
-                  <h3>{p.name}</h3>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button className={`btn btn-sm ${isActive ? "btn-active" : ""}`} onClick={() => setActiveProject(p.id)}>
-                      {isActive ? "✓ Active" : "Set Active"}
+                  <h3 className="project-card-title">{p.name}</h3>
+                  <div className="project-card-actions">
+                    <button
+                      className={`btn btn-sm${isActive ? " btn-active" : ""}`}
+                      onClick={() => setActiveProject(p.id)}
+                    >
+                      {isActive ? "✓ 已激活" : "设为活跃"}
                     </button>
                     {projects.length > 1 && (
-                      <button className="btn btn-sm btn-danger" onClick={() => deleteProject(p.id)}>✕</button>
+                      <button className="btn btn-sm btn-danger" onClick={() => deleteProject(p.id)}>删除</button>
                     )}
                   </div>
                 </div>
+
                 {p.description && <p className="project-card-desc">{p.description}</p>}
+
                 <div className="project-card-meta">
-                  <div>
-                    <strong>Roots:</strong>{" "}
-                    {p.rootDomains.map((d) => (
-                      <span key={d} className="badge badge-info">{d}</span>
-                    ))}
-                  </div>
-                  {p.tags.length > 0 && (
-                    <div>
-                      <strong>Tags:</strong>{" "}
-                      {p.tags.map((t) => (
-                        <span key={t} className="badge">{t}</span>
+                  <div className="project-card-field">
+                    <span className="project-card-label">根域名</span>
+                    <div className="project-card-badges">
+                      {p.rootDomains.map((d) => (
+                        <span key={d} className="badge badge-info">{d}</span>
                       ))}
                     </div>
+                  </div>
+
+                  {p.tags.length > 0 && (
+                    <div className="project-card-field">
+                      <span className="project-card-label">标签</span>
+                      <div className="project-card-badges">
+                        {p.tags.map((t) => (
+                          <span key={t} className="badge">{t}</span>
+                        ))}
+                      </div>
+                    </div>
                   )}
+
                   <div className="project-card-dates">
-                    <span>Created: {formatDate(p.createdAt)}</span>
-                    {p.lastScanAt && <span>Last Scan: {formatDate(p.lastScanAt)}</span>}
+                    <span>创建时间：{formatDate(p.createdAt)}</span>
+                    {p.lastScanAt && <span>上次扫描：{formatDate(p.lastScanAt)}</span>}
                   </div>
                 </div>
               </div>

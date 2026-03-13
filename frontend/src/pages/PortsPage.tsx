@@ -11,13 +11,13 @@ import type { PortRecord } from "../types/models";
 const col = createColumnHelper<PortRecord>();
 
 const columns = [
-  col.accessor("domain", { header: "Domain", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("domain", { header: "域名", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
   col.accessor("ip", { header: "IP", cell: (c) => <span className="cell-mono">{c.getValue()}</span> }),
-  col.accessor("port", { header: "Port", cell: (c) => <span className="cell-mono">{c.getValue()}</span> }),
-  col.accessor("protocol", { header: "Proto", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
-  col.accessor("service", { header: "Service", cell: (c) => c.getValue() ? <span className="badge badge-info">{c.getValue()}</span> : <span className="cell-muted">—</span> }),
-  col.accessor("version", { header: "Version", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
-  col.accessor("lastSeen", { header: "Last Seen", cell: (c) => formatDate(c.getValue()) })
+  col.accessor("port", { header: "端口", cell: (c) => <span className="cell-mono">{c.getValue()}</span> }),
+  col.accessor("protocol", { header: "协议", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("service", { header: "服务", cell: (c) => c.getValue() ? <span className="badge badge-info">{c.getValue()}</span> : <span className="cell-muted">—</span> }),
+  col.accessor("version", { header: "版本", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("lastSeen", { header: "最后发现", cell: (c) => formatDate(c.getValue()) })
 ];
 
 function hostnameFromUrl(input?: string): string | undefined {
@@ -47,19 +47,19 @@ export function PortsPage() {
   return (
     <section className="page">
       <div className="page-header">
-        <h1 className="page-title">Ports</h1>
-        <p className="page-desc">Service exposure records scoped by project roots and correlated asset IPs.</p>
+        <h1 className="page-title">端口扫描</h1>
+        <p className="page-desc">按项目根域名和关联资产 IP 筛选的服务暴露记录。</p>
       </div>
 
-      <ProjectScopeBanner title="Port Scope" hint="Port rows without domain are included when IP belongs to scoped assets." />
+      <ProjectScopeBanner title="端口范围" hint="无域名的端口记录在其 IP 属于项目资产时也会被包含。" />
 
       <article className="panel">
         <header className="panel-header">
-          <h2>Open Port Records</h2>
-          <span className="panel-meta">{rows.length} records</span>
+          <h2>开放端口记录</h2>
+          <span className="panel-meta">{rows.length} 条记录</span>
         </header>
-        {ports.isLoading && <div className="empty-state">Loading ports...</div>}
-        {ports.isError && <div className="empty-state">Failed to load ports.</div>}
+        {ports.isLoading && <div className="empty-state">正在加载端口数据...</div>}
+        {ports.isError && <div className="empty-state">加载端口数据失败。</div>}
         {!ports.isLoading && !ports.isError && <DataTable data={rows} columns={columns} />}
       </article>
     </section>

@@ -96,7 +96,7 @@ export function AppShell() {
             <div className="topbar-divider" />
             <div className="topbar-status">
               <span className="status-dot" />
-              <span>Online</span>
+              <span>在线</span>
             </div>
           </div>
         </header>

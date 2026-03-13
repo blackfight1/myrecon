@@ -178,10 +178,10 @@ export function DashboardPage() {
 
   const statusLabel = (s: string) => {
     const cls = statusClass(s);
-    if (cls === "completed") return "Completed";
-    if (cls === "failed") return "Failed";
-    if (cls === "running") return "Running";
-    return "Pending";
+    if (cls === "completed") return "已完成";
+    if (cls === "failed") return "失败";
+    if (cls === "running") return "运行中";
+    return "等待中";
   };
 
   return (
@@ -253,11 +253,11 @@ export function DashboardPage() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Target</th>
-                  <th>Summary</th>
-                  <th>Created At</th>
-                  <th>Status</th>
-                  <th>Progress</th>
+                  <th>目标</th>
+                  <th>摘要</th>
+                  <th>创建时间</th>
+                  <th>状态</th>
+                  <th>进度</th>
                 </tr>
               </thead>
               <tbody>

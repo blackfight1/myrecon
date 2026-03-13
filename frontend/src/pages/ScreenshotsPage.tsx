@@ -54,47 +54,47 @@ export function ScreenshotsPage() {
     return (
         <div className="page">
             <div className="page-header">
-                <h1 className="page-title">⎔ Screenshots</h1>
+                <h1 className="page-title">⎔ 截图浏览</h1>
                 <p className="page-desc">
-                    Web asset screenshot gallery captured by Gowitness — visual reconnaissance of target surfaces
+                    Gowitness 抓取的 Web 资产截图库 — 目标表面的可视化侦察
                 </p>
             </div>
 
-            {/* Stats */}
+            {/* 统计概览 */}
             <div className="stats-row">
                 <div className="stat-card">
-                    <div className="stat-label">📷 Total Screenshots</div>
+                    <div className="stat-label">📷 截图总数</div>
                     <div className="stat-value">{totalScreenshots}</div>
                 </div>
                 <div className="stat-card">
-                    <div className="stat-label">🌐 Domains Scanned</div>
+                    <div className="stat-label">🌐 已扫描域名</div>
                     <div className="stat-value">{domains.length}</div>
                 </div>
                 <div className="stat-card">
-                    <div className="stat-label">🔍 Current View</div>
+                    <div className="stat-label">🔍 当前展示</div>
                     <div className="stat-value">{filtered.length}</div>
                 </div>
                 <div className="stat-card">
-                    <div className="stat-label">📂 Selected</div>
+                    <div className="stat-label">📂 已选域名</div>
                     <div className="stat-value" style={{ fontSize: 14 }}>
                         {selectedDomain ?? "—"}
                     </div>
                 </div>
             </div>
 
-            {/* Domain Selector */}
+            {/* 域名选择器 */}
             <div className="panel">
                 <div className="panel-header">
-                    <h2>Target Domains</h2>
-                    <span className="panel-meta">{domains.length} domains with captures</span>
+                    <h2>目标域名</h2>
+                    <span className="panel-meta">{domains.length} 个域名有截图</span>
                 </div>
                 <div className="panel-body">
                     {domainsQuery.isLoading ? (
-                        <div className="empty-state">Loading domains…</div>
+                        <div className="empty-state">正在加载域名列表…</div>
                     ) : domains.length === 0 ? (
                         <div className="empty-state">
                             <div className="empty-icon">📷</div>
-                            No screenshot data yet. Run a scan with the <code>witness</code> module to capture screenshots.
+                            暂无截图数据。请运行包含 <code>witness</code> 模块的扫描任务来抓取截图。
                         </div>
                     ) : (
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -113,11 +113,11 @@ export function ScreenshotsPage() {
                 </div>
             </div>
 
-            {/* Gallery */}
+            {/* 截图画廊 */}
             {selectedDomain && (
                 <div className="panel">
                     <div className="panel-header">
-                        <h2>Gallery — {selectedDomain}</h2>
+                        <h2>截图画廊 — {selectedDomain}</h2>
                         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                             <select
                                 className="form-select"
@@ -125,7 +125,7 @@ export function ScreenshotsPage() {
                                 onChange={(e) => setFilterStatus(e.target.value)}
                                 style={{ width: 100 }}
                             >
-                                <option value="all">All</option>
+                                <option value="all">全部</option>
                                 <option value="2xx">2xx</option>
                                 <option value="3xx">3xx</option>
                                 <option value="4xx">4xx</option>
@@ -133,7 +133,7 @@ export function ScreenshotsPage() {
                             </select>
                             <input
                                 className="form-input"
-                                placeholder="Search URL or title…"
+                                placeholder="搜索 URL 或标题…"
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
                                 style={{ width: 200 }}
@@ -142,26 +142,26 @@ export function ScreenshotsPage() {
                                 className={`btn btn-sm${viewMode === "grid" ? " btn-active" : ""}`}
                                 onClick={() => setViewMode("grid")}
                             >
-                                ⊞ Grid
+                                ⊞ 网格
                             </button>
                             <button
                                 className={`btn btn-sm${viewMode === "list" ? " btn-active" : ""}`}
                                 onClick={() => setViewMode("list")}
                             >
-                                ☰ List
+                                ☰ 列表
                             </button>
                         </div>
                     </div>
 
                     {screenshotsQuery.isLoading ? (
                         <div className="panel-body">
-                            <div className="empty-state">Loading screenshots…</div>
+                            <div className="empty-state">正在加载截图…</div>
                         </div>
                     ) : filtered.length === 0 ? (
                         <div className="panel-body">
                             <div className="empty-state">
                                 <div className="empty-icon">🔍</div>
-                                No screenshots match the current filter.
+                                没有符合当前筛选条件的截图。
                             </div>
                         </div>
                     ) : viewMode === "grid" ? (
@@ -201,10 +201,10 @@ export function ScreenshotsPage() {
                                 <table className="data-table">
                                     <thead>
                                         <tr>
-                                            <th>Preview</th>
+                                            <th>预览</th>
                                             <th>URL</th>
-                                            <th>Title</th>
-                                            <th>Status</th>
+                                            <th>标题</th>
+                                            <th>状态码</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -235,12 +235,12 @@ export function ScreenshotsPage() {
                 </div>
             )}
 
-            {/* Lightbox */}
+            {/* 灯箱 */}
             {lightboxUrl && (
                 <div className="lightbox-overlay" onClick={() => setLightboxUrl(null)}>
                     <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
                         <button className="lightbox-close" onClick={() => setLightboxUrl(null)}>✕</button>
-                        <img src={lightboxUrl} alt="Screenshot full view" />
+                        <img src={lightboxUrl} alt="截图大图预览" />
                     </div>
                 </div>
             )}
