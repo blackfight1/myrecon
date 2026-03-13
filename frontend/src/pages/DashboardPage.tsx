@@ -2,7 +2,7 @@
 import { useMemo } from "react";
 import { StatCard } from "../components/ui/StatCard";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useAssets, useJobs, usePorts, useVulns } from "../hooks/queries";
+import { useDashboard, useJobs, useAssets, usePorts, useVulns } from "../hooks/queries";
 import { matchesProjectDomain } from "../lib/projectScope";
 
 function hostnameFromUrl(input?: string): string | undefined {
@@ -10,19 +10,18 @@ function hostnameFromUrl(input?: string): string | undefined {
   try { return new URL(input).hostname; } catch { return undefined; }
 }
 
-function keyByDay(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
 export function DashboardPage() {
   const { activeProject } = useWorkspace();
   const rootDomains = activeProject?.rootDomains ?? [];
 
+  // Use backend dashboard summary API for trend and 24h stats
+  const dashQ = useDashboard();
   const jobsQ = useJobs();
   const assetsQ = useAssets();
   const portsQ = usePorts();
   const vulnsQ = useVulns();
 
+  // Scoped data for totals and severity breakdown
   const scoped = useMemo(() => {
     const jobs = (jobsQ.data ?? []).filter((j) => matchesProjectDomain(j.rootDomain, rootDomains));
     const assets = (assetsQ.data ?? []).filter((a) =>
@@ -38,6 +37,10 @@ export function DashboardPage() {
     );
     return { jobs, assets, ports, vulns };
   }, [jobsQ.data, assetsQ.data, portsQ.data, vulnsQ.data, rootDomains]);
+
+  // Dashboard summary from backend
+  const summary = dashQ.data?.summary;
+  const trend = dashQ.data?.trend ?? [];
 
   // Count unique IPs
   const uniqueIps = useMemo(() => {
@@ -60,56 +63,33 @@ export function DashboardPage() {
     return out;
   }, [scoped.vulns]);
 
-  // 7-day trend
-  const trend = useMemo(() => {
-    const buckets: Record<string, { label: string; subs: number; ips: number; ports: number; web: number }> = {};
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - i);
-      const k = keyByDay(d);
-      buckets[k] = { label: `${d.getMonth() + 1}/${d.getDate()}`, subs: 0, ips: 0, ports: 0, web: 0 };
-    }
-    for (const a of scoped.assets) {
-      const b = a.createdAt ?? a.updatedAt;
-      if (!b) continue;
-      const d = new Date(b);
-      if (!Number.isNaN(d.getTime())) {
-        const k = keyByDay(d);
-        if (buckets[k]) {
-          buckets[k].subs++;
-          if (a.url) buckets[k].web++;
-        }
-      }
-    }
-    for (const p of scoped.ports) {
-      const b = p.lastSeen ?? p.updatedAt;
-      if (!b) continue;
-      const d = new Date(b);
-      if (!Number.isNaN(d.getTime())) {
-        const k = keyByDay(d);
-        if (buckets[k]) buckets[k].ports++;
-      }
-    }
-    return Object.values(buckets);
-  }, [scoped.assets, scoped.ports]);
-
-  const loading = jobsQ.isLoading || assetsQ.isLoading || portsQ.isLoading || vulnsQ.isLoading;
-
-  // Running jobs count
-  const runningJobs = useMemo(() =>
+  // Running jobs count - prefer backend summary if available
+  const runningJobs = summary?.jobsRunning ?? useMemo(() =>
     scoped.jobs.filter((j) => {
       const s = String(j.status).toLowerCase();
       return s.includes("running") || s.includes("pending");
     }).length
     , [scoped.jobs]);
 
-  // Trend chart
+  const loading = dashQ.isLoading || jobsQ.isLoading || assetsQ.isLoading || portsQ.isLoading || vulnsQ.isLoading;
+
+  // Format trend dates for display
+  const trendLabels = useMemo(() => {
+    return trend.map((t) => {
+      const parts = t.date.split("-");
+      if (parts.length === 3) return `${parseInt(parts[1])}/${parseInt(parts[2])}`;
+      return t.date;
+    });
+  }, [trend]);
+
+  // Trend chart - use server-side computed data
   const trendOption = {
     tooltip: { trigger: "axis" as const, backgroundColor: "#1a2035", borderColor: "rgba(255,255,255,0.08)", textStyle: { color: "#e2e8f0" } },
     legend: { textStyle: { color: "#64748b" }, bottom: 0 },
     grid: { left: 40, right: 20, top: 20, bottom: 40 },
     xAxis: {
       type: "category" as const,
-      data: trend.map((t) => t.label),
+      data: trendLabels,
       axisLabel: { color: "#64748b" },
       axisLine: { lineStyle: { color: "#1e2a42" } },
     },
@@ -119,10 +99,9 @@ export function DashboardPage() {
       splitLine: { lineStyle: { color: "#1e2a42" } },
     },
     series: [
-      { name: "子域名", type: "line" as const, smooth: true, symbol: "circle", symbolSize: 6, data: trend.map((t) => t.subs), itemStyle: { color: "#f59e0b" }, lineStyle: { color: "#f59e0b", width: 2 }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(245,158,11,0.15)" }, { offset: 1, color: "rgba(245,158,11,0)" }] } } },
-      { name: "IP", type: "line" as const, smooth: true, symbol: "circle", symbolSize: 6, data: trend.map((t) => t.ips), itemStyle: { color: "#ef4444" }, lineStyle: { color: "#ef4444", width: 2 } },
+      { name: "子域名", type: "line" as const, smooth: true, symbol: "circle", symbolSize: 6, data: trend.map((t) => t.subdomains), itemStyle: { color: "#f59e0b" }, lineStyle: { color: "#f59e0b", width: 2 }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(245,158,11,0.15)" }, { offset: 1, color: "rgba(245,158,11,0)" }] } } },
       { name: "端口", type: "line" as const, smooth: true, symbol: "circle", symbolSize: 6, data: trend.map((t) => t.ports), itemStyle: { color: "#22c55e" }, lineStyle: { color: "#22c55e", width: 2 }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(34,197,94,0.1)" }, { offset: 1, color: "rgba(34,197,94,0)" }] } } },
-      { name: "网站", type: "line" as const, smooth: true, symbol: "circle", symbolSize: 6, data: trend.map((t) => t.web), itemStyle: { color: "#3b82f6" }, lineStyle: { color: "#3b82f6", width: 2 } },
+      { name: "漏洞", type: "line" as const, smooth: true, symbol: "circle", symbolSize: 6, data: trend.map((t) => t.vulnerabilities), itemStyle: { color: "#ef4444" }, lineStyle: { color: "#ef4444", width: 2 } },
     ],
   };
 
@@ -168,6 +147,13 @@ export function DashboardPage() {
     return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
   };
 
+  const formatDuration = (sec?: number) => {
+    if (!sec || sec <= 0) return "—";
+    if (sec < 60) return `${sec}s`;
+    if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+    return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+  };
+
   const statusClass = (s: string) => {
     const l = s.toLowerCase();
     if (l.includes("ok") || l.includes("success") || l.includes("done") || l.includes("completed")) return "completed";
@@ -190,8 +176,8 @@ export function DashboardPage() {
 
       {/* ── 4 Stat Cards ── */}
       <div className="stats-row">
-        <StatCard icon="◎" label="发现资产" value={scoped.assets.length} change={scoped.assets.length > 0 ? scoped.assets.length : undefined} desc={`子域名 + IP + 端口 + 网站`} />
-        <StatCard icon="⚑" label="发现漏洞" value={totalVulns} change={totalVulns > 0 ? totalVulns : undefined} accent="danger" desc="所有扫描发现的漏洞" />
+        <StatCard icon="◎" label="发现资产" value={scoped.assets.length} change={summary?.newSubdomains24h} desc={`子域名 ${scoped.assets.length} · IP ${uniqueIps} · 端口 ${scoped.ports.length} · 网站 ${webCount}`} />
+        <StatCard icon="⚑" label="发现漏洞" value={totalVulns} change={summary?.newVulns24h} accent="danger" desc="所有扫描发现的漏洞" />
         <StatCard icon="◉" label="监控目标" value={uniqueIps} accent="blue" desc="已添加的目标总数" />
         <StatCard icon="▷" label="正在扫描" value={runningJobs} accent="blue" desc="当前进行中的任务" />
       </div>
@@ -207,7 +193,7 @@ export function DashboardPage() {
             <ReactECharts option={trendOption} style={{ height: 280 }} />
           </div>
           <div style={{ display: "flex", gap: 16, padding: "0 20px 16px", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 12, color: "#64748b" }}>指标</span>
+            <span style={{ fontSize: 12, color: "#64748b" }}>总计</span>
             <span style={{ fontSize: 12, color: "#f59e0b" }}>● 子域名 {scoped.assets.length}</span>
             <span style={{ fontSize: 12, color: "#ef4444" }}>● IP {uniqueIps}</span>
             <span style={{ fontSize: 12, color: "#22c55e" }}>● 端口 {scoped.ports.length}</span>
@@ -254,10 +240,11 @@ export function DashboardPage() {
               <thead>
                 <tr>
                   <th>目标</th>
-                  <th>摘要</th>
+                  <th>模式</th>
+                  <th>模块</th>
                   <th>创建时间</th>
+                  <th>耗时</th>
                   <th>状态</th>
-                  <th>进度</th>
                 </tr>
               </thead>
               <tbody>
@@ -267,31 +254,29 @@ export function DashboardPage() {
                     <tr key={j.id}>
                       <td className="cell-mono">{j.rootDomain || "—"}</td>
                       <td>
+                        <span className={`summary-badge ${j.mode === "monitor" ? "info" : "subs"}`}>
+                          {j.mode === "monitor" ? "监控" : "扫描"}
+                        </span>
+                      </td>
+                      <td>
                         <div className="summary-badges">
-                          {totalVulns > 0 && <span className="summary-badge critical">● {sevCounts.critical}</span>}
-                          {scoped.ports.length > 0 && <span className="summary-badge ports">⊞ {scoped.ports.length}</span>}
-                          {scoped.assets.length > 0 && <span className="summary-badge subs">◎ {scoped.assets.length}</span>}
+                          {(j.modules ?? []).map((m) => (
+                            <span key={m} className="summary-badge" style={{ fontSize: 11 }}>{m}</span>
+                          ))}
                         </div>
                       </td>
                       <td className="cell-muted">{formatTime(j.startedAt)}</td>
+                      <td className="cell-muted">{formatDuration(j.durationSec)}</td>
                       <td>
                         <span className={`status-badge ${cls}`}>
                           <span className="status-indicator" />
                           {statusLabel(j.status)}
                         </span>
-                      </td>
-                      <td>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <div className="progress-bar" style={{ flex: 1 }}>
-                            <div
-                              className={`progress-fill ${cls === "completed" ? "success" : cls === "failed" ? "danger" : "info"}`}
-                              style={{ width: cls === "completed" || cls === "failed" ? "100%" : "50%" }}
-                            />
+                        {j.errorMessage && (
+                          <div style={{ fontSize: 11, color: "#ef4444", marginTop: 2, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={j.errorMessage}>
+                            {j.errorMessage}
                           </div>
-                          <span style={{ fontSize: 12, color: "#64748b", minWidth: 36 }}>
-                            {cls === "completed" || cls === "failed" ? "100%" : "—"}
-                          </span>
-                        </div>
+                        )}
                       </td>
                     </tr>
                   );

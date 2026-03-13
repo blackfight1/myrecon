@@ -198,6 +198,31 @@ func (MonitorTarget) TableName() string {
 	return "monitor_targets"
 }
 
+// ScanJob stores scan task state persistently.
+type ScanJob struct {
+	ID           uint           `gorm:"primarykey" json:"id"`
+	JobID        string         `gorm:"uniqueIndex;not null" json:"job_id"` // e.g. "scan-1234567890"
+	RootDomain   string         `gorm:"index;not null" json:"root_domain"`
+	Mode         string         `gorm:"not null" json:"mode"`         // scan or monitor
+	Modules      string         `gorm:"type:text" json:"modules"`     // comma-separated
+	Status       string         `gorm:"index;not null" json:"status"` // pending/running/success/failed/canceled
+	ErrorMessage string         `gorm:"type:text" json:"error_message"`
+	DurationSec  int            `json:"duration_sec"`
+	SubdomainCnt int            `json:"subdomain_cnt"`
+	PortCnt      int            `json:"port_cnt"`
+	VulnCnt      int            `json:"vuln_cnt"`
+	StartedAt    *time.Time     `json:"started_at"`
+	FinishedAt   *time.Time     `json:"finished_at"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// TableName table name.
+func (ScanJob) TableName() string {
+	return "scan_jobs"
+}
+
 // MonitorTask stores scheduled monitor jobs.
 type MonitorTask struct {
 	ID          uint           `gorm:"primarykey" json:"id"`

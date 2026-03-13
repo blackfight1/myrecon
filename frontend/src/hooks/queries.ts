@@ -1,18 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { endpoints, type NewScanJobRequest } from "../api/endpoints";
+import { endpoints, type NewScanJobRequest, type CancelJobRequest, type CreateMonitorTargetRequest } from "../api/endpoints";
 
-export function useDashboard() {
+export function useDashboard(rootDomain?: string) {
   return useQuery({
-    queryKey: ["dashboard"],
-    queryFn: endpoints.getDashboard,
+    queryKey: ["dashboard", rootDomain ?? ""],
+    queryFn: () => endpoints.getDashboard(rootDomain),
     refetchInterval: 10000
   });
 }
 
-export function useJobs() {
+export function useJobs(rootDomain?: string) {
   return useQuery({
-    queryKey: ["jobs"],
-    queryFn: endpoints.getJobs,
+    queryKey: ["jobs", rootDomain ?? ""],
+    queryFn: () => endpoints.getJobs(rootDomain),
     refetchInterval: 5000
   });
 }
@@ -28,26 +28,37 @@ export function useCreateJob() {
   });
 }
 
-export function useAssets() {
+export function useCancelJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CancelJobRequest) => endpoints.cancelJob(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["jobs"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+    }
+  });
+}
+
+export function useAssets(rootDomain?: string) {
   return useQuery({
-    queryKey: ["assets"],
-    queryFn: endpoints.getAssets,
+    queryKey: ["assets", rootDomain ?? ""],
+    queryFn: () => endpoints.getAssets(rootDomain),
     refetchInterval: 20000
   });
 }
 
-export function usePorts() {
+export function usePorts(rootDomain?: string) {
   return useQuery({
-    queryKey: ["ports"],
-    queryFn: endpoints.getPorts,
+    queryKey: ["ports", rootDomain ?? ""],
+    queryFn: () => endpoints.getPorts(rootDomain),
     refetchInterval: 20000
   });
 }
 
-export function useVulns() {
+export function useVulns(rootDomain?: string) {
   return useQuery({
-    queryKey: ["vulns"],
-    queryFn: endpoints.getVulns,
+    queryKey: ["vulns", rootDomain ?? ""],
+    queryFn: () => endpoints.getVulns(rootDomain),
     refetchInterval: 20000
   });
 }
@@ -60,18 +71,105 @@ export function useMonitorTargets() {
   });
 }
 
-export function useMonitorRuns() {
+export function useCreateMonitorTarget() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateMonitorTargetRequest) => endpoints.createMonitorTarget(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
+      await qc.invalidateQueries({ queryKey: ["jobs"] });
+    }
+  });
+}
+
+export function useStopMonitorTarget() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (domain: string) => endpoints.stopMonitorTarget(domain),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
+      await qc.invalidateQueries({ queryKey: ["jobs"] });
+    }
+  });
+}
+
+export function useDeleteMonitorTarget() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (domain: string) => endpoints.deleteMonitorTarget(domain),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-runs"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-changes"] });
+      await qc.invalidateQueries({ queryKey: ["jobs"] });
+    }
+  });
+}
+
+export function useMonitorRuns(rootDomain?: string) {
   return useQuery({
-    queryKey: ["monitor-runs"],
-    queryFn: endpoints.getMonitorRuns,
+    queryKey: ["monitor-runs", rootDomain ?? ""],
+    queryFn: () => endpoints.getMonitorRuns(rootDomain),
     refetchInterval: 10000
   });
 }
 
-export function useMonitorChanges() {
+export function useMonitorChanges(rootDomain?: string) {
   return useQuery({
-    queryKey: ["monitor-changes"],
-    queryFn: endpoints.getMonitorChanges,
+    queryKey: ["monitor-changes", rootDomain ?? ""],
+    queryFn: () => endpoints.getMonitorChanges(rootDomain),
     refetchInterval: 10000
+  });
+}
+
+/* ── Screenshots ── */
+
+export function useScreenshotDomains() {
+  return useQuery({
+    queryKey: ["screenshot-domains"],
+    queryFn: endpoints.getScreenshotDomains,
+    refetchInterval: 30000
+  });
+}
+
+export function useScreenshots(rootDomain: string) {
+  return useQuery({
+    queryKey: ["screenshots", rootDomain],
+    queryFn: () => endpoints.getScreenshots(rootDomain),
+    enabled: !!rootDomain,
+    refetchInterval: 30000
+  });
+}
+
+/* ── Settings ── */
+
+export function useSettings() {
+  return useQuery({
+    queryKey: ["settings"],
+    queryFn: endpoints.getSettings
+  });
+}
+
+export function useUpdateSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: endpoints.updateSettings,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["settings"] });
+    }
+  });
+}
+
+export function useToolStatus() {
+  return useQuery({
+    queryKey: ["tool-status"],
+    queryFn: endpoints.getToolStatus,
+    refetchInterval: 60000
+  });
+}
+
+export function useTestNotification() {
+  return useMutation({
+    mutationFn: endpoints.testNotification
   });
 }

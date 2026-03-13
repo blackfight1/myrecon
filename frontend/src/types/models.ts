@@ -1,4 +1,4 @@
-export type HealthStatus = "ok" | "error" | "running" | "pending" | "unknown";
+export type HealthStatus = "success" | "failed" | "running" | "pending" | "canceled" | "unknown";
 
 export interface DashboardSummary {
   jobsRunning: number;
@@ -27,6 +27,9 @@ export interface JobOverview {
   finishedAt?: string;
   durationSec?: number;
   errorMessage?: string;
+  subdomainCnt?: number;
+  portCnt?: number;
+  vulnCnt?: number;
 }
 
 export interface PluginStatus {

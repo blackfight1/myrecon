@@ -68,6 +68,13 @@ func ListScreenshotDomains(baseDir string) ([]string, error) {
 	return web.ListScreenshotDomains(baseDir)
 }
 
+// ScreenshotItem re-exports web.ScreenshotItem.
+type ScreenshotItem = web.ScreenshotItem
+
+func ListScreenshots(baseDir, rootDomain string) ([]ScreenshotItem, error) {
+	return web.ListScreenshots(baseDir, rootDomain)
+}
+
 func ExtractRootDomain(subdomain string) string {
 	return web.ExtractRootDomain(subdomain)
 }

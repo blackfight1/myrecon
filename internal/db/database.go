@@ -30,7 +30,7 @@ func NewDatabase(dsn string) (*Database, error) {
 		return nil, fmt.Errorf("failed to connect to database: %v", err)
 	}
 
-	if err := database.AutoMigrate(&Asset{}, &Port{}, &Vulnerability{}, &MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorTarget{}, &MonitorTask{}); err != nil {
+	if err := database.AutoMigrate(&Asset{}, &Port{}, &Vulnerability{}, &MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorTarget{}, &MonitorTask{}, &ScanJob{}); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %v", err)
 	}
 
@@ -810,6 +810,54 @@ func (d *Database) DeleteAllDataByRootDomain(rootDomain string) error {
 		}
 		return nil
 	})
+}
+
+// ── ScanJob helpers ──
+
+// CreateScanJob creates a new persistent scan job record.
+func (d *Database) CreateScanJob(job *ScanJob) error {
+	return d.DB.Create(job).Error
+}
+
+// UpdateScanJob updates scan job fields.
+func (d *Database) UpdateScanJob(jobID string, updates map[string]interface{}) error {
+	return d.DB.Model(&ScanJob{}).Where("job_id = ?", jobID).Updates(updates).Error
+}
+
+// GetScanJob returns a scan job by job_id.
+func (d *Database) GetScanJob(jobID string) (*ScanJob, error) {
+	var job ScanJob
+	if err := d.DB.Where("job_id = ?", jobID).First(&job).Error; err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+// ListScanJobs returns scan jobs ordered by created_at desc.
+func (d *Database) ListScanJobs(rootDomain string, limit int) ([]ScanJob, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	query := d.DB.Order("created_at desc").Limit(limit)
+	if rootDomain != "" {
+		query = query.Where("root_domain = ?", rootDomain)
+	}
+	var jobs []ScanJob
+	if err := query.Find(&jobs).Error; err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
+// CancelScanJob marks a pending/running scan job as canceled.
+func (d *Database) CancelScanJob(jobID string) error {
+	now := time.Now()
+	return d.DB.Model(&ScanJob{}).
+		Where("job_id = ? AND status IN ?", jobID, []string{"pending", "running"}).
+		Updates(map[string]interface{}{
+			"status":      "canceled",
+			"finished_at": now,
+		}).Error
 }
 
 func getStringValue(data map[string]interface{}, key string) string {

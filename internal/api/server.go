@@ -17,12 +17,14 @@ import (
 	"time"
 
 	"hunter/internal/db"
+	"hunter/internal/engine"
 	"hunter/internal/plugins"
 )
 
 const (
 	defaultMonitorIntervalSec = 6 * 3600
 	maxListRows               = 5000
+	schedulerPollInterval     = 15 * time.Second
 )
 
 // Server is the HTTP API server.
@@ -34,8 +36,9 @@ type Server struct {
 	settingsMu sync.RWMutex
 	settings   runtimeSettings
 
-	jobsMu        sync.RWMutex
-	ephemeralJobs []jobOverviewResponse
+	// cancel functions for running scans, keyed by jobID
+	scanCancelMu sync.Mutex
+	scanCancels  map[string]context.CancelFunc
 }
 
 type runtimeSettings struct {
@@ -98,6 +101,9 @@ type jobOverviewResponse struct {
 	FinishedAt   string   `json:"finishedAt,omitempty"`
 	DurationSec  int      `json:"durationSec,omitempty"`
 	ErrorMessage string   `json:"errorMessage,omitempty"`
+	SubdomainCnt int      `json:"subdomainCnt,omitempty"`
+	PortCnt      int      `json:"portCnt,omitempty"`
+	VulnCnt      int      `json:"vulnCnt,omitempty"`
 }
 
 type createJobRequest struct {
@@ -283,6 +289,11 @@ type monitorChangeSortItem struct {
 	item      monitorChangeResponse
 }
 
+type createMonitorRequest struct {
+	Domain      string `json:"domain"`
+	IntervalSec int    `json:"intervalSec"`
+}
+
 // NewServer creates a new API server.
 func NewServer(database *db.Database, screenshotDir string) *Server {
 	if strings.TrimSpace(screenshotDir) == "" {
@@ -294,14 +305,25 @@ func NewServer(database *db.Database, screenshotDir string) *Server {
 		mux:           http.NewServeMux(),
 		screenshotDir: screenshotDir,
 		settings:      loadRuntimeSettings(screenshotDir),
+		scanCancels:   make(map[string]context.CancelFunc),
 	}
 	s.registerRoutes()
 	return s
 }
 
-// Start starts the HTTP server.
+// Start starts the HTTP server and the monitor scheduler.
 func (s *Server) Start(addr string) error {
-	log.Printf("[API] server starting on %s", addr)
+	// Recover stale monitor tasks from previous crash
+	if recovered, err := s.db.RecoverStaleRunningTasks(2 * time.Hour); err != nil {
+		log.Printf("[Scheduler] failed to recover stale tasks: %v", err)
+	} else if recovered > 0 {
+		log.Printf("[Scheduler] recovered %d stale running tasks", recovered)
+	}
+
+	// Start monitor scheduler in background
+	go s.runMonitorScheduler()
+
+	log.Printf("[API] server starting on %s (monitor scheduler enabled)", addr)
 	return http.ListenAndServe(addr, s.corsMiddleware(s.mux))
 }
 
@@ -321,6 +343,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/dashboard/summary", s.handleDashboard)
 	s.mux.HandleFunc("/api/jobs", s.handleJobs)
+	s.mux.HandleFunc("/api/jobs/cancel", s.handleCancelJob)
 	s.mux.HandleFunc("/api/assets", s.handleAssets)
 	s.mux.HandleFunc("/api/ports", s.handlePorts)
 	s.mux.HandleFunc("/api/vulns", s.handleVulns)
@@ -347,6 +370,160 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// ──────────────────────────────────────────
+// Monitor Scheduler — runs inside web server
+// ──────────────────────────────────────────
+
+func (s *Server) runMonitorScheduler() {
+	log.Printf("[Scheduler] monitor scheduler started (poll=%v)", schedulerPollInterval)
+	ticker := time.NewTicker(schedulerPollInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		task, err := s.db.ClaimDueMonitorTask()
+		if err != nil {
+			log.Printf("[Scheduler] claim error: %v", err)
+			continue
+		}
+		if task == nil {
+			continue
+		}
+		go s.executeMonitorTask(task)
+	}
+}
+
+func (s *Server) executeMonitorTask(task *db.MonitorTask) {
+	rootDomain := task.RootDomain
+	log.Printf("[Scheduler] executing monitor task %d for %s", task.ID, rootDomain)
+
+	// Create a monitor run record
+	run, err := s.db.CreateMonitorRun(rootDomain)
+	if err != nil {
+		log.Printf("[Scheduler] failed to create monitor run: %v", err)
+		_ = s.db.HandleMonitorTaskFailure(task, fmt.Sprintf("create run failed: %v", err))
+		return
+	}
+
+	target, err := s.db.GetOrCreateMonitorTarget(rootDomain)
+	if err != nil {
+		log.Printf("[Scheduler] failed to get monitor target: %v", err)
+		_ = s.db.CompleteMonitorRun(run.ID, "failed", err.Error(), 0, 0, 0, 0, 0)
+		_ = s.db.HandleMonitorTaskFailure(task, err.Error())
+		return
+	}
+
+	// Collect subdomains
+	subResults, subdomains, err := s.collectSubdomains([]string{rootDomain})
+	if err != nil {
+		errMsg := fmt.Sprintf("subdomain collection failed: %v", err)
+		log.Printf("[Scheduler] %s", errMsg)
+		_ = s.db.CompleteMonitorRun(run.ID, "failed", errMsg, 0, 0, 0, 0, 0)
+		_ = s.db.HandleMonitorTaskFailure(task, errMsg)
+		return
+	}
+
+	// Run network pipeline (httpx + ports)
+	networkResults, err := s.runNetworkPipeline(subdomains, true, false, false, s.screenshotDir)
+	if err != nil {
+		log.Printf("[Scheduler] network pipeline warning for %s: %v", rootDomain, err)
+	}
+
+	allResults := append(subResults, networkResults...)
+
+	// Save results to DB
+	if dbErr := s.saveResultsToDB(allResults); dbErr != nil {
+		log.Printf("[Scheduler] DB save warning: %v", dbErr)
+	}
+
+	// Detect changes
+	newLive, webChanged, portOpened, portClosed, svcChanged := s.detectChanges(rootDomain, run.ID, target)
+
+	// Complete run
+	status := "success"
+	_ = s.db.CompleteMonitorRun(run.ID, status, "", newLive, webChanged, portOpened, portClosed, svcChanged)
+
+	// Update target baseline
+	now := time.Now()
+	_ = s.db.UpdateMonitorTarget(rootDomain, true, now)
+
+	// Complete task and schedule next
+	_ = s.db.CompleteMonitorTaskSuccess(task.ID)
+
+	totalChanges := newLive + webChanged + portOpened + portClosed + svcChanged
+	log.Printf("[Scheduler] monitor task %d completed for %s: %d total changes", task.ID, rootDomain, totalChanges)
+
+	// Send notification if changes detected
+	if totalChanges > 0 {
+		s.settingsMu.RLock()
+		notifyEnabled := s.settings.Notifications.Enabled
+		s.settingsMu.RUnlock()
+		if notifyEnabled {
+			notifier := plugins.NewDingTalkNotifierFromEnv(true)
+			if notifier.Enabled() {
+				stats := map[string]int{
+					"new_live": newLive, "web_changed": webChanged,
+					"port_opened": portOpened, "port_closed": portClosed,
+					"service_changed": svcChanged,
+				}
+				_ = notifier.SendReconEnd(true, time.Since(run.StartedAt), stats, "")
+			}
+		}
+	}
+}
+
+// detectChanges compares current state with previous baseline.
+func (s *Server) detectChanges(rootDomain string, runID uint, target *db.MonitorTarget) (newLive, webChanged, portOpened, portClosed, svcChanged int) {
+	if !target.BaselineDone {
+		// First run = baseline, no changes to detect
+		return 0, 0, 0, 0, 0
+	}
+
+	// Detect new live subdomains (created in last interval)
+	recentAssets, _ := s.db.GetRecentAssets(target.LastRunAt.Add(-1 * time.Minute))
+	for _, a := range recentAssets {
+		if a.URL != "" && matchesRootDomain(a.Domain, rootDomain) {
+			newLive++
+			_ = s.db.SaveAssetChange(&db.AssetChange{
+				RunID:      runID,
+				RootDomain: rootDomain,
+				ChangeType: "new_live",
+				Domain:     a.Domain,
+				URL:        a.URL,
+				StatusCode: a.StatusCode,
+				Title:      a.Title,
+			})
+		}
+	}
+
+	// Detect new ports
+	var since time.Time
+	if target.LastRunAt != nil {
+		since = target.LastRunAt.Add(-1 * time.Minute)
+	}
+	recentPorts, _ := s.db.GetRecentPorts(since)
+	for _, p := range recentPorts {
+		if matchesRootDomain(p.Domain, rootDomain) {
+			portOpened++
+			_ = s.db.SavePortChange(&db.PortChange{
+				RunID:      runID,
+				RootDomain: rootDomain,
+				ChangeType: "opened",
+				Domain:     p.Domain,
+				IP:         p.IP,
+				Port:       p.Port,
+				Protocol:   p.Protocol,
+				Service:    p.Service,
+			})
+		}
+	}
+
+	return newLive, webChanged, portOpened, portClosed, svcChanged
+}
+
+// ──────────────────────────────────────────
+// Dashboard
+// ──────────────────────────────────────────
+
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -357,8 +534,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	since24h := now.Add(-24 * time.Hour)
 
 	var (
+		jobsRunningScans int64
 		jobsRunningTasks int64
-		jobsRunningRuns  int64
 		jobsSuccess24h   int64
 		jobsFailed24h    int64
 		newSub24h        int64
@@ -367,25 +544,38 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		avgDuration      float64
 	)
 
+	// Count running scan jobs
+	s.db.DB.Model(&db.ScanJob{}).
+		Where("status IN ?", []string{"running", "pending"}).
+		Count(&jobsRunningScans)
 	s.db.DB.Model(&db.MonitorTask{}).
 		Where("status IN ?", []string{"running", "pending"}).
 		Count(&jobsRunningTasks)
-	s.db.DB.Model(&db.MonitorRun{}).
-		Where("status = ? AND finished_at IS NULL", "running").
-		Count(&jobsRunningRuns)
+
+	// Count success/failed in 24h (scan_jobs + monitor_runs)
+	var scanSuccess, scanFailed int64
+	s.db.DB.Model(&db.ScanJob{}).
+		Where("status = ? AND finished_at >= ?", "success", since24h).
+		Count(&scanSuccess)
+	s.db.DB.Model(&db.ScanJob{}).
+		Where("status = ? AND finished_at >= ?", "failed", since24h).
+		Count(&scanFailed)
+	var monSuccess, monFailed int64
 	s.db.DB.Model(&db.MonitorRun{}).
 		Where("status = ? AND COALESCE(finished_at, updated_at) >= ?", "success", since24h).
-		Count(&jobsSuccess24h)
+		Count(&monSuccess)
 	s.db.DB.Model(&db.MonitorRun{}).
 		Where("status = ? AND COALESCE(finished_at, updated_at) >= ?", "failed", since24h).
-		Count(&jobsFailed24h)
+		Count(&monFailed)
+	jobsSuccess24h = scanSuccess + monSuccess
+	jobsFailed24h = scanFailed + monFailed
 
 	s.db.DB.Model(&db.Asset{}).Where("created_at >= ?", since24h).Count(&newSub24h)
 	s.db.DB.Model(&db.Port{}).Where("created_at >= ?", since24h).Count(&newPorts24h)
 	s.db.DB.Model(&db.Vulnerability{}).Where("created_at >= ?", since24h).Count(&newVulns24h)
-	s.db.DB.Model(&db.MonitorRun{}).
+	s.db.DB.Model(&db.ScanJob{}).
 		Select("COALESCE(AVG(duration_sec), 0)").
-		Where("status = ? AND COALESCE(finished_at, updated_at) >= ?", "success", since24h).
+		Where("status = ? AND finished_at >= ?", "success", since24h).
 		Scan(&avgDuration)
 
 	trend := make([]trendPointResponse, 0, 7)
@@ -409,7 +599,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	resp := dashboardResponse{
 		Summary: dashboardSummaryResponse{
-			JobsRunning:           int(jobsRunningTasks + jobsRunningRuns),
+			JobsRunning:           int(jobsRunningScans + jobsRunningTasks),
 			JobsSuccess24h:        int(jobsSuccess24h),
 			JobsFailed24h:         int(jobsFailed24h),
 			NewSubdomains24h:      int(newSub24h),
@@ -421,6 +611,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// ──────────────────────────────────────────
+// Assets / Ports / Vulns (unchanged logic)
+// ──────────────────────────────────────────
 
 func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -531,27 +725,19 @@ func (s *Server) handleVulns(w http.ResponseWriter, r *http.Request) {
 			matchedAt = timeToISO(v.CreatedAt)
 		}
 		resp = append(resp, vulnerabilityResponse{
-			ID:           int(v.ID),
-			RootDomain:   v.RootDomain,
-			Domain:       v.Domain,
-			Host:         v.Host,
-			URL:          v.URL,
-			IP:           v.IP,
-			TemplateID:   v.TemplateID,
-			TemplateName: v.TemplateName,
-			Severity:     v.Severity,
-			CVE:          v.CVE,
-			MatcherName:  v.MatcherName,
-			Description:  v.Description,
-			Reference:    v.Reference,
-			MatchedAt:    matchedAt,
-			Fingerprint:  v.Fingerprint,
-			LastSeen:     timeToISO(v.LastSeen),
+			ID: int(v.ID), RootDomain: v.RootDomain, Domain: v.Domain, Host: v.Host,
+			URL: v.URL, IP: v.IP, TemplateID: v.TemplateID, TemplateName: v.TemplateName,
+			Severity: v.Severity, CVE: v.CVE, MatcherName: v.MatcherName,
+			Description: v.Description, Reference: v.Reference, MatchedAt: matchedAt,
+			Fingerprint: v.Fingerprint, LastSeen: timeToISO(v.LastSeen),
 		})
 	}
-
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// ──────────────────────────────────────────
+// Jobs — persistent scan_jobs table
+// ──────────────────────────────────────────
 
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -567,84 +753,73 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	rootDomainFilter := normalizeRootDomain(r.URL.Query().Get("root_domain"))
 
-	jobs := make([]jobOverviewResponse, 0, 512)
-
-	s.jobsMu.RLock()
-	for _, j := range s.ephemeralJobs {
-		if rootDomainFilter != "" && !matchesRootDomain(j.RootDomain, rootDomainFilter) {
-			continue
-		}
-		jobs = append(jobs, j)
+	// Fetch scan jobs from DB
+	scanJobs, err := s.db.ListScanJobs(rootDomainFilter, 300)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	s.jobsMu.RUnlock()
 
+	jobs := make([]jobOverviewResponse, 0, len(scanJobs)+200)
+	for _, sj := range scanJobs {
+		modules := []string{}
+		if sj.Modules != "" {
+			modules = strings.Split(sj.Modules, ",")
+		}
+		started := timeToISO(sj.CreatedAt)
+		if sj.StartedAt != nil {
+			started = timeToISO(*sj.StartedAt)
+		}
+		jobs = append(jobs, jobOverviewResponse{
+			ID:           sj.JobID,
+			RootDomain:   sj.RootDomain,
+			Mode:         sj.Mode,
+			Modules:      modules,
+			Status:       normalizeHealthStatus(sj.Status),
+			StartedAt:    started,
+			FinishedAt:   timePtrToISO(sj.FinishedAt),
+			DurationSec:  sj.DurationSec,
+			ErrorMessage: sj.ErrorMessage,
+			SubdomainCnt: sj.SubdomainCnt,
+			PortCnt:      sj.PortCnt,
+			VulnCnt:      sj.VulnCnt,
+		})
+	}
+
+	// Also include monitor tasks/runs
 	var tasks []db.MonitorTask
-	taskQuery := s.db.DB.Order("created_at desc").Limit(300)
+	taskQuery := s.db.DB.Order("created_at desc").Limit(200)
 	if rootDomainFilter != "" {
 		taskQuery = taskQuery.Where("root_domain = ?", rootDomainFilter)
 	}
-	if err := taskQuery.Find(&tasks).Error; err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	for _, t := range tasks {
-		started := timeToISO(t.CreatedAt)
-		if t.StartedAt != nil {
-			started = timeToISO(*t.StartedAt)
-		}
-		finished := timePtrToISO(t.FinishedAt)
-		duration := 0
-		if t.StartedAt != nil && t.FinishedAt != nil {
-			if d := t.FinishedAt.Sub(*t.StartedAt); d > 0 {
-				duration = int(d.Seconds())
+	if err := taskQuery.Find(&tasks).Error; err == nil {
+		for _, t := range tasks {
+			started := timeToISO(t.CreatedAt)
+			if t.StartedAt != nil {
+				started = timeToISO(*t.StartedAt)
 			}
+			finished := timePtrToISO(t.FinishedAt)
+			duration := 0
+			if t.StartedAt != nil && t.FinishedAt != nil {
+				if d := t.FinishedAt.Sub(*t.StartedAt); d > 0 {
+					duration = int(d.Seconds())
+				}
+			}
+			jobs = append(jobs, jobOverviewResponse{
+				ID: fmt.Sprintf("task-%d", t.ID), RootDomain: t.RootDomain, Mode: "monitor",
+				Modules: []string{"subs", "ports", "monitor"}, Status: normalizeHealthStatus(t.Status),
+				StartedAt: started, FinishedAt: finished, DurationSec: duration,
+				ErrorMessage: strings.TrimSpace(t.LastError),
+			})
 		}
-
-		jobs = append(jobs, jobOverviewResponse{
-			ID:           fmt.Sprintf("task-%d", t.ID),
-			RootDomain:   t.RootDomain,
-			Mode:         "monitor",
-			Modules:      []string{"subs", "ports", "monitor"},
-			Status:       normalizeHealthStatus(t.Status),
-			StartedAt:    started,
-			FinishedAt:   finished,
-			DurationSec:  duration,
-			ErrorMessage: strings.TrimSpace(t.LastError),
-		})
-	}
-
-	var runs []db.MonitorRun
-	runQuery := s.db.DB.Order("started_at desc").Limit(300)
-	if rootDomainFilter != "" {
-		runQuery = runQuery.Where("root_domain = ?", rootDomainFilter)
-	}
-	if err := runQuery.Find(&runs).Error; err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	for _, run := range runs {
-		jobs = append(jobs, jobOverviewResponse{
-			ID:           fmt.Sprintf("run-%d", run.ID),
-			RootDomain:   run.RootDomain,
-			Mode:         "monitor",
-			Modules:      []string{"subs", "ports", "monitor"},
-			Status:       normalizeHealthStatus(run.Status),
-			StartedAt:    timeToISO(run.StartedAt),
-			FinishedAt:   timePtrToISO(run.FinishedAt),
-			DurationSec:  run.DurationSec,
-			ErrorMessage: strings.TrimSpace(run.ErrorMessage),
-		})
 	}
 
 	sort.SliceStable(jobs, func(i, j int) bool {
-		ti := parseTimeBestEffort(jobs[i].StartedAt)
-		tj := parseTimeBestEffort(jobs[j].StartedAt)
-		return ti.After(tj)
+		return parseTimeBestEffort(jobs[i].StartedAt).After(parseTimeBestEffort(jobs[j].StartedAt))
 	})
 	if len(jobs) > 500 {
 		jobs = jobs[:500]
 	}
-
 	writeJSON(w, http.StatusOK, jobs)
 }
 
@@ -686,60 +861,442 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	job := jobOverviewResponse{
-		ID:         fmt.Sprintf("api-%d", now.UnixNano()),
-		RootDomain: rootDomain,
-		Mode:       mode,
-		Modules:    modules,
-		Status:     "pending",
-		StartedAt:  now.Format(time.RFC3339),
+	jobID := fmt.Sprintf("scan-%d", now.UnixNano())
+	if mode == "monitor" {
+		jobID = fmt.Sprintf("mon-%d", now.UnixNano())
 	}
 
 	if mode == "monitor" {
 		if err := s.db.EnableMonitorTarget(rootDomain, defaultMonitorIntervalSec, 3); err != nil {
-			job.Status = "error"
-			job.ErrorMessage = err.Error()
-			writeJSON(w, http.StatusOK, job)
+			writeJSON(w, http.StatusOK, jobOverviewResponse{
+				ID: jobID, RootDomain: rootDomain, Mode: mode, Modules: modules,
+				Status: "error", StartedAt: now.Format(time.RFC3339), ErrorMessage: err.Error(),
+			})
 			return
 		}
-	}
-
-	s.jobsMu.Lock()
-	s.ephemeralJobs = append([]jobOverviewResponse{job}, s.ephemeralJobs...)
-	if len(s.ephemeralJobs) > 300 {
-		s.ephemeralJobs = s.ephemeralJobs[:300]
-	}
-	s.jobsMu.Unlock()
-
-	writeJSON(w, http.StatusOK, job)
-}
-
-func (s *Server) handleMonitorTargets(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeJSON(w, http.StatusOK, jobOverviewResponse{
+			ID: jobID, RootDomain: rootDomain, Mode: mode, Modules: modules,
+			Status: "pending", StartedAt: now.Format(time.RFC3339),
+		})
 		return
 	}
 
+	// Persist scan job to DB
+	scanJob := db.ScanJob{
+		JobID:      jobID,
+		RootDomain: rootDomain,
+		Mode:       mode,
+		Modules:    strings.Join(modules, ","),
+		Status:     "pending",
+	}
+	if err := s.db.CreateScanJob(&scanJob); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create scan job: "+err.Error())
+		return
+	}
+
+	if !req.DryRun {
+		go s.runScanAsync(jobID, rootDomain, modules, req.EnableNuclei, req.ActiveSubs, req.DictSize, req.DNSResolvers)
+	}
+
+	writeJSON(w, http.StatusOK, jobOverviewResponse{
+		ID: jobID, RootDomain: rootDomain, Mode: mode, Modules: modules,
+		Status: "pending", StartedAt: now.Format(time.RFC3339),
+	})
+}
+
+func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		JobID string `json:"jobId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.JobID == "" {
+		writeError(w, http.StatusBadRequest, "jobId is required")
+		return
+	}
+
+	// Cancel context if scan is running
+	s.scanCancelMu.Lock()
+	if cancel, ok := s.scanCancels[body.JobID]; ok {
+		cancel()
+		delete(s.scanCancels, body.JobID)
+	}
+	s.scanCancelMu.Unlock()
+
+	// Update DB
+	_ = s.db.CancelScanJob(body.JobID)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "canceled", "jobId": body.JobID})
+}
+
+// runScanAsync executes the scan pipeline in a background goroutine.
+func (s *Server) runScanAsync(jobID, rootDomain string, modules []string, enableNuclei, activeSubs bool, dictSize int, dnsResolvers string) {
+	startTime := time.Now()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	s.scanCancelMu.Lock()
+	s.scanCancels[jobID] = cancel
+	s.scanCancelMu.Unlock()
+
+	defer func() {
+		cancel()
+		s.scanCancelMu.Lock()
+		delete(s.scanCancels, jobID)
+		s.scanCancelMu.Unlock()
+	}()
+
+	nowStart := startTime
+	_ = s.db.UpdateScanJob(jobID, map[string]interface{}{"status": "running", "started_at": nowStart})
+
+	log.Printf("[Scan] Job %s started for %s, modules=%v", jobID, rootDomain, modules)
+
+	hasSubs := containsModule(modules, "subs")
+	hasPorts := containsModule(modules, "ports")
+	hasHttpx := containsModule(modules, "httpx")
+	hasNuclei := enableNuclei || containsModule(modules, "nuclei")
+	hasActiveSubs := activeSubs || containsModule(modules, "dnsx_bruteforce")
+	hasWitness := containsModule(modules, "witness")
+
+	s.settingsMu.RLock()
+	screenshotDir := s.screenshotDir
+	if dnsResolvers == "" {
+		dnsResolvers = s.settings.Scanner.DNSResolvers
+	}
+	if dictSize <= 0 {
+		dictSize = s.settings.Scanner.DefaultDictSize
+	}
+	s.settingsMu.RUnlock()
+
+	dictSize = clampDictSize(dictSize)
+
+	var allResults []engine.Result
+	var scanErr error
+
+	domains := []string{rootDomain}
+
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		s.finishScan(jobID, startTime, nil, fmt.Errorf("canceled"))
+		return
+	default:
+	}
+
+	if hasSubs {
+		subResults, subdomains, err := s.collectSubdomains(domains)
+		allResults = append(allResults, subResults...)
+		if err != nil {
+			scanErr = fmt.Errorf("subdomain collection failed: %v", err)
+			s.finishScan(jobID, startTime, allResults, scanErr)
+			return
+		}
+
+		if hasActiveSubs {
+			activeResults, activeSubdomains, err := s.expandActiveSubdomains(domains, subdomains, dictSize, dnsResolvers)
+			allResults = append(allResults, activeResults...)
+			if err != nil {
+				log.Printf("[Scan] Job %s active subs warning: %v", jobID, err)
+			} else {
+				subdomains = mergeUnique(subdomains, activeSubdomains)
+			}
+		}
+
+		if hasPorts || hasHttpx || len(subdomains) > 0 {
+			networkResults, err := s.runNetworkPipeline(subdomains, hasPorts, hasNuclei, hasWitness, screenshotDir)
+			allResults = append(allResults, networkResults...)
+			if err != nil {
+				scanErr = fmt.Errorf("network stage failed: %v", err)
+			}
+		}
+	} else if hasPorts || hasHttpx {
+		networkResults, err := s.runNetworkPipeline(domains, hasPorts, hasNuclei, hasWitness, screenshotDir)
+		allResults = append(allResults, networkResults...)
+		if err != nil {
+			scanErr = fmt.Errorf("network stage failed: %v", err)
+		}
+	}
+
+	s.finishScan(jobID, startTime, allResults, scanErr)
+}
+
+func (s *Server) finishScan(jobID string, startTime time.Time, results []engine.Result, scanErr error) {
+	duration := int(time.Since(startTime).Seconds())
+	dbErr := s.saveResultsToDB(results)
+
+	finalStatus := "success"
+	errMsg := ""
+	if scanErr != nil {
+		finalStatus = "failed"
+		errMsg = scanErr.Error()
+	} else if dbErr != nil {
+		finalStatus = "failed"
+		errMsg = "database write error: " + dbErr.Error()
+	}
+
+	counts := countResults(results)
+	now := time.Now()
+	_ = s.db.UpdateScanJob(jobID, map[string]interface{}{
+		"status":        finalStatus,
+		"error_message": errMsg,
+		"duration_sec":  duration,
+		"finished_at":   now,
+		"subdomain_cnt": counts["subdomains"],
+		"port_cnt":      counts["ports"],
+		"vuln_cnt":      counts["vulnerabilities"],
+	})
+
+	log.Printf("[Scan] Job %s finished: status=%s duration=%ds subs=%d ports=%d vulns=%d",
+		jobID, finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"])
+}
+
+// ──────────────────────────────────────────
+// Scan pipeline helpers
+// ──────────────────────────────────────────
+
+func (s *Server) collectSubdomains(rootDomains []string) ([]engine.Result, []string, error) {
+	pipeline := engine.NewPipeline()
+	isBatch := len(rootDomains) > 1
+	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatch))
+	pipeline.AddDomainScanner(plugins.NewFindomainPlugin())
+	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
+	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
+	results, err := pipeline.Execute(rootDomains)
+	subdomains := extractDomains(results)
+	log.Printf("[Scan] Passive collection: %d unique subdomains", len(subdomains))
+	return results, subdomains, err
+}
+
+func (s *Server) expandActiveSubdomains(rootDomains, passiveSubdomains []string, dictSize int, dnsResolvers string) ([]engine.Result, []string, error) {
+	var allResults []engine.Result
+	dictPlugin := plugins.NewDictgenPlugin(dictSize)
+	dictInput := append(append([]string{}, passiveSubdomains...), rootDomains...)
+	dictResults, err := dictPlugin.Execute(dictInput)
+	allResults = append(allResults, dictResults...)
+	if err != nil {
+		return allResults, nil, err
+	}
+	var words []string
+	for _, r := range dictResults {
+		if r.Type == "dict_word" {
+			if w, ok := r.Data.(string); ok && strings.TrimSpace(w) != "" {
+				words = append(words, w)
+			}
+		}
+	}
+	if len(words) == 0 {
+		return allResults, []string{}, nil
+	}
+	brutePlugin := plugins.NewDNSXBruteforcePlugin(rootDomains, dnsResolvers)
+	bruteResults, err := brutePlugin.Execute(words)
+	allResults = append(allResults, bruteResults...)
+	if err != nil {
+		return allResults, nil, err
+	}
+	return allResults, extractDomains(bruteResults), nil
+}
+
+func (s *Server) runNetworkPipeline(subdomains []string, enablePorts, enableNuclei, enableWitness bool, screenshotDir string) ([]engine.Result, error) {
+	pipeline := engine.NewPipeline()
+	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
+	if enablePorts {
+		pipeline.AddPortScanner(plugins.NewNaabuPlugin())
+		pipeline.AddPortScanner(plugins.NewNmapPlugin())
+	}
+	if enableNuclei {
+		pipeline.SetVulnScanner(plugins.NewNucleiPlugin())
+	}
+	if enableWitness {
+		pipeline.SetScreenshotScanner(plugins.NewGowitnessPlugin(screenshotDir))
+	}
+	return pipeline.ExecuteFromSubdomains(subdomains)
+}
+
+func (s *Server) saveResultsToDB(results []engine.Result) error {
+	failureCount := 0
+	for _, result := range results {
+		var err error
+		switch result.Type {
+		case "domain":
+			if subdomain, ok := result.Data.(string); ok {
+				err = s.db.SaveOrUpdateAsset(map[string]interface{}{"domain": subdomain})
+			}
+		case "web_service":
+			if data, ok := result.Data.(map[string]interface{}); ok {
+				err = s.db.SaveOrUpdateAsset(data)
+			}
+		case "port_service", "open_port":
+			if data, ok := result.Data.(map[string]interface{}); ok {
+				err = s.db.SaveOrUpdatePort(data)
+			}
+		case "vulnerability":
+			if data, ok := result.Data.(map[string]interface{}); ok {
+				err = s.db.SaveOrUpdateVulnerability(data)
+			}
+		}
+		if err != nil {
+			failureCount++
+			log.Printf("[Scan][DB] save error (%s): %v", result.Type, err)
+		}
+	}
+	if failureCount > 0 {
+		return fmt.Errorf("%d records failed to save", failureCount)
+	}
+	return nil
+}
+
+func extractDomains(results []engine.Result) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, 256)
+	for _, r := range results {
+		if r.Type != "domain" {
+			continue
+		}
+		d, ok := r.Data.(string)
+		if !ok {
+			continue
+		}
+		d = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(d, ".")))
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out
+}
+
+func mergeUnique(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for _, s := range b {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func containsModule(modules []string, name string) bool {
+	for _, m := range modules {
+		if m == name {
+			return true
+		}
+	}
+	return false
+}
+
+func countResults(results []engine.Result) map[string]int {
+	counts := map[string]int{"subdomains": 0, "web_services": 0, "ports": 0, "vulnerabilities": 0}
+	for _, r := range results {
+		switch r.Type {
+		case "domain":
+			counts["subdomains"]++
+		case "web_service":
+			counts["web_services"]++
+		case "port_service", "open_port":
+			counts["ports"]++
+		case "vulnerability":
+			counts["vulnerabilities"]++
+		}
+	}
+	return counts
+}
+
+// ──────────────────────────────────────────
+// Monitor targets/runs/changes API
+// ──────────────────────────────────────────
+
+func (s *Server) handleMonitorTargets(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListMonitorTargets(w, r)
+	case http.MethodPost:
+		s.handleCreateMonitorTarget(w, r)
+	case http.MethodDelete:
+		s.handleDeleteMonitorTarget(w, r)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleListMonitorTargets(w http.ResponseWriter, r *http.Request) {
 	targets, err := s.db.ListMonitorTargets()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	resp := make([]monitorTargetResponse, 0, len(targets))
 	for _, t := range targets {
 		resp = append(resp, monitorTargetResponse{
-			ID:           int(t.ID),
-			RootDomain:   t.RootDomain,
-			Enabled:      t.Enabled,
-			BaselineDone: t.BaselineDone,
-			LastRunAt:    timePtrToISO(t.LastRunAt),
-			CreatedAt:    timeToISO(t.CreatedAt),
-			UpdatedAt:    timeToISO(t.UpdatedAt),
+			ID: int(t.ID), RootDomain: t.RootDomain, Enabled: t.Enabled,
+			BaselineDone: t.BaselineDone, LastRunAt: timePtrToISO(t.LastRunAt),
+			CreatedAt: timeToISO(t.CreatedAt), UpdatedAt: timeToISO(t.UpdatedAt),
 		})
 	}
-
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleCreateMonitorTarget(w http.ResponseWriter, r *http.Request) {
+	var req createMonitorRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	domain := normalizeRootDomain(req.Domain)
+	if domain == "" {
+		writeError(w, http.StatusBadRequest, "domain is required")
+		return
+	}
+	intervalSec := req.IntervalSec
+	if intervalSec <= 0 {
+		intervalSec = defaultMonitorIntervalSec
+	}
+	if err := s.db.EnableMonitorTarget(domain, intervalSec, 3); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "domain": domain, "intervalSec": intervalSec})
+}
+
+func (s *Server) handleDeleteMonitorTarget(w http.ResponseWriter, r *http.Request) {
+	domain := normalizeRootDomain(r.URL.Query().Get("domain"))
+	action := strings.TrimSpace(r.URL.Query().Get("action"))
+	if domain == "" {
+		writeError(w, http.StatusBadRequest, "domain is required")
+		return
+	}
+	switch action {
+	case "stop":
+		if err := s.db.StopMonitorTarget(domain); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped", "domain": domain})
+	case "delete":
+		if err := s.db.DeleteMonitorDataByRootDomain(domain); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "domain": domain})
+	default:
+		// Default: toggle stop
+		if err := s.db.StopMonitorTarget(domain); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped", "domain": domain})
+	}
 }
 
 func (s *Server) handleMonitorRuns(w http.ResponseWriter, r *http.Request) {
@@ -747,37 +1304,25 @@ func (s *Server) handleMonitorRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-
 	var runs []db.MonitorRun
 	query := s.db.DB.Order("started_at desc").Limit(500)
-
 	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
 		query = query.Where("root_domain = ?", rd)
 	}
-
 	if err := query.Find(&runs).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	resp := make([]monitorRunResponse, 0, len(runs))
 	for _, run := range runs {
 		resp = append(resp, monitorRunResponse{
-			ID:            int(run.ID),
-			RootDomain:    run.RootDomain,
-			Status:        normalizeHealthStatus(run.Status),
-			StartedAt:     timeToISO(run.StartedAt),
-			FinishedAt:    timePtrToISO(run.FinishedAt),
-			DurationSec:   run.DurationSec,
-			ErrorMessage:  strings.TrimSpace(run.ErrorMessage),
-			NewLiveCount:  run.NewLiveCount,
-			WebChanged:    run.WebChanged,
-			PortOpened:    run.PortOpened,
-			PortClosed:    run.PortClosed,
-			ServiceChange: run.ServiceChange,
+			ID: int(run.ID), RootDomain: run.RootDomain, Status: normalizeHealthStatus(run.Status),
+			StartedAt: timeToISO(run.StartedAt), FinishedAt: timePtrToISO(run.FinishedAt),
+			DurationSec: run.DurationSec, ErrorMessage: strings.TrimSpace(run.ErrorMessage),
+			NewLiveCount: run.NewLiveCount, WebChanged: run.WebChanged,
+			PortOpened: run.PortOpened, PortClosed: run.PortClosed, ServiceChange: run.ServiceChange,
 		})
 	}
-
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -786,7 +1331,6 @@ func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-
 	rd := normalizeRootDomain(r.URL.Query().Get("root_domain"))
 	sorted := make([]monitorChangeSortItem, 0, 400)
 
@@ -800,13 +1344,9 @@ func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 			sorted = append(sorted, monitorChangeSortItem{
 				createdAt: ac.CreatedAt,
 				item: monitorChangeResponse{
-					RunID:      int(ac.RunID),
-					RootDomain: ac.RootDomain,
-					ChangeType: ac.ChangeType,
-					Domain:     ac.Domain,
-					StatusCode: ac.StatusCode,
-					Title:      ac.Title,
-					CreatedAt:  timeToISO(ac.CreatedAt),
+					RunID: int(ac.RunID), RootDomain: ac.RootDomain, ChangeType: ac.ChangeType,
+					Domain: ac.Domain, StatusCode: ac.StatusCode, Title: ac.Title,
+					CreatedAt: timeToISO(ac.CreatedAt),
 				},
 			})
 		}
@@ -822,22 +1362,14 @@ func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 			sorted = append(sorted, monitorChangeSortItem{
 				createdAt: pc.CreatedAt,
 				item: monitorChangeResponse{
-					RunID:      int(pc.RunID),
-					RootDomain: pc.RootDomain,
-					ChangeType: pc.ChangeType,
-					Domain:     pc.Domain,
-					IP:         pc.IP,
-					Port:       pc.Port,
-					CreatedAt:  timeToISO(pc.CreatedAt),
+					RunID: int(pc.RunID), RootDomain: pc.RootDomain, ChangeType: pc.ChangeType,
+					Domain: pc.Domain, IP: pc.IP, Port: pc.Port, CreatedAt: timeToISO(pc.CreatedAt),
 				},
 			})
 		}
 	}
 
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].createdAt.After(sorted[j].createdAt)
-	})
-
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].createdAt.After(sorted[j].createdAt) })
 	resp := make([]monitorChangeResponse, 0, len(sorted))
 	for _, item := range sorted {
 		resp = append(resp, item.item)
@@ -845,39 +1377,43 @@ func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 	if len(resp) > 500 {
 		resp = resp[:500]
 	}
-
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// ──────────────────────────────────────────
+// Screenshots
+// ──────────────────────────────────────────
 
 func (s *Server) handleScreenshotDomains(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-
 	domains, err := plugins.ListScreenshotDomains(s.screenshotDir)
 	if err != nil {
 		writeJSON(w, http.StatusOK, []screenshotDomainResponse{})
 		return
 	}
-
 	resp := make([]screenshotDomainResponse, 0, len(domains))
 	for _, rootDomain := range domains {
 		domainDir := filepath.Join(s.screenshotDir, rootDomain)
-		screenshotDir := filepath.Join(domainDir, "screenshots")
+		ssDir := filepath.Join(domainDir, "screenshots")
+		count := 0
+		if entries, err := os.ReadDir(ssDir); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() && (strings.HasSuffix(e.Name(), ".png") || strings.HasSuffix(e.Name(), ".jpg")) {
+					count++
+				}
+			}
+		}
 		dbPath := filepath.Join(domainDir, "gowitness.sqlite3")
 		resp = append(resp, screenshotDomainResponse{
 			RootDomain:      rootDomain,
-			ScreenshotCount: countImageFiles(screenshotDir),
-			ScreenshotDir:   screenshotDir,
+			ScreenshotCount: count,
+			ScreenshotDir:   ssDir,
 			DatabasePath:    dbPath,
 		})
 	}
-
-	sort.SliceStable(resp, func(i, j int) bool {
-		return resp[i].RootDomain < resp[j].RootDomain
-	})
-
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -886,74 +1422,34 @@ func (s *Server) handleScreenshots(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-
-	path := strings.TrimPrefix(r.URL.Path, "/api/screenshots/")
-	path = strings.Trim(path, "/")
-	if path == "" {
-		writeError(w, http.StatusBadRequest, "root domain is required")
-		return
+	pathParts := strings.TrimPrefix(r.URL.Path, "/api/screenshots/")
+	rootDomain := normalizeRootDomain(pathParts)
+	if rootDomain == "" {
+		rootDomain = normalizeRootDomain(r.URL.Query().Get("root_domain"))
 	}
-	if strings.Contains(path, "/") {
-		writeError(w, http.StatusBadRequest, "invalid root domain")
-		return
-	}
-
-	rootDomain, err := url.PathUnescape(path)
-	if err != nil || strings.TrimSpace(rootDomain) == "" {
-		writeError(w, http.StatusBadRequest, "invalid root domain")
+	if rootDomain == "" {
+		writeJSON(w, http.StatusOK, []screenshotItemResponse{})
 		return
 	}
 
-	screenshotPath := filepath.Join(s.screenshotDir, rootDomain, "screenshots")
-	entries, err := os.ReadDir(screenshotPath)
+	items, err := plugins.ListScreenshots(s.screenshotDir, rootDomain)
 	if err != nil {
-		if os.IsNotExist(err) {
-			writeJSON(w, http.StatusOK, []screenshotItemResponse{})
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeJSON(w, http.StatusOK, []screenshotItemResponse{})
 		return
 	}
-
-	type imageEntry struct {
-		name    string
-		modTime time.Time
-	}
-	images := make([]imageEntry, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if !isImageFile(entry.Name()) {
-			continue
-		}
-		info, statErr := entry.Info()
-		if statErr != nil {
-			continue
-		}
-		images = append(images, imageEntry{name: entry.Name(), modTime: info.ModTime()})
-	}
-
-	sort.SliceStable(images, func(i, j int) bool {
-		return images[i].modTime.After(images[j].modTime)
-	})
-
-	resp := make([]screenshotItemResponse, 0, len(images))
-	for idx, item := range images {
-		fileEscaped := url.PathEscape(item.name)
-		rootEscaped := url.PathEscape(rootDomain)
-		fileURL := fmt.Sprintf("/api/screenshots/file/%s/%s", rootEscaped, fileEscaped)
+	resp := make([]screenshotItemResponse, 0, len(items))
+	for i, item := range items {
 		resp = append(resp, screenshotItemResponse{
-			ID:           idx + 1,
-			URL:          inferScreenshotURL(item.name, rootDomain),
-			Filename:     item.name,
+			ID:           i + 1,
+			URL:          item.URL,
+			Filename:     item.Filename,
+			Title:        item.Title,
+			StatusCode:   item.StatusCode,
 			RootDomain:   rootDomain,
-			ThumbnailURL: fileURL,
-			FullURL:      fileURL,
-			CreatedAt:    item.modTime.UTC().Format(time.RFC3339),
+			ThumbnailURL: fmt.Sprintf("/api/screenshots/file/%s/%s", rootDomain, url.PathEscape(item.Filename)),
+			FullURL:      fmt.Sprintf("/api/screenshots/file/%s/%s", rootDomain, url.PathEscape(item.Filename)),
 		})
 	}
-
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -962,138 +1458,110 @@ func (s *Server) handleScreenshotFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-
-	path := strings.TrimPrefix(r.URL.Path, "/api/screenshots/file/")
-	path = strings.Trim(path, "/")
-	parts := strings.Split(path, "/")
-	if len(parts) != 2 {
-		writeError(w, http.StatusBadRequest, "invalid file path")
+	pathParts := strings.TrimPrefix(r.URL.Path, "/api/screenshots/file/")
+	parts := strings.SplitN(pathParts, "/", 2)
+	if len(parts) < 2 {
+		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
-
-	rootDomain, err := url.PathUnescape(parts[0])
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid root domain")
+	rootDomain := normalizeRootDomain(parts[0])
+	filename, _ := url.PathUnescape(parts[1])
+	if rootDomain == "" || filename == "" {
+		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
-	filename, err := url.PathUnescape(parts[1])
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid filename")
+	filePath := filepath.Join(s.screenshotDir, rootDomain, "screenshots", filepath.Base(filename))
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		writeError(w, http.StatusNotFound, "file not found")
 		return
 	}
-
-	if strings.TrimSpace(rootDomain) == "" || strings.TrimSpace(filename) == "" {
-		writeError(w, http.StatusBadRequest, "invalid file path")
-		return
-	}
-	if strings.Contains(rootDomain, "..") || strings.ContainsAny(rootDomain, `/\`) {
-		writeError(w, http.StatusBadRequest, "invalid root domain")
-		return
-	}
-	if strings.Contains(filename, "..") || strings.ContainsAny(filename, `/\`) {
-		writeError(w, http.StatusBadRequest, "invalid filename")
-		return
-	}
-
-	baseDir := filepath.Clean(filepath.Join(s.screenshotDir, rootDomain, "screenshots"))
-	filePath := filepath.Clean(filepath.Join(baseDir, filename))
-	rel, err := filepath.Rel(baseDir, filePath)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		writeError(w, http.StatusBadRequest, "invalid file path")
-		return
-	}
-
-	if _, err := os.Stat(filePath); err != nil {
-		if os.IsNotExist(err) {
-			writeError(w, http.StatusNotFound, "file not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
 	http.ServeFile(w, r, filePath)
 }
+
+// ──────────────────────────────────────────
+// Settings
+// ──────────────────────────────────────────
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.buildSettingsResponse())
-	case http.MethodPost:
+		s.handleGetSettings(w, r)
+	case http.MethodPut, http.MethodPost:
 		s.handleUpdateSettings(w, r)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
+func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
+	s.settingsMu.RLock()
+	settings := s.settings
+	s.settingsMu.RUnlock()
+
+	resp := systemSettingsResponse{
+		Database: databaseSettingsResponse{
+			Host: settings.Database.Host, Port: settings.Database.Port,
+			User: settings.Database.User, DBName: settings.Database.DBName,
+			SSLMode: settings.Database.SSLMode, Connected: s.db.DB != nil,
+		},
+		Notifications: notificationSettingsResponse{
+			DingTalkWebhook: settings.Notifications.DingTalkWebhook,
+			DingTalkSecret:  maskSecret(settings.Notifications.DingTalkSecret),
+			Enabled:         settings.Notifications.Enabled,
+		},
+		Scanner: scannerSettingsResponse{
+			ScreenshotDir:     settings.Scanner.ScreenshotDir,
+			DNSResolvers:      settings.Scanner.DNSResolvers,
+			DefaultDictSize:   settings.Scanner.DefaultDictSize,
+			DefaultActiveSubs: settings.Scanner.DefaultActiveSubs,
+			DefaultNuclei:     settings.Scanner.DefaultNuclei,
+		},
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var patch settingsPatchRequest
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON payload")
+		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
 	s.settingsMu.Lock()
-	if patch.Database != nil {
-		if patch.Database.Host != nil {
-			s.settings.Database.Host = strings.TrimSpace(*patch.Database.Host)
+	if p := patch.Notifications; p != nil {
+		if p.DingTalkWebhook != nil {
+			s.settings.Notifications.DingTalkWebhook = *p.DingTalkWebhook
+			os.Setenv("DINGTALK_WEBHOOK", *p.DingTalkWebhook)
 		}
-		if patch.Database.Port != nil && *patch.Database.Port > 0 {
-			s.settings.Database.Port = *patch.Database.Port
+		if p.DingTalkSecret != nil {
+			s.settings.Notifications.DingTalkSecret = *p.DingTalkSecret
+			os.Setenv("DINGTALK_SECRET", *p.DingTalkSecret)
 		}
-		if patch.Database.User != nil {
-			s.settings.Database.User = strings.TrimSpace(*patch.Database.User)
-		}
-		if patch.Database.DBName != nil {
-			s.settings.Database.DBName = strings.TrimSpace(*patch.Database.DBName)
-		}
-		if patch.Database.SSLMode != nil {
-			s.settings.Database.SSLMode = strings.TrimSpace(*patch.Database.SSLMode)
+		if p.Enabled != nil {
+			s.settings.Notifications.Enabled = *p.Enabled
 		}
 	}
-
-	if patch.Notifications != nil {
-		if patch.Notifications.DingTalkWebhook != nil {
-			s.settings.Notifications.DingTalkWebhook = strings.TrimSpace(*patch.Notifications.DingTalkWebhook)
+	if p := patch.Scanner; p != nil {
+		if p.ScreenshotDir != nil {
+			s.settings.Scanner.ScreenshotDir = *p.ScreenshotDir
+			s.screenshotDir = *p.ScreenshotDir
 		}
-		if patch.Notifications.DingTalkSecret != nil {
-			s.settings.Notifications.DingTalkSecret = strings.TrimSpace(*patch.Notifications.DingTalkSecret)
+		if p.DNSResolvers != nil {
+			s.settings.Scanner.DNSResolvers = *p.DNSResolvers
 		}
-		if patch.Notifications.Enabled != nil {
-			s.settings.Notifications.Enabled = *patch.Notifications.Enabled
-		} else if s.settings.Notifications.DingTalkWebhook == "" {
-			s.settings.Notifications.Enabled = false
+		if p.DefaultDictSize != nil {
+			s.settings.Scanner.DefaultDictSize = *p.DefaultDictSize
 		}
-	}
-
-	if patch.Scanner != nil {
-		if patch.Scanner.ScreenshotDir != nil {
-			newDir := strings.TrimSpace(*patch.Scanner.ScreenshotDir)
-			if newDir != "" {
-				s.settings.Scanner.ScreenshotDir = newDir
-				s.screenshotDir = newDir
-			}
+		if p.DefaultActiveSubs != nil {
+			s.settings.Scanner.DefaultActiveSubs = *p.DefaultActiveSubs
 		}
-		if patch.Scanner.DNSResolvers != nil {
-			s.settings.Scanner.DNSResolvers = strings.TrimSpace(*patch.Scanner.DNSResolvers)
-		}
-		if patch.Scanner.DefaultDictSize != nil {
-			s.settings.Scanner.DefaultDictSize = clampDictSize(*patch.Scanner.DefaultDictSize)
-		}
-		if patch.Scanner.DefaultActiveSubs != nil {
-			s.settings.Scanner.DefaultActiveSubs = *patch.Scanner.DefaultActiveSubs
-		}
-		if patch.Scanner.DefaultNuclei != nil {
-			s.settings.Scanner.DefaultNuclei = *patch.Scanner.DefaultNuclei
+		if p.DefaultNuclei != nil {
+			s.settings.Scanner.DefaultNuclei = *p.DefaultNuclei
 		}
 	}
-
-	// Keep runtime env in sync for the notifier helper.
-	_ = os.Setenv("DINGTALK_WEBHOOK", s.settings.Notifications.DingTalkWebhook)
-	_ = os.Setenv("DINGTALK_SECRET", s.settings.Notifications.DingTalkSecret)
 	s.settingsMu.Unlock()
 
-	writeJSON(w, http.StatusOK, s.buildSettingsResponse())
+	s.handleGetSettings(w, r)
 }
 
 func (s *Server) handleToolStatus(w http.ResponseWriter, r *http.Request) {
@@ -1101,7 +1569,24 @@ func (s *Server) handleToolStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, collectToolStatus())
+	tools := []string{"subfinder", "findomain", "bbot", "naabu", "nmap", "httpx", "nuclei", "gowitness", "dnsx", "shosubgo"}
+	resp := make([]toolStatusResponse, 0, len(tools))
+	for _, name := range tools {
+		ts := toolStatusResponse{Name: name}
+		if path, err := exec.LookPath(name); err == nil {
+			ts.Installed = true
+			ts.Path = path
+			if out, err := exec.Command(name, "--version").CombinedOutput(); err == nil {
+				ver := strings.TrimSpace(string(out))
+				if len(ver) > 100 {
+					ver = ver[:100]
+				}
+				ts.Version = ver
+			}
+		}
+		resp = append(resp, ts)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleTestNotify(w http.ResponseWriter, r *http.Request) {
@@ -1109,412 +1594,173 @@ func (s *Server) handleTestNotify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-
-	s.settingsMu.RLock()
-	enabled := s.settings.Notifications.Enabled
-	webhook := s.settings.Notifications.DingTalkWebhook
-	secret := s.settings.Notifications.DingTalkSecret
-	s.settingsMu.RUnlock()
-
-	if strings.TrimSpace(webhook) == "" || !enabled {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"success": false,
-			"message": "DingTalk notification is disabled or webhook is empty",
-		})
-		return
-	}
-
-	_ = os.Setenv("DINGTALK_WEBHOOK", webhook)
-	_ = os.Setenv("DINGTALK_SECRET", secret)
-
 	notifier := plugins.NewDingTalkNotifierFromEnv(true)
 	if !notifier.Enabled() {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"success": false,
-			"message": "DingTalk webhook is not configured",
-		})
+		writeError(w, http.StatusBadRequest, "DingTalk notification not configured")
 		return
 	}
-
-	err := notifier.SendReconStart(1, []string{"api-test"}, true)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"success": false,
-			"message": fmt.Sprintf("failed to send test notification: %v", err),
-		})
+	stats := map[string]int{"test": 1}
+	if err := notifier.SendReconEnd(true, 0, stats, "This is a test notification from myrecon."); err != nil {
+		writeError(w, http.StatusInternalServerError, "send failed: "+err.Error())
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success": true,
-		"message": "test notification sent successfully",
-	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "test notification sent"})
 }
 
-func (s *Server) buildSettingsResponse() systemSettingsResponse {
-	s.settingsMu.RLock()
-	current := s.settings
-	s.settingsMu.RUnlock()
-
-	return systemSettingsResponse{
-		Database: databaseSettingsResponse{
-			Host:      current.Database.Host,
-			Port:      current.Database.Port,
-			User:      current.Database.User,
-			DBName:    current.Database.DBName,
-			SSLMode:   current.Database.SSLMode,
-			Connected: s.isDatabaseConnected(),
-		},
-		Notifications: notificationSettingsResponse{
-			DingTalkWebhook: current.Notifications.DingTalkWebhook,
-			DingTalkSecret:  current.Notifications.DingTalkSecret,
-			Enabled:         current.Notifications.Enabled,
-		},
-		Scanner: scannerSettingsResponse{
-			ScreenshotDir:     current.Scanner.ScreenshotDir,
-			DNSResolvers:      current.Scanner.DNSResolvers,
-			DefaultDictSize:   current.Scanner.DefaultDictSize,
-			DefaultActiveSubs: current.Scanner.DefaultActiveSubs,
-			DefaultNuclei:     current.Scanner.DefaultNuclei,
-		},
-		Tools: collectToolStatus(),
-	}
-}
-
-func (s *Server) isDatabaseConnected() bool {
-	if s.db == nil || s.db.DB == nil {
-		return false
-	}
-	sqlDB, err := s.db.DB.DB()
-	if err != nil {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	return sqlDB.PingContext(ctx) == nil
-}
-
-func collectToolStatus() []toolStatusResponse {
-	tools := []string{
-		"subfinder",
-		"findomain",
-		"bbot",
-		"shosubgo",
-		"dictgen",
-		"dnsx",
-		"httpx",
-		"naabu",
-		"nmap",
-		"gowitness",
-		"nuclei",
-	}
-
-	out := make([]toolStatusResponse, 0, len(tools))
-	for _, name := range tools {
-		if name == "dictgen" {
-			out = append(out, toolStatusResponse{
-				Name:      name,
-				Installed: true,
-				Version:   "builtin",
-				Path:      "internal plugin",
-			})
-			continue
-		}
-		out = append(out, checkTool(name))
-	}
-	return out
-}
-
-func checkTool(name string) toolStatusResponse {
-	path, err := exec.LookPath(name)
-	if err != nil {
-		return toolStatusResponse{
-			Name:      name,
-			Installed: false,
-		}
-	}
-
-	version := detectToolVersion(name)
-	return toolStatusResponse{
-		Name:      name,
-		Installed: true,
-		Version:   version,
-		Path:      path,
-	}
-}
-
-func detectToolVersion(name string) string {
-	candidates := [][]string{
-		{"--version"},
-		{"-version"},
-		{"version"},
-		{"-v"},
-	}
-
-	for _, args := range candidates {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		cmd := exec.CommandContext(ctx, name, args...)
-		output, err := cmd.CombinedOutput()
-		cancel()
-		if err != nil {
-			continue
-		}
-
-		line := strings.TrimSpace(string(output))
-		if idx := strings.Index(line, "\n"); idx >= 0 {
-			line = line[:idx]
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if len(line) > 120 {
-			line = line[:120]
-		}
-		return line
-	}
-
-	return ""
-}
+// ──────────────────────────────────────────
+// Utilities
+// ──────────────────────────────────────────
 
 func loadRuntimeSettings(screenshotDir string) runtimeSettings {
-	if strings.TrimSpace(screenshotDir) == "" {
-		screenshotDir = "screenshots"
+	port := 5432
+	if p := os.Getenv("DB_PORT"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil {
+			port = v
+		}
 	}
-
-	webhook := strings.TrimSpace(os.Getenv("DINGTALK_WEBHOOK"))
-	enabled := parseEnvBool("DINGTALK_ENABLED", webhook != "")
+	dictSize := 5000
+	if d := os.Getenv("DEFAULT_DICT_SIZE"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil {
+			dictSize = v
+		}
+	}
 
 	return runtimeSettings{
 		Database: runtimeDatabaseSettings{
-			Host:    getenvDefault("DB_HOST", "localhost"),
-			Port:    getenvIntDefault("DB_PORT", 5432),
-			User:    getenvDefault("DB_USER", "hunter"),
-			DBName:  getenvDefault("DB_NAME", "hunter"),
-			SSLMode: getenvDefault("DB_SSLMODE", "disable"),
+			Host:    envOrDefault("DB_HOST", "127.0.0.1"),
+			Port:    port,
+			User:    envOrDefault("DB_USER", "postgres"),
+			DBName:  envOrDefault("DB_NAME", "recon"),
+			SSLMode: envOrDefault("DB_SSLMODE", "disable"),
 		},
 		Notifications: runtimeNotificationSettings{
-			DingTalkWebhook: webhook,
-			DingTalkSecret:  strings.TrimSpace(os.Getenv("DINGTALK_SECRET")),
-			Enabled:         enabled,
+			DingTalkWebhook: os.Getenv("DINGTALK_WEBHOOK"),
+			DingTalkSecret:  os.Getenv("DINGTALK_SECRET"),
+			Enabled:         os.Getenv("DINGTALK_WEBHOOK") != "",
 		},
 		Scanner: runtimeScannerSettings{
 			ScreenshotDir:     screenshotDir,
-			DNSResolvers:      strings.TrimSpace(os.Getenv("DNS_RESOLVERS")),
-			DefaultDictSize:   clampDictSize(getenvIntDefault("DEFAULT_DICT_SIZE", 1500)),
-			DefaultActiveSubs: parseEnvBool("DEFAULT_ACTIVE_SUBS", false),
-			DefaultNuclei:     parseEnvBool("DEFAULT_NUCLEI", false),
+			DNSResolvers:      envOrDefault("DNS_RESOLVERS", ""),
+			DefaultDictSize:   dictSize,
+			DefaultActiveSubs: os.Getenv("DEFAULT_ACTIVE_SUBS") == "true",
+			DefaultNuclei:     os.Getenv("DEFAULT_NUCLEI") == "true",
 		},
 	}
 }
 
-func normalizeRootDomain(v string) string {
-	v = strings.TrimSpace(strings.ToLower(v))
-	v = strings.TrimPrefix(v, "*.")
-	v = strings.TrimSuffix(v, ".")
-	return v
-}
-
-func sanitizeModules(in []string) []string {
-	seen := make(map[string]struct{})
-	out := make([]string, 0, len(in))
-	for _, item := range in {
-		v := strings.TrimSpace(strings.ToLower(item))
-		if v == "" {
-			continue
-		}
-		if _, exists := seen[v]; exists {
-			continue
-		}
-		seen[v] = struct{}{}
-		out = append(out, v)
+func envOrDefault(key, defaultVal string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-	return out
+	return defaultVal
 }
 
-func normalizeHealthStatus(status string) string {
-	s := strings.TrimSpace(strings.ToLower(status))
-	switch s {
-	case "ok", "success", "done", "completed":
-		return "ok"
-	case "error", "failed", "fail", "canceled", "cancelled":
-		return "error"
-	case "running":
+func normalizeRootDomain(raw string) string {
+	s := strings.TrimSpace(strings.ToLower(raw))
+	s = strings.TrimPrefix(s, "http://")
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimSuffix(s, "/")
+	s = strings.TrimSuffix(s, ".")
+	if idx := strings.Index(s, "/"); idx != -1 {
+		s = s[:idx]
+	}
+	if idx := strings.Index(s, ":"); idx != -1 {
+		s = s[:idx]
+	}
+	return s
+}
+
+func normalizeHealthStatus(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	switch {
+	case s == "ok" || s == "done" || s == "success":
+		return "success"
+	case s == "fail" || s == "error" || s == "failed":
+		return "failed"
+	case s == "running":
 		return "running"
-	case "pending", "queued", "queue":
+	case s == "pending":
 		return "pending"
+	case s == "canceled" || s == "cancelled":
+		return "canceled"
 	default:
-		if strings.Contains(s, "run") {
-			return "running"
-		}
-		if strings.Contains(s, "success") || strings.Contains(s, "ok") || strings.Contains(s, "done") {
-			return "ok"
-		}
-		if strings.Contains(s, "fail") || strings.Contains(s, "error") || strings.Contains(s, "cancel") {
-			return "error"
-		}
-		if strings.Contains(s, "pend") || strings.Contains(s, "queue") {
-			return "pending"
-		}
-		return "unknown"
+		return s
 	}
 }
 
-func decodeJSONBStrings(raw []byte) []string {
-	if len(raw) == 0 {
-		return []string{}
+func sanitizeModules(raw []string) []string {
+	allowed := map[string]bool{
+		"subfinder": true, "findomain": true, "bbot": true, "shosubgo": true,
+		"dictgen": true, "dnsx_bruteforce": true,
+		"naabu": true, "nmap": true,
+		"httpx": true, "gowitness": true, "nuclei": true,
+		"subs": true, "ports": true, "monitor": true, "witness": true,
 	}
-	var arr []string
-	if err := json.Unmarshal(raw, &arr); err == nil {
-		return arr
-	}
-	var generic []interface{}
-	if err := json.Unmarshal(raw, &generic); err != nil {
-		return []string{}
-	}
-	out := make([]string, 0, len(generic))
-	for _, item := range generic {
-		if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-			out = append(out, s)
+	var out []string
+	for _, m := range raw {
+		m = strings.ToLower(strings.TrimSpace(m))
+		if m != "" && allowed[m] {
+			out = append(out, m)
 		}
 	}
 	return out
+}
+
+func clampDictSize(n int) int {
+	if n <= 0 {
+		return 5000
+	}
+	if n > 100000 {
+		return 100000
+	}
+	return n
+}
+
+func maskSecret(s string) string {
+	if len(s) <= 8 {
+		return strings.Repeat("*", len(s))
+	}
+	return s[:4] + strings.Repeat("*", len(s)-8) + s[len(s)-4:]
 }
 
 func timeToISO(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format(time.RFC3339)
+	return t.Format(time.RFC3339)
 }
 
 func timePtrToISO(t *time.Time) string {
-	if t == nil || t.IsZero() {
+	if t == nil {
 		return ""
 	}
-	return t.UTC().Format(time.RFC3339)
+	return timeToISO(*t)
 }
 
-func parseTimeBestEffort(raw string) time.Time {
-	if raw == "" {
+func parseTimeBestEffort(s string) time.Time {
+	if s == "" {
 		return time.Time{}
 	}
-	if t, err := time.Parse(time.RFC3339, raw); err == nil {
-		return t
-	}
-	if t, err := time.Parse("2006-01-02 15:04:05", raw); err == nil {
-		return t
-	}
-	return time.Time{}
-}
-
-func matchesRootDomain(candidate, root string) bool {
-	candidate = normalizeRootDomain(candidate)
-	root = normalizeRootDomain(root)
-	if candidate == "" || root == "" {
-		return false
-	}
-	return candidate == root || strings.HasSuffix(candidate, "."+root)
-}
-
-func isImageFile(name string) bool {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".png", ".jpg", ".jpeg", ".webp":
-		return true
-	default:
-		return false
-	}
-}
-
-func countImageFiles(dir string) int {
-	entries, err := os.ReadDir(dir)
+	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
-		return 0
+		return time.Time{}
 	}
-	total := 0
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if isImageFile(entry.Name()) {
-			total++
-		}
-	}
-	return total
+	return t
 }
 
-func inferScreenshotURL(filename, rootDomain string) string {
-	name := strings.TrimSuffix(filename, filepath.Ext(filename))
-	if decoded, err := url.QueryUnescape(name); err == nil {
-		decoded = strings.TrimSpace(decoded)
-		if strings.HasPrefix(decoded, "http://") || strings.HasPrefix(decoded, "https://") {
-			return decoded
-		}
-	}
-
-	if strings.HasPrefix(name, "http___") {
-		guess := strings.Replace(name, "http___", "http://", 1)
-		guess = strings.ReplaceAll(guess, "_", ".")
-		return guess
-	}
-	if strings.HasPrefix(name, "https___") {
-		guess := strings.Replace(name, "https___", "https://", 1)
-		guess = strings.ReplaceAll(guess, "_", ".")
-		return guess
-	}
-	if strings.HasPrefix(name, "http://") || strings.HasPrefix(name, "https://") {
-		return name
-	}
-
-	if rootDomain == "" {
-		return filename
-	}
-	return "https://" + rootDomain
+func matchesRootDomain(domain, rootDomain string) bool {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	rootDomain = strings.ToLower(strings.TrimSpace(rootDomain))
+	return domain == rootDomain || strings.HasSuffix(domain, "."+rootDomain)
 }
 
-func getenvDefault(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
+func decodeJSONBStrings(data db.JSONB) []string {
+	if len(data) == 0 {
+		return nil
 	}
-	return fallback
-}
-
-func getenvIntDefault(key string, fallback int) int {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
+	var items []string
+	if err := json.Unmarshal(data, &items); err != nil {
+		return nil
 	}
-	v, err := strconv.Atoi(raw)
-	if err != nil {
-		return fallback
-	}
-	return v
-}
-
-func parseEnvBool(key string, fallback bool) bool {
-	raw := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
-	if raw == "" {
-		return fallback
-	}
-	switch raw {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return fallback
-	}
-}
-
-func clampDictSize(v int) int {
-	if v <= 0 {
-		return 1500
-	}
-	if v < 100 {
-		return 100
-	}
-	if v > 5000 {
-		return 5000
-	}
-	return v
+	return items
 }

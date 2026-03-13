@@ -171,6 +171,36 @@ func ListScreenshotDomains(baseDir string) ([]string, error) {
 	return domains, nil
 }
 
+// ScreenshotItem represents one screenshot entry.
+type ScreenshotItem struct {
+	URL        string
+	Filename   string
+	Title      string
+	StatusCode int
+}
+
+// ListScreenshots lists screenshot image files for a given root domain.
+func ListScreenshots(baseDir, rootDomain string) ([]ScreenshotItem, error) {
+	ssDir := filepath.Join(baseDir, rootDomain, "screenshots")
+	entries, err := os.ReadDir(ssDir)
+	if err != nil {
+		return nil, err
+	}
+	var items []ScreenshotItem
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasSuffix(name, ".png") || strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg") {
+			items = append(items, ScreenshotItem{
+				Filename: name,
+			})
+		}
+	}
+	return items, nil
+}
+
 // countFiles counts files under a directory (non-recursive).
 func countFiles(dir string) int {
 	entries, err := os.ReadDir(dir)
