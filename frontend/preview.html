@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MyRecon Dashboard Preview</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
+    <style>
+        /* ── Reset ── */
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0
+        }
+
+        :root {
+            --bg-root: #0b0f1a;
+            --bg-sidebar: #0f1423;
+            --bg-card: #111827;
+            --bg-card-hover: #151d2e;
+            --bg-input: #0d1220;
+            --border: #1e2a42;
+            --border-focus: #3b82f6;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent: #f59e0b;
+            --accent-hover: #fbbf24;
+            --danger: #ef4444;
+            --success: #22c55e;
+            --info: #3b82f6;
+            --warn: #eab308;
+            --radius: 12px;
+            --radius-sm: 8px;
+            --radius-xs: 6px;
+            --sidebar-w: 240px;
+            --topbar-h: 56px;
+            --shadow-card: 0 1px 3px rgba(0, 0, 0, .3), 0 1px 2px rgba(0, 0, 0, .2);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, .4), 0 4px 6px -4px rgba(0, 0, 0, .3);
+        }
+
+        html,
+        body {
+            height: 100%;
+            font-family: 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--bg-root);
+            color: var(--text-primary);
+            font-size: 14px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased
+        }
+
+        /* ── Layout ── */
+        .app-root {
+            display: flex;
+            height: 100vh;
+            overflow: hidden
+        }
+
+        .sidebar {
+            width: var(--sidebar-w);
+            min-width: var(--sidebar-w);
+            height: 100vh;
+            background: var(--bg-sidebar);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto
+        }
+
+        .sidebar-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 20px 16px 16px;
+            border-bottom: 1px solid var(--border)
+        }
+
+        .brand-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-sm);
+            background: linear-gradient(135deg, #f59e0b, #f97316);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 13px;
+            color: #fff;
+            letter-spacing: -.5px
+        }
+
+        .brand-name {
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: .5px
+        }
+
+        .sidebar-nav {
+            flex: 1;
+            padding: 12px 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px
+        }
+
+        .nav-section-title {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--text-muted);
+            padding: 16px 12px 6px;
+            margin-top: 4px
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 9px 14px;
+            border-radius: var(--radius-sm);
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all .15s ease;
+            cursor: pointer
+        }
+
+        .nav-link:hover {
+            background: rgba(255, 255, 255, .04);
+            color: var(--text-primary)
+        }
+
+        .nav-link.active {
+            background: rgba(245, 158, 11, .1);
+            color: var(--accent);
+            font-weight: 600
+        }
+
+        .nav-icon {
+            font-size: 15px;
+            width: 20px;
+            text-align: center;
+            flex-shrink: 0
+        }
+
+        .sidebar-footer {
+            padding: 12px 16px;
+            border-top: 1px solid var(--border)
+        }
+
+        .sidebar-user {
+            display: flex;
+            align-items: center;
+            gap: 10px
+        }
+
+        .sidebar-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #3b82f6, #6366f1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 13px;
+            color: #fff
+        }
+
+        .sidebar-user-info {
+            display: flex;
+            flex-direction: column
+        }
+
+        .sidebar-user-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary)
+        }
+
+        .sidebar-user-role {
+            font-size: 11px;
+            color: var(--text-muted)
+        }
+
+        .main-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden
+        }
+
+        /* Topbar */
+        .topbar {
+            height: var(--topbar-h);
+            min-height: var(--topbar-h);
+            background: var(--bg-sidebar);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            gap: 12px
+        }
+
+        .topbar-left {
+            display: flex;
+            align-items: center;
+            gap: 12px
+        }
+
+        .topbar-project-select select {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 6px 12px;
+            border-radius: var(--radius-xs);
+            font-size: 13px;
+            outline: none;
+            cursor: pointer
+        }
+
+        .topbar-right {
+            display: flex;
+            align-items: center;
+            gap: 12px
+        }
+
+        .topbar-btn {
+            border: none;
+            cursor: pointer;
+            border-radius: var(--radius-xs);
+            font-size: 12px;
+            font-weight: 600;
+            padding: 6px 14px;
+            transition: all .15s ease
+        }
+
+        .topbar-btn-scan {
+            background: linear-gradient(135deg, #f59e0b, #f97316);
+            color: #fff
+        }
+
+        .topbar-divider {
+            width: 1px;
+            height: 20px;
+            background: var(--border)
+        }
+
+        .theme-btn {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2px solid var(--border);
+            cursor: pointer;
+            transition: all .15s
+        }
+
+        .theme-btn.active {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(245, 158, 11, .3)
+        }
+
+        .theme-btn[data-theme="dark"] {
+            background: #1e293b
+        }
+
+        .theme-btn[data-theme="blue"] {
+            background: #1e3a5f
+        }
+
+        .theme-btn[data-theme="midnight"] {
+            background: #0f0f1a
+        }
+
+        .topbar-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-muted)
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 6px rgba(34, 197, 94, .5)
+        }
+
+        /* Content */
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 24px 32px
+        }
+
+        /* Stats row */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 20px
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+            transition: all .2s ease;
+            box-shadow: var(--shadow-card)
+        }
+
+        .stat-card:hover {
+            border-color: rgba(255, 255, 255, .1);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-lg)
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--accent);
+            border-radius: var(--radius) var(--radius) 0 0
+        }
+
+        .stat-card.danger::before {
+            background: var(--danger)
+        }
+
+        .stat-card.blue::before {
+            background: var(--info)
+        }
+
+        .stat-icon-wrap {
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-sm);
+            background: rgba(245, 158, 11, .1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            margin-bottom: 12px;
+            color: var(--accent)
+        }
+
+        .stat-card.danger .stat-icon-wrap {
+            background: rgba(239, 68, 68, .1);
+            color: var(--danger)
+        }
+
+        .stat-card.blue .stat-icon-wrap {
+            background: rgba(59, 130, 246, .1);
+            color: var(--info)
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            font-weight: 500
+        }
+
+        .stat-value-row {
+            display: flex;
+            align-items: baseline;
+            gap: 8px
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1
+        }
+
+        .stat-change {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--success);
+            display: flex;
+            align-items: center;
+            gap: 2px
+        }
+
+        .stat-desc {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 6px
+        }
+
+        /* Panel */
+        .two-col {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 16px;
+            margin-bottom: 20px
+        }
+
+        .panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            box-shadow: var(--shadow-card)
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border)
+        }
+
+        .panel-header h2 {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-primary)
+        }
+
+        .panel-meta {
+            font-size: 12px;
+            color: var(--text-muted)
+        }
+
+        .chart-container {
+            padding: 16px 12px 8px
+        }
+
+        /* Table */
+        .table-wrap {
+            overflow-x: auto
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse
+        }
+
+        .data-table th {
+            padding: 10px 16px;
+            text-align: left;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, .02);
+            border-bottom: 1px solid var(--border)
+        }
+
+        .data-table td {
+            padding: 10px 16px;
+            font-size: 13px;
+            border-bottom: 1px solid rgba(255, 255, 255, .03)
+        }
+
+        .data-table tr:hover td {
+            background: rgba(255, 255, 255, .02)
+        }
+
+        .cell-mono {
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 12px
+        }
+
+        .cell-muted {
+            color: var(--text-muted);
+            font-size: 12px
+        }
+
+        /* Status badge */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600
+        }
+
+        .status-badge.completed {
+            background: rgba(34, 197, 94, .12);
+            color: #22c55e
+        }
+
+        .status-badge.failed {
+            background: rgba(239, 68, 68, .12);
+            color: #ef4444
+        }
+
+        .status-badge.running {
+            background: rgba(59, 130, 246, .12);
+            color: #3b82f6
+        }
+
+        .status-badge.pending {
+            background: rgba(100, 116, 139, .12);
+            color: #94a3b8
+        }
+
+        .status-indicator {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor
+        }
+
+        /* Progress bar */
+        .progress-bar {
+            height: 6px;
+            background: rgba(255, 255, 255, .06);
+            border-radius: 3px;
+            overflow: hidden
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width .3s ease
+        }
+
+        .progress-fill.success {
+            background: linear-gradient(90deg, #22c55e, #16a34a)
+        }
+
+        .progress-fill.danger {
+            background: linear-gradient(90deg, #ef4444, #dc2626)
+        }
+
+        .progress-fill.info {
+            background: linear-gradient(90deg, #3b82f6, #2563eb)
+        }
+
+        /* Summary badges */
+        .summary-badges {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap
+        }
+
+        .summary-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 10px
+        }
+
+        .summary-badge.critical {
+            background: rgba(239, 68, 68, .15);
+            color: #ef4444
+        }
+
+        .summary-badge.high {
+            background: rgba(249, 115, 22, .15);
+            color: #f97316
+        }
+
+        .summary-badge.medium {
+            background: rgba(234, 179, 8, .15);
+            color: #eab308
+        }
+
+        .summary-badge.low {
+            background: rgba(34, 197, 94, .15);
+            color: #22c55e
+        }
+
+        .summary-badge.ports {
+            background: rgba(59, 130, 246, .15);
+            color: #3b82f6
+        }
+
+        .summary-badge.subs {
+            background: rgba(245, 158, 11, .15);
+            color: #f59e0b
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 32px 20px;
+            color: var(--text-muted)
+        }
+
+        .empty-state-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
+            opacity: .5
+        }
+
+        .empty-state-text {
+            font-size: 13px
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app-root">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-icon">MR</div>
+                <span class="brand-name">MyRecon</span>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section-title">主要功能</div>
+                <a class="nav-link active"><span class="nav-icon">◈</span> 仪表盘</a>
+                <a class="nav-link"><span class="nav-icon">◎</span> 资产</a>
+                <a class="nav-link"><span class="nav-icon">⊞</span> 端口</a>
+                <a class="nav-link"><span class="nav-icon">⚑</span> 漏洞</a>
+                <a class="nav-link"><span class="nav-icon">⎔</span> 截图</a>
+                <div class="nav-section-title">扫描</div>
+                <a class="nav-link"><span class="nav-icon">▷</span> 扫描任务</a>
+                <a class="nav-link"><span class="nav-icon">◉</span> 监控</a>
+                <div class="nav-section-title">系统设置</div>
+                <a class="nav-link"><span class="nav-icon">⊟</span> 项目管理</a>
+                <a class="nav-link"><span class="nav-icon">⚙</span> 系统设置</a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="sidebar-user">
+                    <div class="sidebar-avatar">A</div>
+                    <div class="sidebar-user-info">
+                        <div class="sidebar-user-name">admin</div>
+                        <div class="sidebar-user-role">管理员</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main -->
+        <div class="main-area">
+            <header class="topbar">
+                <div class="topbar-left">
+                    <div class="topbar-project-select">
+                        <select>
+                            <option>Default Workspace</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="topbar-right">
+                    <button class="topbar-btn topbar-btn-scan">⚡ 快速扫描</button>
+                    <div class="topbar-divider"></div>
+                    <div style="display:flex;gap:6px">
+                        <button class="theme-btn active" data-theme="dark"></button>
+                        <button class="theme-btn" data-theme="blue"></button>
+                        <button class="theme-btn" data-theme="midnight"></button>
+                    </div>
+                    <div class="topbar-divider"></div>
+                    <div class="topbar-status">
+                        <span class="status-dot"></span>
+                        <span>Online</span>
+                    </div>
+                </div>
+            </header>
+
+            <main class="content">
+                <!-- Stats -->
+                <div class="stats-row">
+                    <div class="stat-card">
+                        <div class="stat-icon-wrap">◎</div>
+                        <div class="stat-label">发现资产</div>
+                        <div class="stat-value-row">
+                            <div class="stat-value">1,284</div>
+                            <div class="stat-change">↑ 128</div>
+                        </div>
+                        <div class="stat-desc">子域名 + IP + 端口 + 网站</div>
+                    </div>
+                    <div class="stat-card danger">
+                        <div class="stat-icon-wrap">⚑</div>
+                        <div class="stat-label">发现漏洞</div>
+                        <div class="stat-value-row">
+                            <div class="stat-value">47</div>
+                            <div class="stat-change">↑ 12</div>
+                        </div>
+                        <div class="stat-desc">所有扫描发现的漏洞</div>
+                    </div>
+                    <div class="stat-card blue">
+                        <div class="stat-icon-wrap">◉</div>
+                        <div class="stat-label">监控目标</div>
+                        <div class="stat-value-row">
+                            <div class="stat-value">56</div>
+                        </div>
+                        <div class="stat-desc">已添加的目标总数</div>
+                    </div>
+                    <div class="stat-card blue">
+                        <div class="stat-icon-wrap">▷</div>
+                        <div class="stat-label">正在扫描</div>
+                        <div class="stat-value-row">
+                            <div class="stat-value">3</div>
+                        </div>
+                        <div class="stat-desc">当前进行中的任务</div>
+                    </div>
+                </div>
+
+                <!-- Charts -->
+                <div class="two-col">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>资产趋势</h2>
+                            <span class="panel-meta">近7天资产变化</span>
+                        </div>
+                        <div class="chart-container">
+                            <div id="trendChart" style="height:280px"></div>
+                        </div>
+                        <div style="display:flex;gap:16px;padding:0 20px 16px;flex-wrap:wrap">
+                            <span style="font-size:12px;color:#64748b">指标</span>
+                            <span style="font-size:12px;color:#f59e0b">● 子域名 846</span>
+                            <span style="font-size:12px;color:#ef4444">● IP 56</span>
+                            <span style="font-size:12px;color:#22c55e">● 端口 312</span>
+                            <span style="font-size:12px;color:#3b82f6">● 网站 70</span>
+                        </div>
+                    </div>
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>漏洞分布</h2>
+                            <span class="panel-meta">按严重程度统计</span>
+                        </div>
+                        <div class="chart-container">
+                            <div id="sevChart" style="height:240px"></div>
+                        </div>
+                        <div style="display:flex;gap:12px;padding:0 20px 16px;justify-content:center;flex-wrap:wrap">
+                            <span class="summary-badge critical">严重 5</span>
+                            <span class="summary-badge high">高危 12</span>
+                            <span class="summary-badge medium">中危 18</span>
+                            <span class="summary-badge low">低危 8</span>
+                            <span style="font-size:11px;color:#64748b;padding:2px 8px">信息 4</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>扫描历史</h2>
+                        <span class="panel-meta">8 条记录</span>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Target</th>
+                                    <th>Summary</th>
+                                    <th>Created At</th>
+                                    <th>Status</th>
+                                    <th>Progress</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="cell-mono">example.com</td>
+                                    <td>
+                                        <div class="summary-badges"><span class="summary-badge critical">● 2</span><span
+                                                class="summary-badge ports">⊞ 48</span><span
+                                                class="summary-badge subs">◎ 312</span></div>
+                                    </td>
+                                    <td class="cell-muted">2026/03/13 14:22:01</td>
+                                    <td><span class="status-badge completed"><span
+                                                class="status-indicator"></span>Completed</span></td>
+                                    <td>
+                                        <div style="display:flex;align-items:center;gap:8px">
+                                            <div class="progress-bar" style="flex:1">
+                                                <div class="progress-fill success" style="width:100%"></div>
+                                            </div><span style="font-size:12px;color:#64748b;min-width:36px">100%</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td class="cell-mono">test.org</td>
+                                    <td>
+                                        <div class="summary-badges"><span class="summary-badge critical">● 1</span><span
+                                                class="summary-badge ports">⊞ 23</span><span
+                                                class="summary-badge subs">◎ 156</span></div>
+                                    </td>
+                                    <td class="cell-muted">2026/03/13 12:05:33</td>
+                                    <td><span class="status-badge running"><span
+                                                class="status-indicator"></span>Running</span></td>
+                                    <td>
+                                        <div style="display:flex;align-items:center;gap:8px">
+                                            <div class="progress-bar" style="flex:1">
+                                                <div class="progress-fill info" style="width:65%"></div>
+                                            </div><span style="font-size:12px;color:#64748b;min-width:36px">—</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td class="cell-mono">demo.net</td>
+                                    <td>
+                                        <div class="summary-badges"><span class="summary-badge ports">⊞ 12</span><span
+                                                class="summary-badge subs">◎ 89</span></div>
+                                    </td>
+                                    <td class="cell-muted">2026/03/12 20:18:47</td>
+                                    <td><span class="status-badge completed"><span
+                                                class="status-indicator"></span>Completed</span></td>
+                                    <td>
+                                        <div style="display:flex;align-items:center;gap:8px">
+                                            <div class="progress-bar" style="flex:1">
+                                                <div class="progress-fill success" style="width:100%"></div>
+                                            </div><span style="font-size:12px;color:#64748b;min-width:36px">100%</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td class="cell-mono">target.io</td>
+                                    <td>
+                                        <div class="summary-badges"><span class="summary-badge critical">● 3</span><span
+                                                class="summary-badge ports">⊞ 67</span><span
+                                                class="summary-badge subs">◎ 201</span></div>
+                                    </td>
+                                    <td class="cell-muted">2026/03/12 16:42:15</td>
+                                    <td><span class="status-badge failed"><span
+                                                class="status-indicator"></span>Failed</span></td>
+                                    <td>
+                                        <div style="display:flex;align-items:center;gap:8px">
+                                            <div class="progress-bar" style="flex:1">
+                                                <div class="progress-fill danger" style="width:100%"></div>
+                                            </div><span style="font-size:12px;color:#64748b;min-width:36px">100%</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td class="cell-mono">scan.dev</td>
+                                    <td>
+                                        <div class="summary-badges"><span class="summary-badge subs">◎ 45</span></div>
+                                    </td>
+                                    <td class="cell-muted">2026/03/12 10:30:00</td>
+                                    <td><span class="status-badge pending"><span
+                                                class="status-indicator"></span>Pending</span></td>
+                                    <td>
+                                        <div style="display:flex;align-items:center;gap:8px">
+                                            <div class="progress-bar" style="flex:1">
+                                                <div class="progress-fill info" style="width:10%"></div>
+                                            </div><span style="font-size:12px;color:#64748b;min-width:36px">—</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div style="text-align:right;font-size:12px;color:#475569;margin-top:8px">
+                    统计更新于 2026/3/13 17:30:00
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        // Trend chart
+        var trendChart = echarts.init(document.getElementById('trendChart'));
+        trendChart.setOption({
+            tooltip: { trigger: 'axis', backgroundColor: '#1a2035', borderColor: 'rgba(255,255,255,0.08)', textStyle: { color: '#e2e8f0' } },
+            legend: { textStyle: { color: '#64748b' }, bottom: 0 },
+            grid: { left: 40, right: 20, top: 20, bottom: 40 },
+            xAxis: { type: 'category', data: ['3/7', '3/8', '3/9', '3/10', '3/11', '3/12', '3/13'], axisLabel: { color: '#64748b' }, axisLine: { lineStyle: { color: '#1e2a42' } } },
+            yAxis: { type: 'value', axisLabel: { color: '#64748b' }, splitLine: { lineStyle: { color: '#1e2a42' } } },
+            series: [
+                {
+                    name: '子域名', type: 'line', smooth: true, symbol: 'circle', symbolSize: 6, data: [120, 135, 142, 128, 156, 180, 185],
+                    itemStyle: { color: '#f59e0b' }, lineStyle: { color: '#f59e0b', width: 2 },
+                    areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(245,158,11,0.15)' }, { offset: 1, color: 'rgba(245,158,11,0)' }] } }
+                },
+                {
+                    name: 'IP', type: 'line', smooth: true, symbol: 'circle', symbolSize: 6, data: [8, 6, 10, 7, 12, 8, 5],
+                    itemStyle: { color: '#ef4444' }, lineStyle: { color: '#ef4444', width: 2 }
+                },
+                {
+                    name: '端口', type: 'line', smooth: true, symbol: 'circle', symbolSize: 6, data: [45, 38, 52, 61, 48, 55, 63],
+                    itemStyle: { color: '#22c55e' }, lineStyle: { color: '#22c55e', width: 2 },
+                    areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(34,197,94,0.1)' }, { offset: 1, color: 'rgba(34,197,94,0)' }] } }
+                },
+                {
+                    name: '网站', type: 'line', smooth: true, symbol: 'circle', symbolSize: 6, data: [10, 12, 8, 14, 11, 9, 6],
+                    itemStyle: { color: '#3b82f6' }, lineStyle: { color: '#3b82f6', width: 2 }
+                }
+            ]
+        });
+
+        // Severity donut
+        var sevChart = echarts.init(document.getElementById('sevChart'));
+        sevChart.setOption({
+            tooltip: { trigger: 'item', backgroundColor: '#1a2035', borderColor: 'rgba(255,255,255,0.08)', textStyle: { color: '#e2e8f0' } },
+            graphic: [
+                { type: 'text', left: 'center', top: '38%', style: { text: '47', fill: '#e2e8f0', fontSize: 28, fontWeight: 'bold', textAlign: 'center' } },
+                { type: 'text', left: 'center', top: '55%', style: { text: '漏洞', fill: '#64748b', fontSize: 12, textAlign: 'center' } }
+            ],
+            series: [{
+                type: 'pie', radius: ['55%', '78%'], center: ['50%', '50%'], avoidLabelOverlap: false, label: { show: false },
+                data: [
+                    { value: 5, name: '严重', itemStyle: { color: '#ef4444' } },
+                    { value: 12, name: '高危', itemStyle: { color: '#f97316' } },
+                    { value: 18, name: '中危', itemStyle: { color: '#eab308' } },
+                    { value: 8, name: '低危', itemStyle: { color: '#22c55e' } },
+                    { value: 4, name: '信息', itemStyle: { color: '#64748b' } }
+                ]
+            }]
+        });
+
+        window.addEventListener('resize', function () { trendChart.resize(); sevChart.resize() });
+    </script>
+</body>
+
+</html>

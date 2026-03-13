@@ -265,7 +265,7 @@ export function DashboardPage() {
                   const cls = statusClass(j.status);
                   return (
                     <tr key={j.id}>
-                      <td className="cell-mono">{j.rootDomain || j.domain || "—"}</td>
+                      <td className="cell-mono">{j.rootDomain || "—"}</td>
                       <td>
                         <div className="summary-badges">
                           {totalVulns > 0 && <span className="summary-badge critical">● {sevCounts.critical}</span>}
@@ -273,7 +273,7 @@ export function DashboardPage() {
                           {scoped.assets.length > 0 && <span className="summary-badge subs">◎ {scoped.assets.length}</span>}
                         </div>
                       </td>
-                      <td className="cell-muted">{formatTime(j.createdAt)}</td>
+                      <td className="cell-muted">{formatTime(j.startedAt)}</td>
                       <td>
                         <span className={`status-badge ${cls}`}>
                           <span className="status-indicator" />
