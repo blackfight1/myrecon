@@ -63,13 +63,16 @@ export function DashboardPage() {
     return out;
   }, [scoped.vulns]);
 
-  // Running jobs count - prefer backend summary if available
-  const runningJobs = summary?.jobsRunning ?? useMemo(() =>
+  // Running jobs count fallback from local scoped jobs.
+  const runningJobsFallback = useMemo(() =>
     scoped.jobs.filter((j) => {
       const s = String(j.status).toLowerCase();
       return s.includes("running") || s.includes("pending");
     }).length
-    , [scoped.jobs]);
+  , [scoped.jobs]);
+
+  // Prefer backend summary when available.
+  const runningJobs = summary?.jobsRunning ?? runningJobsFallback;
 
   const loading = dashQ.isLoading || jobsQ.isLoading || assetsQ.isLoading || portsQ.isLoading || vulnsQ.isLoading;
 
