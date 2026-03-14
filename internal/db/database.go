@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"hunter/internal/common"
+
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -917,9 +919,5 @@ func normalizeHost(value string) string {
 }
 
 func extractRootDomain(host string) string {
-	parts := strings.Split(host, ".")
-	if len(parts) < 2 {
-		return host
-	}
-	return parts[len(parts)-2] + "." + parts[len(parts)-1]
+	return common.EffectiveRootDomain(host)
 }

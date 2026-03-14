@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"hunter/internal/common"
 )
 
 // Result represents a scanner output item.
@@ -316,11 +318,7 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 
 // extractRootDomain extracts a rough root domain from subdomain.
 func extractRootDomain(subdomain string) string {
-	parts := strings.Split(subdomain, ".")
-	if len(parts) >= 2 {
-		return parts[len(parts)-2] + "." + parts[len(parts)-1]
-	}
-	return subdomain
+	return common.EffectiveRootDomain(subdomain)
 }
 
 func buildPluginStatusResult(scannerName string, successCount int, err error, duration time.Duration) Result {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	commondomain "hunter/internal/common"
 	"hunter/internal/engine"
 	"hunter/internal/plugins/common"
 )
@@ -323,11 +324,7 @@ func extractRootDomain(value string) string {
 	if host == "" {
 		return ""
 	}
-	parts := strings.Split(host, ".")
-	if len(parts) < 2 {
-		return host
-	}
-	return parts[len(parts)-2] + "." + parts[len(parts)-1]
+	return commondomain.EffectiveRootDomain(host)
 }
 
 func extractCVE(text string) string {

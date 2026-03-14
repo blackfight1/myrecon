@@ -2,26 +2,34 @@
 import { useMemo } from "react";
 import { StatCard } from "../components/ui/StatCard";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useDashboard, useJobs, useAssets, usePorts, useVulns } from "../hooks/queries";
+import { useJobs, useAssets, usePorts, useVulns } from "../hooks/queries";
 import { matchesProjectDomain } from "../lib/projectScope";
 
 function hostnameFromUrl(input?: string): string | undefined {
   if (!input) return undefined;
-  try { return new URL(input).hostname; } catch { return undefined; }
+  try {
+    return new URL(input).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseTime(input?: string): number {
+  if (!input) return 0;
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return 0;
+  return d.getTime();
 }
 
 export function DashboardPage() {
   const { activeProject } = useWorkspace();
   const rootDomains = activeProject?.rootDomains ?? [];
 
-  // Use backend dashboard summary API for trend and 24h stats
-  const dashQ = useDashboard();
   const jobsQ = useJobs();
   const assetsQ = useAssets();
   const portsQ = usePorts();
   const vulnsQ = useVulns();
 
-  // Scoped data for totals and severity breakdown
   const scoped = useMemo(() => {
     const jobs = (jobsQ.data ?? []).filter((j) => matchesProjectDomain(j.rootDomain, rootDomains));
     const assets = (assetsQ.data ?? []).filter((a) =>
@@ -32,17 +40,14 @@ export function DashboardPage() {
       matchesProjectDomain(p.domain, rootDomains) || (p.ip && assetIps.has(p.ip))
     );
     const vulns = (vulnsQ.data ?? []).filter((v) =>
-      matchesProjectDomain(v.rootDomain, rootDomains) || matchesProjectDomain(v.domain, rootDomains) ||
-      matchesProjectDomain(v.host, rootDomains) || matchesProjectDomain(hostnameFromUrl(v.url), rootDomains)
+      matchesProjectDomain(v.rootDomain, rootDomains) ||
+      matchesProjectDomain(v.domain, rootDomains) ||
+      matchesProjectDomain(v.host, rootDomains) ||
+      matchesProjectDomain(hostnameFromUrl(v.url), rootDomains)
     );
     return { jobs, assets, ports, vulns };
   }, [jobsQ.data, assetsQ.data, portsQ.data, vulnsQ.data, rootDomains]);
 
-  // Dashboard summary from backend
-  const summary = dashQ.data?.summary;
-  const trend = dashQ.data?.trend ?? [];
-
-  // Count unique IPs
   const uniqueIps = useMemo(() => {
     const s = new Set<string>();
     for (const a of scoped.assets) if (a.ip) s.add(a.ip);
@@ -50,10 +55,8 @@ export function DashboardPage() {
     return s.size;
   }, [scoped.assets, scoped.ports]);
 
-  // Count web services (assets with URL)
   const webCount = useMemo(() => scoped.assets.filter((a) => a.url).length, [scoped.assets]);
 
-  // Severity breakdown
   const sevCounts = useMemo(() => {
     const out = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
     for (const v of scoped.vulns) {
@@ -63,84 +66,204 @@ export function DashboardPage() {
     return out;
   }, [scoped.vulns]);
 
-  // Running jobs count fallback from local scoped jobs.
-  const runningJobsFallback = useMemo(() =>
-    scoped.jobs.filter((j) => {
-      const s = String(j.status).toLowerCase();
-      return s.includes("running") || s.includes("pending");
-    }).length
-    , [scoped.jobs]);
+  const runningJobs = useMemo(
+    () =>
+      scoped.jobs.filter((j) => {
+        const s = String(j.status).toLowerCase();
+        return s.includes("running") || s.includes("pending");
+      }).length,
+    [scoped.jobs]
+  );
 
-  // Prefer backend summary when available.
-  const runningJobs = summary?.jobsRunning ?? runningJobsFallback;
+  const summary = useMemo(() => {
+    const since24h = Date.now() - 24 * 60 * 60 * 1000;
 
-  const loading = dashQ.isLoading || jobsQ.isLoading || assetsQ.isLoading || portsQ.isLoading || vulnsQ.isLoading;
+    const newSubdomains24h = scoped.assets.filter((a) => {
+      const ts = parseTime(a.createdAt) || parseTime(a.updatedAt) || parseTime(a.lastSeen);
+      return ts >= since24h;
+    }).length;
 
-  // Format trend dates for display
+    const newPorts24h = scoped.ports.filter((p) => {
+      const ts = parseTime(p.lastSeen) || parseTime(p.updatedAt);
+      return ts >= since24h;
+    }).length;
+
+    const newVulns24h = scoped.vulns.filter((v) => {
+      const ts = parseTime(v.matchedAt) || parseTime(v.lastSeen);
+      return ts >= since24h;
+    }).length;
+
+    return { newSubdomains24h, newPorts24h, newVulns24h };
+  }, [scoped.assets, scoped.ports, scoped.vulns]);
+
+  const trend = useMemo(() => {
+    const dayMillis = 24 * 60 * 60 * 1000;
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+    return Array.from({ length: 7 }).map((_, idx) => {
+      const offset = 6 - idx;
+      const start = todayStart - offset * dayMillis;
+      const end = start + dayMillis;
+
+      const subdomains = scoped.assets.filter((a) => {
+        const ts = parseTime(a.createdAt) || parseTime(a.updatedAt) || parseTime(a.lastSeen);
+        return ts >= start && ts < end;
+      }).length;
+
+      const ports = scoped.ports.filter((p) => {
+        const ts = parseTime(p.lastSeen) || parseTime(p.updatedAt);
+        return ts >= start && ts < end;
+      }).length;
+
+      const vulnerabilities = scoped.vulns.filter((v) => {
+        const ts = parseTime(v.matchedAt) || parseTime(v.lastSeen);
+        return ts >= start && ts < end;
+      }).length;
+
+      const d = new Date(start);
+      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      return { date, subdomains, ports, vulnerabilities };
+    });
+  }, [scoped.assets, scoped.ports, scoped.vulns]);
+
+  const loading = jobsQ.isLoading || assetsQ.isLoading || portsQ.isLoading || vulnsQ.isLoading;
+
   const trendLabels = useMemo(() => {
     return trend.map((t) => {
       const parts = t.date.split("-");
-      if (parts.length === 3) return `${parseInt(parts[1])}/${parseInt(parts[2])}`;
+      if (parts.length === 3) return `${parseInt(parts[1], 10)}/${parseInt(parts[2], 10)}`;
       return t.date;
     });
   }, [trend]);
 
-  // Trend chart - use server-side computed data
   const trendOption = {
-    tooltip: { trigger: "axis" as const, backgroundColor: "#1a2035", borderColor: "rgba(255,255,255,0.08)", textStyle: { color: "#e2e8f0" } },
+    tooltip: {
+      trigger: "axis" as const,
+      backgroundColor: "#1a2035",
+      borderColor: "rgba(255,255,255,0.08)",
+      textStyle: { color: "#e2e8f0" }
+    },
     legend: { textStyle: { color: "#64748b" }, bottom: 0 },
     grid: { left: 40, right: 20, top: 20, bottom: 40 },
     xAxis: {
       type: "category" as const,
       data: trendLabels,
       axisLabel: { color: "#64748b" },
-      axisLine: { lineStyle: { color: "#1e2a42" } },
+      axisLine: { lineStyle: { color: "#1e2a42" } }
     },
     yAxis: {
       type: "value" as const,
       axisLabel: { color: "#64748b" },
-      splitLine: { lineStyle: { color: "#1e2a42" } },
+      splitLine: { lineStyle: { color: "#1e2a42" } }
     },
     series: [
-      { name: "子域名", type: "line" as const, smooth: true, symbol: "circle", symbolSize: 6, data: trend.map((t) => t.subdomains), itemStyle: { color: "#f59e0b" }, lineStyle: { color: "#f59e0b", width: 2 }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(245,158,11,0.15)" }, { offset: 1, color: "rgba(245,158,11,0)" }] } } },
-      { name: "端口", type: "line" as const, smooth: true, symbol: "circle", symbolSize: 6, data: trend.map((t) => t.ports), itemStyle: { color: "#22c55e" }, lineStyle: { color: "#22c55e", width: 2 }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(34,197,94,0.1)" }, { offset: 1, color: "rgba(34,197,94,0)" }] } } },
-      { name: "漏洞", type: "line" as const, smooth: true, symbol: "circle", symbolSize: 6, data: trend.map((t) => t.vulnerabilities), itemStyle: { color: "#ef4444" }, lineStyle: { color: "#ef4444", width: 2 } },
-    ],
+      {
+        name: "子域名",
+        type: "line" as const,
+        smooth: true,
+        symbol: "circle",
+        symbolSize: 6,
+        data: trend.map((t) => t.subdomains),
+        itemStyle: { color: "#f59e0b" },
+        lineStyle: { color: "#f59e0b", width: 2 },
+        areaStyle: {
+          color: {
+            type: "linear",
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: "rgba(245,158,11,0.15)" },
+              { offset: 1, color: "rgba(245,158,11,0)" }
+            ]
+          }
+        }
+      },
+      {
+        name: "端口",
+        type: "line" as const,
+        smooth: true,
+        symbol: "circle",
+        symbolSize: 6,
+        data: trend.map((t) => t.ports),
+        itemStyle: { color: "#22c55e" },
+        lineStyle: { color: "#22c55e", width: 2 },
+        areaStyle: {
+          color: {
+            type: "linear",
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: "rgba(34,197,94,0.1)" },
+              { offset: 1, color: "rgba(34,197,94,0)" }
+            ]
+          }
+        }
+      },
+      {
+        name: "漏洞",
+        type: "line" as const,
+        smooth: true,
+        symbol: "circle",
+        symbolSize: 6,
+        data: trend.map((t) => t.vulnerabilities),
+        itemStyle: { color: "#ef4444" },
+        lineStyle: { color: "#ef4444", width: 2 }
+      }
+    ]
   };
 
-  // Severity donut
   const totalVulns = scoped.vulns.length;
   const sevPieOption = {
-    tooltip: { trigger: "item" as const, backgroundColor: "#1a2035", borderColor: "rgba(255,255,255,0.08)", textStyle: { color: "#e2e8f0" } },
+    tooltip: {
+      trigger: "item" as const,
+      backgroundColor: "#1a2035",
+      borderColor: "rgba(255,255,255,0.08)",
+      textStyle: { color: "#e2e8f0" }
+    },
     legend: { show: false },
-    graphic: [{
-      type: "text" as const,
-      left: "center",
-      top: "40%",
-      style: { text: String(totalVulns), fill: "#e2e8f0", fontSize: 28, fontWeight: "bold" as const, textAlign: "center" as const },
-    }, {
-      type: "text" as const,
-      left: "center",
-      top: "55%",
-      style: { text: "漏洞", fill: "#64748b", fontSize: 12, textAlign: "center" as const },
-    }],
-    series: [{
-      type: "pie" as const,
-      radius: ["55%", "78%"],
-      center: ["50%", "50%"],
-      avoidLabelOverlap: false,
-      label: { show: false },
-      data: [
-        { value: sevCounts.critical, name: "严重", itemStyle: { color: "#ef4444" } },
-        { value: sevCounts.high, name: "高危", itemStyle: { color: "#f97316" } },
-        { value: sevCounts.medium, name: "中危", itemStyle: { color: "#eab308" } },
-        { value: sevCounts.low, name: "低危", itemStyle: { color: "#22c55e" } },
-        { value: sevCounts.info, name: "信息", itemStyle: { color: "#64748b" } },
-      ].filter((d) => d.value > 0),
-    }],
+    graphic: [
+      {
+        type: "text" as const,
+        left: "center",
+        top: "40%",
+        style: {
+          text: String(totalVulns),
+          fill: "#e2e8f0",
+          fontSize: 28,
+          fontWeight: "bold" as const,
+          textAlign: "center" as const
+        }
+      },
+      {
+        type: "text" as const,
+        left: "center",
+        top: "55%",
+        style: { text: "漏洞", fill: "#64748b", fontSize: 12, textAlign: "center" as const }
+      }
+    ],
+    series: [
+      {
+        type: "pie" as const,
+        radius: ["55%", "78%"],
+        center: ["50%", "50%"],
+        avoidLabelOverlap: false,
+        label: { show: false },
+        data: [
+          { value: sevCounts.critical, name: "严重", itemStyle: { color: "#ef4444" } },
+          { value: sevCounts.high, name: "高危", itemStyle: { color: "#f97316" } },
+          { value: sevCounts.medium, name: "中危", itemStyle: { color: "#eab308" } },
+          { value: sevCounts.low, name: "低危", itemStyle: { color: "#22c55e" } },
+          { value: sevCounts.info, name: "信息", itemStyle: { color: "#64748b" } }
+        ].filter((d) => d.value > 0)
+      }
+    ]
   };
 
-  // Recent jobs for table
   const recentJobs = useMemo(() => scoped.jobs.slice(0, 10), [scoped.jobs]);
 
   const formatTime = (s?: string | null) => {
@@ -152,7 +275,13 @@ export function DashboardPage() {
 
   const formatDuration = (sec?: number, status?: string) => {
     const st = (status ?? "").toLowerCase();
-    const finished = st.includes("success") || st.includes("done") || st.includes("ok") || st.includes("completed") || st.includes("fail") || st.includes("error");
+    const finished =
+      st.includes("success") ||
+      st.includes("done") ||
+      st.includes("ok") ||
+      st.includes("completed") ||
+      st.includes("fail") ||
+      st.includes("error");
     if (sec === undefined || sec === null) return finished ? "< 1s" : "—";
     if (sec <= 0) return finished ? "< 1s" : "—";
     if (sec < 60) return `${sec}s`;
@@ -181,7 +310,9 @@ export function DashboardPage() {
       {loading && (
         <div className="loading-skeleton">
           <div className="stats-row">
-            {[1, 2, 3, 4].map(i => <div key={i} className="skeleton-card" />)}
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="skeleton-card" />
+            ))}
           </div>
           <div className="two-col">
             <div className="skeleton-panel" style={{ height: 320 }} />
@@ -191,15 +322,19 @@ export function DashboardPage() {
         </div>
       )}
 
-      {/* ── 4 Stat Cards ── */}
       <div className="stats-row">
-        <StatCard icon="◎" label="发现资产" value={scoped.assets.length} change={summary?.newSubdomains24h} desc={`子域名 ${scoped.assets.length} · IP ${uniqueIps} · 端口 ${scoped.ports.length} · 网站 ${webCount}`} />
-        <StatCard icon="⚑" label="发现漏洞" value={totalVulns} change={summary?.newVulns24h} accent="danger" desc="所有扫描发现的漏洞" />
+        <StatCard
+          icon="◎"
+          label="发现资产"
+          value={scoped.assets.length}
+          change={summary.newSubdomains24h}
+          desc={`子域名 ${scoped.assets.length} · IP ${uniqueIps} · 端口 ${scoped.ports.length} · 网站 ${webCount}`}
+        />
+        <StatCard icon="⚑" label="发现漏洞" value={totalVulns} change={summary.newVulns24h} accent="danger" desc="所有扫描发现的漏洞" />
         <StatCard icon="◉" label="监控目标" value={uniqueIps} accent="blue" desc="已添加的目标总数" />
         <StatCard icon="▷" label="正在扫描" value={runningJobs} accent="blue" desc="当前进行中的任务" />
       </div>
 
-      {/* ── Trend + Severity ── */}
       <div className="two-col">
         <article className="panel">
           <header className="panel-header">
@@ -245,7 +380,6 @@ export function DashboardPage() {
         </article>
       </div>
 
-      {/* ── Scan History Table ── */}
       <article className="panel">
         <header className="panel-header">
           <h2>扫描历史</h2>
@@ -278,7 +412,9 @@ export function DashboardPage() {
                       <td>
                         <div className="summary-badges">
                           {(j.modules ?? []).map((m) => (
-                            <span key={m} className="summary-badge" style={{ fontSize: 11 }}>{m}</span>
+                            <span key={m} className="summary-badge" style={{ fontSize: 11 }}>
+                              {m}
+                            </span>
                           ))}
                         </div>
                       </td>
@@ -290,7 +426,18 @@ export function DashboardPage() {
                           {statusLabel(j.status)}
                         </span>
                         {j.errorMessage && (
-                          <div style={{ fontSize: 11, color: "#ef4444", marginTop: 2, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={j.errorMessage}>
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "#ef4444",
+                              marginTop: 2,
+                              maxWidth: 200,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap"
+                            }}
+                            title={j.errorMessage}
+                          >
                             {j.errorMessage}
                           </div>
                         )}
@@ -309,9 +456,7 @@ export function DashboardPage() {
         )}
       </article>
 
-      <div style={{ textAlign: "right", fontSize: 12, color: "#475569", marginTop: 8 }}>
-        统计更新于 {new Date().toLocaleString("zh-CN")}
-      </div>
+      <div style={{ textAlign: "right", fontSize: 12, color: "#475569", marginTop: 8 }}>统计更新于 {new Date().toLocaleString("zh-CN")}</div>
     </section>
   );
 }

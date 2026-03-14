@@ -299,6 +299,7 @@ func NewServer(database *db.Database, screenshotDir string) *Server {
 	if strings.TrimSpace(screenshotDir) == "" {
 		screenshotDir = "screenshots"
 	}
+	ensureCommonToolPaths()
 
 	s := &Server{
 		db:            database,
@@ -423,7 +424,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 	}
 
 	// Run network pipeline (httpx + ports)
-	networkResults, err := s.runNetworkPipeline(subdomains, true, false, false, s.screenshotDir)
+	networkResults, err := s.runNetworkPipeline(subdomains, true, true, false, false, s.screenshotDir)
 	if err != nil {
 		log.Printf("[Scheduler] network pipeline warning for %s: %v", rootDomain, err)
 	}
@@ -952,12 +953,16 @@ func (s *Server) runScanAsync(jobID, rootDomain string, modules []string, enable
 
 	log.Printf("[Scan] Job %s started for %s, modules=%v", jobID, rootDomain, modules)
 
-	hasSubs := containsModule(modules, "subs")
-	hasPorts := containsModule(modules, "ports")
-	hasHttpx := containsModule(modules, "httpx")
-	hasNuclei := enableNuclei || containsModule(modules, "nuclei")
-	hasActiveSubs := activeSubs || containsModule(modules, "dnsx_bruteforce")
-	hasWitness := containsModule(modules, "witness")
+	// Frontend may send stage modules (subs/ports/httpx/...) or concrete tool
+	// modules (subfinder/findomain/bbot/naabu/nmap/...); normalize behavior here.
+	hasPassiveSubs := containsAnyModule(modules, "subs", "subfinder", "findomain", "bbot", "shosubgo")
+	hasActiveSubs := activeSubs || containsAnyModule(modules, "dnsx_bruteforce", "dictgen")
+	hasSubs := hasPassiveSubs || hasActiveSubs
+	hasPorts := containsAnyModule(modules, "ports", "naabu", "nmap")
+	hasWitness := containsAnyModule(modules, "witness", "gowitness")
+	hasNuclei := enableNuclei || containsAnyModule(modules, "nuclei")
+	// Nuclei/Witness both depend on live HTTP targets from httpx.
+	hasHttpx := containsAnyModule(modules, "httpx") || hasNuclei || hasWitness
 
 	s.settingsMu.RLock()
 	screenshotDir := s.screenshotDir
@@ -1003,15 +1008,15 @@ func (s *Server) runScanAsync(jobID, rootDomain string, modules []string, enable
 			}
 		}
 
-		if hasPorts || hasHttpx || len(subdomains) > 0 {
-			networkResults, err := s.runNetworkPipeline(subdomains, hasPorts, hasNuclei, hasWitness, screenshotDir)
+		if hasPorts || hasHttpx {
+			networkResults, err := s.runNetworkPipeline(subdomains, hasHttpx, hasPorts, hasNuclei, hasWitness, screenshotDir)
 			allResults = append(allResults, networkResults...)
 			if err != nil {
 				scanErr = fmt.Errorf("network stage failed: %v", err)
 			}
 		}
 	} else if hasPorts || hasHttpx {
-		networkResults, err := s.runNetworkPipeline(domains, hasPorts, hasNuclei, hasWitness, screenshotDir)
+		networkResults, err := s.runNetworkPipeline(domains, hasHttpx, hasPorts, hasNuclei, hasWitness, screenshotDir)
 		allResults = append(allResults, networkResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("network stage failed: %v", err)
@@ -1097,9 +1102,11 @@ func (s *Server) expandActiveSubdomains(rootDomains, passiveSubdomains []string,
 	return allResults, extractDomains(bruteResults), nil
 }
 
-func (s *Server) runNetworkPipeline(subdomains []string, enablePorts, enableNuclei, enableWitness bool, screenshotDir string) ([]engine.Result, error) {
+func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, enableNuclei, enableWitness bool, screenshotDir string) ([]engine.Result, error) {
 	pipeline := engine.NewPipeline()
-	pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
+	if enableHTTPX {
+		pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
+	}
 	if enablePorts {
 		pipeline.AddPortScanner(plugins.NewNaabuPlugin())
 		pipeline.AddPortScanner(plugins.NewNmapPlugin())
@@ -1110,7 +1117,7 @@ func (s *Server) runNetworkPipeline(subdomains []string, enablePorts, enableNucl
 	if enableWitness {
 		pipeline.SetScreenshotScanner(plugins.NewGowitnessPlugin(screenshotDir))
 	}
-	return pipeline.ExecuteFromSubdomains(subdomains)
+	return pipeline.ExecuteFromSubdomains(targets)
 }
 
 func (s *Server) saveResultsToDB(results []engine.Result) error {
@@ -1190,6 +1197,15 @@ func mergeUnique(a, b []string) []string {
 func containsModule(modules []string, name string) bool {
 	for _, m := range modules {
 		if m == name {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyModule(modules []string, names ...string) bool {
+	for _, name := range names {
+		if containsModule(modules, name) {
 			return true
 		}
 	}
@@ -1516,6 +1532,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 			DefaultActiveSubs: settings.Scanner.DefaultActiveSubs,
 			DefaultNuclei:     settings.Scanner.DefaultNuclei,
 		},
+		Tools: s.collectToolStatus(),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1534,8 +1551,13 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			os.Setenv("DINGTALK_WEBHOOK", *p.DingTalkWebhook)
 		}
 		if p.DingTalkSecret != nil {
-			s.settings.Notifications.DingTalkSecret = *p.DingTalkSecret
-			os.Setenv("DINGTALK_SECRET", *p.DingTalkSecret)
+			// Ignore masked/empty values from UI to avoid overwriting the real
+			// secret with placeholders like "ab****yz".
+			incoming := strings.TrimSpace(*p.DingTalkSecret)
+			if incoming != "" && !strings.Contains(incoming, "*") {
+				s.settings.Notifications.DingTalkSecret = incoming
+				os.Setenv("DINGTALK_SECRET", incoming)
+			}
 		}
 		if p.Enabled != nil {
 			s.settings.Notifications.Enabled = *p.Enabled
@@ -1569,14 +1591,18 @@ func (s *Server) handleToolStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	writeJSON(w, http.StatusOK, s.collectToolStatus())
+}
+
+func (s *Server) collectToolStatus() []toolStatusResponse {
 	tools := []string{"subfinder", "findomain", "bbot", "naabu", "nmap", "httpx", "nuclei", "gowitness", "dnsx", "shosubgo"}
 	resp := make([]toolStatusResponse, 0, len(tools))
 	for _, name := range tools {
 		ts := toolStatusResponse{Name: name}
-		if path, err := exec.LookPath(name); err == nil {
+		if path, ok := resolveToolPath(name); ok {
 			ts.Installed = true
 			ts.Path = path
-			if out, err := exec.Command(name, "--version").CombinedOutput(); err == nil {
+			if out, err := exec.Command(path, "--version").CombinedOutput(); err == nil {
 				ver := strings.TrimSpace(string(out))
 				if len(ver) > 100 {
 					ver = ver[:100]
@@ -1586,7 +1612,39 @@ func (s *Server) handleToolStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		resp = append(resp, ts)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp
+}
+
+func resolveToolPath(name string) (string, bool) {
+	if path, err := exec.LookPath(name); err == nil {
+		return path, true
+	}
+	// Common GOPATH bin fallback on VPS.
+	fallback := filepath.Join("/root/go/bin", name)
+	if st, err := os.Stat(fallback); err == nil && !st.IsDir() {
+		return fallback, true
+	}
+	return "", false
+}
+
+func ensureCommonToolPaths() {
+	extra := "/root/go/bin"
+	st, err := os.Stat(extra)
+	if err != nil || !st.IsDir() {
+		return
+	}
+
+	cur := os.Getenv("PATH")
+	for _, item := range filepath.SplitList(cur) {
+		if filepath.Clean(item) == filepath.Clean(extra) {
+			return
+		}
+	}
+	if cur == "" {
+		_ = os.Setenv("PATH", extra)
+		return
+	}
+	_ = os.Setenv("PATH", cur+string(os.PathListSeparator)+extra)
 }
 
 func (s *Server) handleTestNotify(w http.ResponseWriter, r *http.Request) {
@@ -1604,7 +1662,11 @@ func (s *Server) handleTestNotify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "send failed: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "test notification sent"})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "ok",
+		"success": true,
+		"message": "test notification sent",
+	})
 }
 
 // ──────────────────────────────────────────

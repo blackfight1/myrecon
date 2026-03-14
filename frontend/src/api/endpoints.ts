@@ -19,11 +19,11 @@ export interface NewScanJobRequest {
   domain: string;
   mode: "scan" | "monitor";
   modules: string[];
-  enableNuclei: boolean;
-  activeSubs: boolean;
-  dictSize: number;
+  enableNuclei?: boolean;
+  activeSubs?: boolean;
+  dictSize?: number;
   dnsResolvers?: string;
-  dryRun: boolean;
+  dryRun?: boolean;
 }
 
 export interface CancelJobRequest {

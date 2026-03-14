@@ -4,17 +4,13 @@ import { useTheme } from "../../context/ThemeContext";
 import { useWorkspace } from "../../context/WorkspaceContext";
 import { useCreateJob } from "../../hooks/queries";
 
-const ALL_MODULES = [
-  { id: "subfinder", label: "Subfinder" },
-  { id: "findomain", label: "Findomain" },
-  { id: "bbot", label: "BBOT" },
-  { id: "dictgen", label: "Dictgen" },
-  { id: "dnsx_bruteforce", label: "DNSX暴破" },
-  { id: "naabu", label: "Naabu" },
-  { id: "nmap", label: "Nmap" },
-  { id: "httpx", label: "HTTPX" },
-  { id: "nuclei", label: "Nuclei" },
-  { id: "gowitness", label: "Gowitness" },
+const STAGE_OPTIONS = [
+  { id: "subs", label: "Passive Subs" },
+  { id: "active_subs", label: "Active Subs" },
+  { id: "httpx", label: "Web Probe" },
+  { id: "ports", label: "Port Scan" },
+  { id: "witness", label: "Screenshot" },
+  { id: "nuclei", label: "Vulnerability" },
 ];
 
 export function AppShell() {
@@ -24,19 +20,43 @@ export function AppShell() {
 
   const [showScanModal, setShowScanModal] = useState(false);
   const [scanDomain, setScanDomain] = useState("");
-  const [scanModules, setScanModules] = useState<string[]>(["subfinder", "findomain", "httpx"]);
+  const [scanStages, setScanStages] = useState<string[]>(["subs", "httpx", "ports"]);
   const [scanSubmitting, setScanSubmitting] = useState(false);
 
-  const toggleModule = (id: string) => {
-    setScanModules((prev) => prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]);
+  const toggleStage = (id: string) => {
+    setScanStages((prev) => prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]);
   };
 
   const handleQuickScan = async () => {
     const domain = scanDomain.trim();
-    if (!domain || scanModules.length === 0) return;
+    if (!domain || scanStages.length === 0) return;
+
+    const modulesSet = new Set<string>();
+    let activeSubs = false;
+
+    for (const stage of scanStages) {
+      if (stage === "active_subs") {
+        activeSubs = true;
+        modulesSet.add("subs");
+        continue;
+      }
+      modulesSet.add(stage);
+    }
+
+    const moduleOrder = ["subs", "httpx", "ports", "witness", "nuclei"];
+    const modules = moduleOrder.filter((m) => modulesSet.has(m));
+
     setScanSubmitting(true);
     try {
-      await createJob.mutateAsync({ domain, modules: scanModules, mode: "scan" });
+      await createJob.mutateAsync({
+        domain,
+        modules,
+        mode: "scan",
+        enableNuclei: modulesSet.has("nuclei"),
+        activeSubs,
+        dictSize: 1500,
+        dryRun: false,
+      });
       setShowScanModal(false);
       setScanDomain("");
     } catch (e) {
@@ -165,11 +185,11 @@ export function AppShell() {
                 onChange={(e) => setScanDomain(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleQuickScan()}
               />
-              <label className="form-label" style={{ marginTop: 16 }}>选择模块</label>
+              <label className="form-label" style={{ marginTop: 16 }}>选择阶段</label>
               <div className="module-grid">
-                {ALL_MODULES.map((m) => (
-                  <label key={m.id} className={`module-chip${scanModules.includes(m.id) ? " active" : ""}`}>
-                    <input type="checkbox" checked={scanModules.includes(m.id)} onChange={() => toggleModule(m.id)} style={{ display: "none" }} />
+                {STAGE_OPTIONS.map((m) => (
+                  <label key={m.id} className={`module-chip${scanStages.includes(m.id) ? " active" : ""}`}>
+                    <input type="checkbox" checked={scanStages.includes(m.id)} onChange={() => toggleStage(m.id)} style={{ display: "none" }} />
                     {m.label}
                   </label>
                 ))}
@@ -177,7 +197,7 @@ export function AppShell() {
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowScanModal(false)}>取消</button>
-              <button className="btn btn-primary" onClick={handleQuickScan} disabled={scanSubmitting || !scanDomain.trim() || scanModules.length === 0}>
+              <button className="btn btn-primary" onClick={handleQuickScan} disabled={scanSubmitting || !scanDomain.trim() || scanStages.length === 0}>
                 {scanSubmitting ? "提交中..." : "开始扫描"}
               </button>
             </div>

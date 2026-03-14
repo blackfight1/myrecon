@@ -47,7 +47,8 @@ export function SettingsPage() {
     const startEditNotify = () => {
         if (settings) {
             setWebhook(settings.notifications.dingtalkWebhook);
-            setSecret(settings.notifications.dingtalkSecret);
+            // Never preload masked secret from API; keep empty means "unchanged".
+            setSecret("");
         }
         setEditNotify(true);
     };
@@ -179,7 +180,7 @@ export function SettingsPage() {
                                             type="password"
                                             value={secret}
                                             onChange={(e) => setSecret(e.target.value)}
-                                            placeholder="SEC…"
+                                            placeholder="留空则保持现有 Secret 不变"
                                         />
                                     </div>
                                     <div className="form-actions">

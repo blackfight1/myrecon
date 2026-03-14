@@ -23,6 +23,16 @@ const columns = [
   col.accessor("errorMessage", { header: "错误信息", cell: (c) => c.getValue() ? <span style={{ color: "var(--color-danger)", fontSize: 12 }}>{c.getValue()}</span> : <span className="cell-muted">—</span> })
 ];
 
+const QUICK_STAGE_PRESETS: Array<{ id: string; label: string; modules: string[]; activeSubs?: boolean; enableNuclei?: boolean }> = [
+  { id: "subs", label: "Passive Subs", modules: ["subs"] },
+  { id: "active_subs", label: "Active Subs", modules: ["subs"], activeSubs: true },
+  { id: "httpx", label: "Web Probe", modules: ["httpx"] },
+  { id: "ports", label: "Port Scan", modules: ["ports"] },
+  { id: "witness", label: "Screenshot", modules: ["witness"] },
+  { id: "nuclei", label: "Vulnerability", modules: ["nuclei"], enableNuclei: true },
+  { id: "full", label: "Full Pipeline", modules: ["subs", "ports", "witness", "nuclei"], enableNuclei: true },
+];
+
 export function JobsPage() {
   const { activeProject } = useWorkspace();
   const rootDomains = activeProject?.rootDomains ?? [];
@@ -45,17 +55,17 @@ export function JobsPage() {
     });
   }, [scoped, filter]);
 
-  const launchScan = async (modules: string[]) => {
+  const launchScan = async (preset: { modules: string[]; activeSubs?: boolean; enableNuclei?: boolean }) => {
     if (!activeProject) return;
     for (const rd of rootDomains) {
       try {
         await endpoints.createJob({
           domain: rd,
           mode: "scan",
-          modules,
-          enableNuclei: modules.includes("nuclei"),
-          activeSubs: modules.includes("dnsx_bruteforce"),
-          dictSize: 0,
+          modules: preset.modules,
+          enableNuclei: preset.enableNuclei ?? preset.modules.includes("nuclei"),
+          activeSubs: Boolean(preset.activeSubs),
+          dictSize: 1500,
           dryRun: false
         });
       } catch { /* ignore */ }
@@ -74,12 +84,12 @@ export function JobsPage() {
 
       <article className="panel">
         <header className="panel-header">
-          <h2>快速启动</h2>
+          <h2>快速启动（阶段）</h2>
           <span className="panel-meta">{rootDomains.join(", ")}</span>
         </header>
         <div className="filter-bar">
-          {["subfinder", "findomain", "bbot", "dictgen", "dnsx_bruteforce", "naabu", "nmap", "httpx", "gowitness", "nuclei"].map((p) => (
-            <button key={p} className="btn btn-sm" onClick={() => launchScan([p])}>{p}</button>
+          {QUICK_STAGE_PRESETS.map((p) => (
+            <button key={p.id} className="btn btn-sm" onClick={() => launchScan(p)}>{p.label}</button>
           ))}
         </div>
       </article>
