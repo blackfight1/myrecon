@@ -137,7 +137,7 @@ export interface ProjectRecord {
   lastScanAt?: string;
 }
 
-/* ── Screenshots ── */
+/* Screenshots */
 export interface ScreenshotDomain {
   rootDomain: string;
   screenshotCount: number;
@@ -157,7 +157,7 @@ export interface ScreenshotItem {
   createdAt?: string;
 }
 
-/* ── Settings ── */
+/* Settings */
 export interface SystemSettings {
   database: {
     host: string;

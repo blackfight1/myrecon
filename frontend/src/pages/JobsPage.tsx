@@ -23,21 +23,15 @@ const columns = [
   col.accessor("errorMessage", { header: "错误信息", cell: (c) => c.getValue() ? <span style={{ color: "var(--color-danger)", fontSize: 12 }}>{c.getValue()}</span> : <span className="cell-muted">—</span> })
 ];
 
-const QUICK_STAGE_PRESETS: Array<{ id: string; label: string; modules: string[]; activeSubs?: boolean; enableNuclei?: boolean }> = [
-  { id: "subs", label: "Passive Subs", modules: ["subs"] },
-  { id: "active_subs", label: "Active Subs", modules: ["subs"], activeSubs: true },
-  { id: "httpx", label: "Web Probe", modules: ["httpx"] },
-  { id: "ports", label: "Port Scan", modules: ["ports"] },
-  { id: "witness", label: "Screenshot", modules: ["witness"] },
-  { id: "nuclei", label: "Vulnerability", modules: ["nuclei"], enableNuclei: true },
-  { id: "full", label: "Full Pipeline", modules: ["subs", "ports", "witness", "nuclei"], enableNuclei: true },
-];
+const QUICK_BASELINE_MODULES = ["subs", "httpx", "ports"];
 
 export function JobsPage() {
   const { activeProject } = useWorkspace();
   const rootDomains = activeProject?.rootDomains ?? [];
   const { data, isLoading, error, refetch } = useJobs();
   const [filter, setFilter] = useState("all");
+  const [enableWitness, setEnableWitness] = useState(false);
+  const [enableNuclei, setEnableNuclei] = useState(false);
 
   const scoped = useMemo(() => {
     return (data ?? []).filter((j) => matchesProjectDomain(j.rootDomain, rootDomains));
@@ -55,16 +49,25 @@ export function JobsPage() {
     });
   }, [scoped, filter]);
 
-  const launchScan = async (preset: { modules: string[]; activeSubs?: boolean; enableNuclei?: boolean }) => {
-    if (!activeProject) return;
+  const previewModules = useMemo(
+    () => [...QUICK_BASELINE_MODULES, ...(enableWitness ? ["witness"] : []), ...(enableNuclei ? ["nuclei"] : [])],
+    [enableWitness, enableNuclei]
+  );
+
+  const launchScan = async () => {
+    if (!activeProject || rootDomains.length === 0) return;
+    const modules = [...QUICK_BASELINE_MODULES];
+    if (enableWitness) modules.push("witness");
+    if (enableNuclei) modules.push("nuclei");
+
     for (const rd of rootDomains) {
       try {
         await endpoints.createJob({
           domain: rd,
           mode: "scan",
-          modules: preset.modules,
-          enableNuclei: preset.enableNuclei ?? preset.modules.includes("nuclei"),
-          activeSubs: Boolean(preset.activeSubs),
+          modules,
+          enableNuclei,
+          activeSubs: false,
           dictSize: 1500,
           dryRun: false
         });
@@ -84,13 +87,21 @@ export function JobsPage() {
 
       <article className="panel">
         <header className="panel-header">
-          <h2>快速启动（阶段）</h2>
+          <h2>快速启动（阶段逻辑）</h2>
           <span className="panel-meta">{rootDomains.join(", ")}</span>
         </header>
         <div className="filter-bar">
-          {QUICK_STAGE_PRESETS.map((p) => (
-            <button key={p.id} className="btn btn-sm" onClick={() => launchScan(p)}>{p.label}</button>
-          ))}
+          <span className="panel-meta">固定流程: subs -&gt; httpx -&gt; ports</span>
+          <button className={`btn btn-sm${enableWitness ? " btn-primary" : ""}`} onClick={() => setEnableWitness((v) => !v)}>
+            Screenshot {enableWitness ? "ON" : "OFF"}
+          </button>
+          <button className={`btn btn-sm${enableNuclei ? " btn-primary" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
+            Vulnerability {enableNuclei ? "ON" : "OFF"}
+          </button>
+          <button className="btn btn-sm" onClick={launchScan} disabled={rootDomains.length === 0}>
+            启动快速扫描
+          </button>
+          <span className="filter-summary">执行: {previewModules.join(" -> ")}</span>
         </div>
       </article>
 

@@ -4,14 +4,7 @@ import { useTheme } from "../../context/ThemeContext";
 import { useWorkspace } from "../../context/WorkspaceContext";
 import { useCreateJob } from "../../hooks/queries";
 
-const STAGE_OPTIONS = [
-  { id: "subs", label: "Passive Subs" },
-  { id: "active_subs", label: "Active Subs" },
-  { id: "httpx", label: "Web Probe" },
-  { id: "ports", label: "Port Scan" },
-  { id: "witness", label: "Screenshot" },
-  { id: "nuclei", label: "Vulnerability" },
-];
+const BASELINE_MODULES = ["subs", "httpx", "ports"];
 
 export function AppShell() {
   const { projects, activeProject, setActiveProject } = useWorkspace();
@@ -20,31 +13,16 @@ export function AppShell() {
 
   const [showScanModal, setShowScanModal] = useState(false);
   const [scanDomain, setScanDomain] = useState("");
-  const [scanStages, setScanStages] = useState<string[]>(["subs", "httpx", "ports"]);
+  const [enableWitness, setEnableWitness] = useState(false);
+  const [enableNuclei, setEnableNuclei] = useState(false);
   const [scanSubmitting, setScanSubmitting] = useState(false);
-
-  const toggleStage = (id: string) => {
-    setScanStages((prev) => prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]);
-  };
 
   const handleQuickScan = async () => {
     const domain = scanDomain.trim();
-    if (!domain || scanStages.length === 0) return;
-
-    const modulesSet = new Set<string>();
-    let activeSubs = false;
-
-    for (const stage of scanStages) {
-      if (stage === "active_subs") {
-        activeSubs = true;
-        modulesSet.add("subs");
-        continue;
-      }
-      modulesSet.add(stage);
-    }
-
-    const moduleOrder = ["subs", "httpx", "ports", "witness", "nuclei"];
-    const modules = moduleOrder.filter((m) => modulesSet.has(m));
+    if (!domain) return;
+    const modules = [...BASELINE_MODULES];
+    if (enableWitness) modules.push("witness");
+    if (enableNuclei) modules.push("nuclei");
 
     setScanSubmitting(true);
     try {
@@ -52,8 +30,8 @@ export function AppShell() {
         domain,
         modules,
         mode: "scan",
-        enableNuclei: modulesSet.has("nuclei"),
-        activeSubs,
+        enableNuclei,
+        activeSubs: false,
         dictSize: 1500,
         dryRun: false,
       });
@@ -65,6 +43,8 @@ export function AppShell() {
       setScanSubmitting(false);
     }
   };
+
+  const previewModules = [...BASELINE_MODULES, ...(enableWitness ? ["witness"] : []), ...(enableNuclei ? ["nuclei"] : [])];
 
   return (
     <div className="app-root">
@@ -140,7 +120,17 @@ export function AppShell() {
             </div>
           </div>
           <div className="topbar-right">
-            <button className="topbar-btn topbar-btn-scan" onClick={() => { setScanDomain(activeProject?.rootDomains?.[0] ?? ""); setShowScanModal(true); }}>✦ 快速扫描</button>
+            <button
+              className="topbar-btn topbar-btn-scan"
+              onClick={() => {
+                setScanDomain(activeProject?.rootDomains?.[0] ?? "");
+                setEnableWitness(false);
+                setEnableNuclei(false);
+                setShowScanModal(true);
+              }}
+            >
+              ✦ 快速扫描
+            </button>
             <div className="topbar-divider" />
             <div className="theme-switcher">
               {themes.map((t) => (
@@ -185,19 +175,30 @@ export function AppShell() {
                 onChange={(e) => setScanDomain(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleQuickScan()}
               />
-              <label className="form-label" style={{ marginTop: 16 }}>选择阶段</label>
+              <label className="form-label" style={{ marginTop: 16 }}>基础流程（固定）</label>
               <div className="module-grid">
-                {STAGE_OPTIONS.map((m) => (
-                  <label key={m.id} className={`module-chip${scanStages.includes(m.id) ? " active" : ""}`}>
-                    <input type="checkbox" checked={scanStages.includes(m.id)} onChange={() => toggleStage(m.id)} style={{ display: "none" }} />
-                    {m.label}
-                  </label>
-                ))}
+                <span className="module-chip active">Passive Subs</span>
+                <span className="module-chip active">Web Probe</span>
+                <span className="module-chip active">Port Scan</span>
+              </div>
+              <label className="form-label" style={{ marginTop: 16 }}>可选阶段</label>
+              <div className="module-grid">
+                <label className={`module-chip${enableWitness ? " active" : ""}`}>
+                  <input type="checkbox" checked={enableWitness} onChange={(e) => setEnableWitness(e.target.checked)} style={{ display: "none" }} />
+                  Screenshot
+                </label>
+                <label className={`module-chip${enableNuclei ? " active" : ""}`}>
+                  <input type="checkbox" checked={enableNuclei} onChange={(e) => setEnableNuclei(e.target.checked)} style={{ display: "none" }} />
+                  Vulnerability
+                </label>
+              </div>
+              <div className="panel-meta" style={{ marginTop: 12 }}>
+                执行流程：{previewModules.join(" -> ")}
               </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowScanModal(false)}>取消</button>
-              <button className="btn btn-primary" onClick={handleQuickScan} disabled={scanSubmitting || !scanDomain.trim() || scanStages.length === 0}>
+              <button className="btn btn-primary" onClick={handleQuickScan} disabled={scanSubmitting || !scanDomain.trim()}>
                 {scanSubmitting ? "提交中..." : "开始扫描"}
               </button>
             </div>
