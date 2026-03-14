@@ -58,6 +58,61 @@ function seedProjects(): ProjectRecord[] {
   ];
 }
 
+function toSafeString(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  return "";
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean);
+}
+
+function normalizeStoredProject(input: unknown, index: number): ProjectRecord | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const raw = input as Record<string, unknown>;
+  const fallbackName = `Project ${index + 1}`;
+  const ts = nowISO();
+
+  const rawDomains = Array.isArray(raw.rootDomains)
+    ? toStringArray(raw.rootDomains)
+    : Array.isArray(raw.root_domains)
+      ? toStringArray(raw.root_domains)
+      : parseDomainList(toSafeString(raw.rootDomainsRaw));
+
+  const rootDomains = parseDomainList(rawDomains.join(","));
+  const tags = toStringArray(raw.tags);
+
+  const id = toSafeString(raw.id) || `project_migrated_${index}_${Date.now().toString(36)}`;
+  const name = toSafeString(raw.name) || fallbackName;
+  const description = toSafeString(raw.description) || undefined;
+  const createdAt = toSafeString(raw.createdAt) || ts;
+  const updatedAt = toSafeString(raw.updatedAt) || ts;
+  const lastScanAt = toSafeString(raw.lastScanAt) || undefined;
+  const active = raw.active === true;
+
+  return {
+    id,
+    name,
+    description,
+    rootDomains,
+    tags,
+    active,
+    createdAt,
+    updatedAt,
+    lastScanAt
+  };
+}
+
 function loadProjects(): ProjectRecord[] {
   if (typeof window === "undefined") {
     return seedProjects();
@@ -69,11 +124,24 @@ function loadProjects(): ProjectRecord[] {
   }
 
   try {
-    const parsed = JSON.parse(raw) as ProjectRecord[];
+    const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed) || parsed.length === 0) {
       return seedProjects();
     }
-    return parsed;
+
+    const normalized = parsed
+      .map((item, idx) => normalizeStoredProject(item, idx))
+      .filter((item): item is ProjectRecord => item !== null);
+
+    if (normalized.length === 0) {
+      return seedProjects();
+    }
+
+    if (!normalized.some((item) => item.active)) {
+      normalized[0] = { ...normalized[0], active: true };
+    }
+
+    return normalized;
   } catch {
     return seedProjects();
   }

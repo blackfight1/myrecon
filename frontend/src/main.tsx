@@ -5,6 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { ThemeProvider } from "./context/ThemeContext";
 import { WorkspaceProvider } from "./context/WorkspaceContext";
+import { AppErrorBoundary } from "./components/ui/AppErrorBoundary";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -21,9 +22,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <WorkspaceProvider>
-          <BrowserRouter>
-            <App />
-          </BrowserRouter>
+          <AppErrorBoundary>
+            <BrowserRouter>
+              <App />
+            </BrowserRouter>
+          </AppErrorBoundary>
         </WorkspaceProvider>
       </QueryClientProvider>
     </ThemeProvider>
