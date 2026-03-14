@@ -69,7 +69,7 @@ export function DashboardPage() {
       const s = String(j.status).toLowerCase();
       return s.includes("running") || s.includes("pending");
     }).length
-  , [scoped.jobs]);
+    , [scoped.jobs]);
 
   // Prefer backend summary when available.
   const runningJobs = summary?.jobsRunning ?? runningJobsFallback;
@@ -150,8 +150,11 @@ export function DashboardPage() {
     return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
   };
 
-  const formatDuration = (sec?: number) => {
-    if (!sec || sec <= 0) return "—";
+  const formatDuration = (sec?: number, status?: string) => {
+    const st = (status ?? "").toLowerCase();
+    const finished = st.includes("success") || st.includes("done") || st.includes("ok") || st.includes("completed") || st.includes("fail") || st.includes("error");
+    if (sec === undefined || sec === null) return finished ? "< 1s" : "—";
+    if (sec <= 0) return finished ? "< 1s" : "—";
     if (sec < 60) return `${sec}s`;
     if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
     return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
@@ -175,7 +178,18 @@ export function DashboardPage() {
 
   return (
     <section className="page">
-      {loading && <div className="empty-state">加载中...</div>}
+      {loading && (
+        <div className="loading-skeleton">
+          <div className="stats-row">
+            {[1, 2, 3, 4].map(i => <div key={i} className="skeleton-card" />)}
+          </div>
+          <div className="two-col">
+            <div className="skeleton-panel" style={{ height: 320 }} />
+            <div className="skeleton-panel" style={{ height: 320 }} />
+          </div>
+          <div className="skeleton-panel" style={{ height: 200 }} />
+        </div>
+      )}
 
       {/* ── 4 Stat Cards ── */}
       <div className="stats-row">
@@ -269,7 +283,7 @@ export function DashboardPage() {
                         </div>
                       </td>
                       <td className="cell-muted">{formatTime(j.startedAt)}</td>
-                      <td className="cell-muted">{formatDuration(j.durationSec)}</td>
+                      <td className="cell-muted">{formatDuration(j.durationSec, j.status)}</td>
                       <td>
                         <span className={`status-badge ${cls}`}>
                           <span className="status-indicator" />

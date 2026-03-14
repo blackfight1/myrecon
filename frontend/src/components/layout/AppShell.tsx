@@ -1,10 +1,50 @@
-﻿import { NavLink, Outlet } from "react-router-dom";
+﻿import { useState } from "react";
+import { NavLink, Outlet } from "react-router-dom";
 import { useTheme } from "../../context/ThemeContext";
 import { useWorkspace } from "../../context/WorkspaceContext";
+import { useCreateJob } from "../../hooks/queries";
+
+const ALL_MODULES = [
+  { id: "subfinder", label: "Subfinder" },
+  { id: "findomain", label: "Findomain" },
+  { id: "bbot", label: "BBOT" },
+  { id: "dictgen", label: "Dictgen" },
+  { id: "dnsx_bruteforce", label: "DNSX暴破" },
+  { id: "naabu", label: "Naabu" },
+  { id: "nmap", label: "Nmap" },
+  { id: "httpx", label: "HTTPX" },
+  { id: "nuclei", label: "Nuclei" },
+  { id: "gowitness", label: "Gowitness" },
+];
 
 export function AppShell() {
   const { projects, activeProject, setActiveProject } = useWorkspace();
   const { theme, themes, setTheme } = useTheme();
+  const createJob = useCreateJob();
+
+  const [showScanModal, setShowScanModal] = useState(false);
+  const [scanDomain, setScanDomain] = useState("");
+  const [scanModules, setScanModules] = useState<string[]>(["subfinder", "findomain", "httpx"]);
+  const [scanSubmitting, setScanSubmitting] = useState(false);
+
+  const toggleModule = (id: string) => {
+    setScanModules((prev) => prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]);
+  };
+
+  const handleQuickScan = async () => {
+    const domain = scanDomain.trim();
+    if (!domain || scanModules.length === 0) return;
+    setScanSubmitting(true);
+    try {
+      await createJob.mutateAsync({ domain, modules: scanModules, mode: "scan" });
+      setShowScanModal(false);
+      setScanDomain("");
+    } catch (e) {
+      console.error("Scan failed:", e);
+    } finally {
+      setScanSubmitting(false);
+    }
+  };
 
   return (
     <div className="app-root">
@@ -80,7 +120,7 @@ export function AppShell() {
             </div>
           </div>
           <div className="topbar-right">
-            <button className="topbar-btn topbar-btn-scan">⚡ 快速扫描</button>
+            <button className="topbar-btn topbar-btn-scan" onClick={() => { setScanDomain(activeProject?.rootDomains?.[0] ?? ""); setShowScanModal(true); }}>✦ 快速扫描</button>
             <div className="topbar-divider" />
             <div className="theme-switcher">
               {themes.map((t) => (
@@ -106,6 +146,44 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+
+      {/* ── Quick Scan Modal ── */}
+      {showScanModal && (
+        <div className="modal-overlay" onClick={() => setShowScanModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>✦ 快速扫描</h3>
+              <button className="modal-close" onClick={() => setShowScanModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <label className="form-label">目标域名</label>
+              <input
+                className="form-input"
+                type="text"
+                placeholder="example.com"
+                value={scanDomain}
+                onChange={(e) => setScanDomain(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleQuickScan()}
+              />
+              <label className="form-label" style={{ marginTop: 16 }}>选择模块</label>
+              <div className="module-grid">
+                {ALL_MODULES.map((m) => (
+                  <label key={m.id} className={`module-chip${scanModules.includes(m.id) ? " active" : ""}`}>
+                    <input type="checkbox" checked={scanModules.includes(m.id)} onChange={() => toggleModule(m.id)} style={{ display: "none" }} />
+                    {m.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setShowScanModal(false)}>取消</button>
+              <button className="btn btn-primary" onClick={handleQuickScan} disabled={scanSubmitting || !scanDomain.trim() || scanModules.length === 0}>
+                {scanSubmitting ? "提交中..." : "开始扫描"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

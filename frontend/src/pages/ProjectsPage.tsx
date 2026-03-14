@@ -3,13 +3,41 @@ import { useWorkspace } from "../context/WorkspaceContext";
 import { formatDate } from "../lib/format";
 
 export function ProjectsPage() {
-  const { projects, activeProject, setActiveProject, createProject, deleteProject } = useWorkspace();
+  const { projects, activeProject, setActiveProject, createProject, updateProject, deleteProject } = useWorkspace();
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [rootDomainsRaw, setRootDomainsRaw] = useState("");
   const [tagsRaw, setTagsRaw] = useState("");
+
+  // 编辑状态
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [editDomains, setEditDomains] = useState("");
+  const [editTags, setEditTags] = useState("");
+
+  const startEdit = (p: typeof projects[0]) => {
+    setEditingId(p.id);
+    setEditName(p.name);
+    setEditDesc(p.description ?? "");
+    setEditDomains(p.rootDomains.join(", "));
+    setEditTags(p.tags.join(", "));
+  };
+
+  const saveEdit = () => {
+    if (!editingId || !editName.trim() || !editDomains.trim()) return;
+    updateProject(editingId, {
+      name: editName.trim(),
+      description: editDesc.trim() || undefined,
+      rootDomainsRaw: editDomains.trim(),
+      tagsRaw: editTags.trim() || undefined,
+    });
+    setEditingId(null);
+  };
+
+  const cancelEdit = () => setEditingId(null);
 
   const handleCreate = () => {
     if (!name.trim() || !rootDomainsRaw.trim()) return;
@@ -84,49 +112,79 @@ export function ProjectsPage() {
             const isActive = activeProject?.id === p.id;
             return (
               <div key={p.id} className={`project-card${isActive ? " project-card-active" : ""}`}>
-                <div className="project-card-header">
-                  <h3 className="project-card-title">{p.name}</h3>
-                  <div className="project-card-actions">
-                    <button
-                      className={`btn btn-sm${isActive ? " btn-active" : ""}`}
-                      onClick={() => setActiveProject(p.id)}
-                    >
-                      {isActive ? "✓ 已激活" : "设为活跃"}
-                    </button>
-                    {projects.length > 1 && (
-                      <button className="btn btn-sm btn-danger" onClick={() => deleteProject(p.id)}>删除</button>
-                    )}
-                  </div>
-                </div>
-
-                {p.description && <p className="project-card-desc">{p.description}</p>}
-
-                <div className="project-card-meta">
-                  <div className="project-card-field">
-                    <span className="project-card-label">根域名</span>
-                    <div className="project-card-badges">
-                      {p.rootDomains.map((d) => (
-                        <span key={d} className="badge badge-info">{d}</span>
-                      ))}
+                {editingId === p.id ? (
+                  /* 编辑模式 */
+                  <div className="form-section" style={{ margin: 0, padding: 0, border: "none" }}>
+                    <div className="form-group">
+                      <label className="form-label">项目名称</label>
+                      <input className="form-input" value={editName} onChange={(e) => setEditName(e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">描述</label>
+                      <input className="form-input" value={editDesc} onChange={(e) => setEditDesc(e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">根域名（逗号分隔）</label>
+                      <textarea className="form-input form-textarea" value={editDomains} onChange={(e) => setEditDomains(e.target.value)} rows={2} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">标签（逗号分隔）</label>
+                      <input className="form-input" value={editTags} onChange={(e) => setEditTags(e.target.value)} />
+                    </div>
+                    <div className="form-actions">
+                      <button className="btn btn-primary btn-sm" onClick={saveEdit} disabled={!editName.trim() || !editDomains.trim()}>保存</button>
+                      <button className="btn btn-sm" onClick={cancelEdit}>取消</button>
                     </div>
                   </div>
-
-                  {p.tags.length > 0 && (
-                    <div className="project-card-field">
-                      <span className="project-card-label">标签</span>
-                      <div className="project-card-badges">
-                        {p.tags.map((t) => (
-                          <span key={t} className="badge">{t}</span>
-                        ))}
+                ) : (
+                  /* 展示模式 */
+                  <>
+                    <div className="project-card-header">
+                      <h3 className="project-card-title">{p.name}</h3>
+                      <div className="project-card-actions">
+                        <button className="btn btn-sm" onClick={() => startEdit(p)}>编辑</button>
+                        <button
+                          className={`btn btn-sm${isActive ? " btn-active" : ""}`}
+                          onClick={() => setActiveProject(p.id)}
+                        >
+                          {isActive ? "✓ 已激活" : "设为活跃"}
+                        </button>
+                        {projects.length > 1 && (
+                          <button className="btn btn-sm btn-danger" onClick={() => { if (confirm(`确定要删除项目"${p.name}"吗？`)) deleteProject(p.id); }}>删除</button>
+                        )}
                       </div>
                     </div>
-                  )}
 
-                  <div className="project-card-dates">
-                    <span>创建时间：{formatDate(p.createdAt)}</span>
-                    {p.lastScanAt && <span>上次扫描：{formatDate(p.lastScanAt)}</span>}
-                  </div>
-                </div>
+                    {p.description && <p className="project-card-desc">{p.description}</p>}
+
+                    <div className="project-card-meta">
+                      <div className="project-card-field">
+                        <span className="project-card-label">根域名</span>
+                        <div className="project-card-badges">
+                          {p.rootDomains.map((d) => (
+                            <span key={d} className="badge badge-info">{d}</span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {p.tags.length > 0 && (
+                        <div className="project-card-field">
+                          <span className="project-card-label">标签</span>
+                          <div className="project-card-badges">
+                            {p.tags.map((t) => (
+                              <span key={t} className="badge">{t}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="project-card-dates">
+                        <span>创建时间：{formatDate(p.createdAt)}</span>
+                        {p.lastScanAt && <span>上次扫描：{formatDate(p.lastScanAt)}</span>}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             );
           })}
