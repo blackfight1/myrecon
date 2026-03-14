@@ -43,12 +43,17 @@ func (j *JSONB) Scan(value interface{}) error {
 // Asset asset model.
 type Asset struct {
 	ID           uint           `gorm:"primarykey" json:"id"`
-	Domain       string         `gorm:"uniqueIndex;not null" json:"domain"`
+	ProjectID    string         `gorm:"index:idx_assets_project_domain,unique;not null;default:'default'" json:"project_id"`
+	RootDomain   string         `gorm:"index" json:"root_domain"`
+	Domain       string         `gorm:"index:idx_assets_project_domain,unique;not null" json:"domain"`
 	URL          string         `json:"url"`
 	IP           string         `json:"ip"`
 	StatusCode   int            `json:"status_code"`
 	Title        string         `json:"title"`
 	Technologies JSONB          `gorm:"type:jsonb" json:"technologies"`
+	SourceJobID  string         `gorm:"index" json:"source_job_id"`
+	SourceModule string         `gorm:"index" json:"source_module"`
+	FirstSeenAt  time.Time      `json:"first_seen_at"`
 	LastSeen     time.Time      `json:"last_seen"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
@@ -63,19 +68,24 @@ func (Asset) TableName() string {
 
 // Port port model.
 type Port struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	AssetID   uint           `gorm:"index;not null" json:"asset_id"`
-	Domain    string         `gorm:"index" json:"domain"`
-	IP        string         `gorm:"not null" json:"ip"`
-	Port      int            `gorm:"not null" json:"port"`
-	Protocol  string         `gorm:"default:tcp" json:"protocol"`
-	Service   string         `json:"service"`
-	Version   string         `json:"version"`
-	Banner    string         `json:"banner"`
-	LastSeen  time.Time      `json:"last_seen"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	ID           uint           `gorm:"primarykey" json:"id"`
+	ProjectID    string         `gorm:"index:idx_ports_project_ip_port_proto_domain,priority:1;not null;default:'default'" json:"project_id"`
+	RootDomain   string         `gorm:"index" json:"root_domain"`
+	AssetID      uint           `gorm:"index;not null" json:"asset_id"`
+	Domain       string         `gorm:"index:idx_ports_project_ip_port_proto_domain,priority:5" json:"domain"`
+	IP           string         `gorm:"index:idx_ports_project_ip_port_proto_domain,priority:2;not null" json:"ip"`
+	Port         int            `gorm:"index:idx_ports_project_ip_port_proto_domain,priority:3;not null" json:"port"`
+	Protocol     string         `gorm:"index:idx_ports_project_ip_port_proto_domain,priority:4;default:tcp" json:"protocol"`
+	Service      string         `json:"service"`
+	Version      string         `json:"version"`
+	Banner       string         `json:"banner"`
+	SourceJobID  string         `gorm:"index" json:"source_job_id"`
+	SourceModule string         `gorm:"index" json:"source_module"`
+	FirstSeenAt  time.Time      `json:"first_seen_at"`
+	LastSeen     time.Time      `json:"last_seen"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // TableName table name.
@@ -85,28 +95,39 @@ func (Port) TableName() string {
 
 // Vulnerability vulnerability finding model.
 type Vulnerability struct {
-	ID           uint           `gorm:"primarykey" json:"id"`
-	AssetID      *uint          `gorm:"index" json:"asset_id"`
-	RootDomain   string         `gorm:"index" json:"root_domain"`
-	Domain       string         `gorm:"index" json:"domain"`
-	Host         string         `gorm:"index" json:"host"`
-	URL          string         `gorm:"type:text" json:"url"`
-	IP           string         `json:"ip"`
-	TemplateID   string         `gorm:"index;not null" json:"template_id"`
-	TemplateName string         `json:"template_name"`
-	Severity     string         `gorm:"index" json:"severity"`
-	CVE          string         `gorm:"index" json:"cve"`
-	MatcherName  string         `json:"matcher_name"`
-	Description  string         `gorm:"type:text" json:"description"`
-	Reference    string         `gorm:"type:text" json:"reference"`
-	TemplateURL  string         `json:"template_url"`
-	MatchedAt    string         `gorm:"type:text;not null" json:"matched_at"`
-	Fingerprint  string         `gorm:"uniqueIndex;not null" json:"fingerprint"`
-	Raw          JSONB          `gorm:"type:jsonb" json:"raw"`
-	LastSeen     time.Time      `json:"last_seen"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+	ID               uint           `gorm:"primarykey" json:"id"`
+	ProjectID        string         `gorm:"index:idx_vulns_project_fingerprint,priority:1;index;not null;default:'default'" json:"project_id"`
+	AssetID          *uint          `gorm:"index" json:"asset_id"`
+	RootDomain       string         `gorm:"index" json:"root_domain"`
+	Domain           string         `gorm:"index" json:"domain"`
+	Host             string         `gorm:"index" json:"host"`
+	URL              string         `gorm:"type:text" json:"url"`
+	IP               string         `json:"ip"`
+	TemplateID       string         `gorm:"index;not null" json:"template_id"`
+	TemplateName     string         `json:"template_name"`
+	Severity         string         `gorm:"index" json:"severity"`
+	CVE              string         `gorm:"index" json:"cve"`
+	MatcherName      string         `json:"matcher_name"`
+	Description      string         `gorm:"type:text" json:"description"`
+	Reference        string         `gorm:"type:text" json:"reference"`
+	TemplateURL      string         `json:"template_url"`
+	MatchedAt        string         `gorm:"type:text;not null" json:"matched_at"`
+	Fingerprint      string         `gorm:"index:idx_vulns_project_fingerprint,priority:2,unique;not null" json:"fingerprint"`
+	Status           string         `gorm:"index;not null;default:open" json:"status"`
+	Assignee         string         `gorm:"index" json:"assignee"`
+	TicketRef        string         `gorm:"index" json:"ticket_ref"`
+	DueAt            *time.Time     `json:"due_at"`
+	VerifiedAt       *time.Time     `json:"verified_at"`
+	FixedAt          *time.Time     `json:"fixed_at"`
+	ReopenCount      int            `json:"reopen_count"`
+	LastTransitionAt *time.Time     `json:"last_transition_at"`
+	SourceJobID      string         `gorm:"index" json:"source_job_id"`
+	Raw              JSONB          `gorm:"type:jsonb" json:"raw"`
+	FirstSeenAt      time.Time      `json:"first_seen_at"`
+	LastSeen         time.Time      `json:"last_seen"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // TableName table name.
@@ -117,6 +138,7 @@ func (Vulnerability) TableName() string {
 // MonitorRun stores one monitoring execution record.
 type MonitorRun struct {
 	ID            uint           `gorm:"primarykey" json:"id"`
+	ProjectID     string         `gorm:"index" json:"project_id"`
 	RootDomain    string         `gorm:"index;not null" json:"root_domain"`
 	Status        string         `gorm:"index;not null" json:"status"`
 	StartedAt     time.Time      `json:"started_at"`
@@ -141,6 +163,7 @@ func (MonitorRun) TableName() string {
 // AssetChange stores live subdomain/web fingerprint changes.
 type AssetChange struct {
 	ID           uint           `gorm:"primarykey" json:"id"`
+	ProjectID    string         `gorm:"index" json:"project_id"`
 	RunID        uint           `gorm:"index;not null" json:"run_id"`
 	RootDomain   string         `gorm:"index;not null" json:"root_domain"`
 	ChangeType   string         `gorm:"index;not null" json:"change_type"`
@@ -162,6 +185,7 @@ func (AssetChange) TableName() string {
 // PortChange stores port delta events.
 type PortChange struct {
 	ID         uint           `gorm:"primarykey" json:"id"`
+	ProjectID  string         `gorm:"index" json:"project_id"`
 	RunID      uint           `gorm:"index;not null" json:"run_id"`
 	RootDomain string         `gorm:"index;not null" json:"root_domain"`
 	ChangeType string         `gorm:"index;not null" json:"change_type"`
@@ -184,7 +208,9 @@ func (PortChange) TableName() string {
 // MonitorTarget stores monitor target baseline state.
 type MonitorTarget struct {
 	ID           uint           `gorm:"primarykey" json:"id"`
-	RootDomain   string         `gorm:"uniqueIndex;not null" json:"root_domain"`
+	ProjectID    string         `gorm:"index:idx_monitor_target_project_root,unique;not null;default:'default'" json:"project_id"`
+	Owner        string         `gorm:"index" json:"owner"`
+	RootDomain   string         `gorm:"index:idx_monitor_target_project_root,unique;not null" json:"root_domain"`
 	Enabled      bool           `gorm:"default:true;index" json:"enabled"`
 	BaselineDone bool           `gorm:"default:false" json:"baseline_done"`
 	LastRunAt    *time.Time     `json:"last_run_at"`
@@ -202,6 +228,7 @@ func (MonitorTarget) TableName() string {
 type ScanJob struct {
 	ID           uint           `gorm:"primarykey" json:"id"`
 	JobID        string         `gorm:"uniqueIndex;not null" json:"job_id"` // e.g. "scan-1234567890"
+	ProjectID    string         `gorm:"index;not null;default:'default'" json:"project_id"`
 	RootDomain   string         `gorm:"index;not null" json:"root_domain"`
 	Mode         string         `gorm:"not null" json:"mode"`         // scan or monitor
 	Modules      string         `gorm:"type:text" json:"modules"`     // comma-separated
@@ -226,6 +253,7 @@ func (ScanJob) TableName() string {
 // MonitorTask stores scheduled monitor jobs.
 type MonitorTask struct {
 	ID          uint           `gorm:"primarykey" json:"id"`
+	ProjectID   string         `gorm:"index;not null;default:'default'" json:"project_id"`
 	RootDomain  string         `gorm:"index;not null" json:"root_domain"`
 	Status      string         `gorm:"index;not null" json:"status"` // pending/running/success/failed/canceled
 	RunAt       time.Time      `gorm:"index;not null" json:"run_at"`
@@ -243,4 +271,145 @@ type MonitorTask struct {
 // TableName table name.
 func (MonitorTask) TableName() string {
 	return "monitor_tasks"
+}
+
+// Project stores project metadata and ownership.
+type Project struct {
+	ID          string         `gorm:"primaryKey;size:64" json:"id"`
+	Name        string         `gorm:"index;not null" json:"name"`
+	Description string         `gorm:"type:text" json:"description"`
+	Owner       string         `gorm:"index" json:"owner"`
+	Tags        JSONB          `gorm:"type:jsonb" json:"tags"`
+	Archived    bool           `gorm:"index;default:false" json:"archived"`
+	LastScanAt  *time.Time     `json:"last_scan_at"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	Scopes      []ProjectScope `gorm:"foreignKey:ProjectID" json:"scopes"`
+}
+
+func (Project) TableName() string {
+	return "projects"
+}
+
+// ProjectScope stores root-domain scope entries for projects.
+type ProjectScope struct {
+	ID         uint           `gorm:"primarykey" json:"id"`
+	ProjectID  string         `gorm:"index:idx_project_scope_project_domain,unique;not null" json:"project_id"`
+	RootDomain string         `gorm:"index:idx_project_scope_project_domain,unique;not null" json:"root_domain"`
+	Enabled    bool           `gorm:"index;default:true" json:"enabled"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (ProjectScope) TableName() string {
+	return "project_scopes"
+}
+
+// VulnEvent stores vulnerability lifecycle transitions.
+type VulnEvent struct {
+	ID         uint           `gorm:"primarykey" json:"id"`
+	ProjectID  string         `gorm:"index;not null" json:"project_id"`
+	VulnID     uint           `gorm:"index;not null" json:"vuln_id"`
+	Action     string         `gorm:"index;not null" json:"action"`
+	FromStatus string         `gorm:"index" json:"from_status"`
+	ToStatus   string         `gorm:"index" json:"to_status"`
+	Actor      string         `gorm:"index" json:"actor"`
+	Reason     string         `gorm:"type:text" json:"reason"`
+	Meta       JSONB          `gorm:"type:jsonb" json:"meta"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (VulnEvent) TableName() string {
+	return "vuln_events"
+}
+
+// AssetEdge stores asset relationship edges for analysis.
+type AssetEdge struct {
+	ID         uint           `gorm:"primarykey" json:"id"`
+	ProjectID  string         `gorm:"index;not null" json:"project_id"`
+	RootDomain string         `gorm:"index" json:"root_domain"`
+	SrcType    string         `gorm:"index;not null" json:"src_type"`
+	SrcID      string         `gorm:"index;not null" json:"src_id"`
+	DstType    string         `gorm:"index;not null" json:"dst_type"`
+	DstID      string         `gorm:"index;not null" json:"dst_id"`
+	Relation   string         `gorm:"index;not null" json:"relation"`
+	Confidence int            `json:"confidence"`
+	Evidence   string         `gorm:"type:text" json:"evidence"`
+	JobID      string         `gorm:"index" json:"job_id"`
+	FirstSeen  time.Time      `json:"first_seen"`
+	LastSeen   time.Time      `json:"last_seen"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (AssetEdge) TableName() string {
+	return "asset_edges"
+}
+
+// ScanStage stores stage execution status for each scan job.
+type ScanStage struct {
+	ID          uint           `gorm:"primarykey" json:"id"`
+	ProjectID   string         `gorm:"index;not null" json:"project_id"`
+	JobID       string         `gorm:"index;not null" json:"job_id"`
+	Stage       string         `gorm:"index;not null" json:"stage"`
+	Module      string         `gorm:"index" json:"module"`
+	Status      string         `gorm:"index;not null" json:"status"`
+	InputCount  int            `json:"input_count"`
+	OutputCount int            `json:"output_count"`
+	Error       string         `gorm:"type:text" json:"error"`
+	StartedAt   *time.Time     `json:"started_at"`
+	FinishedAt  *time.Time     `json:"finished_at"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (ScanStage) TableName() string {
+	return "scan_stages"
+}
+
+// ScanArtifact stores references to generated raw outputs.
+type ScanArtifact struct {
+	ID           uint           `gorm:"primarykey" json:"id"`
+	ProjectID    string         `gorm:"index;not null" json:"project_id"`
+	JobID        string         `gorm:"index;not null" json:"job_id"`
+	Stage        string         `gorm:"index" json:"stage"`
+	Module       string         `gorm:"index" json:"module"`
+	ArtifactType string         `gorm:"index;not null" json:"artifact_type"`
+	Path         string         `gorm:"type:text" json:"path"`
+	SHA256       string         `gorm:"index" json:"sha256"`
+	Size         int64          `json:"size"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (ScanArtifact) TableName() string {
+	return "scan_artifacts"
+}
+
+// AuditLog stores critical system actions for traceability.
+type AuditLog struct {
+	ID         uint           `gorm:"primarykey" json:"id"`
+	ProjectID  string         `gorm:"index" json:"project_id"`
+	Actor      string         `gorm:"index;not null" json:"actor"`
+	Action     string         `gorm:"index;not null" json:"action"`
+	TargetType string         `gorm:"index" json:"target_type"`
+	TargetID   string         `gorm:"index" json:"target_id"`
+	IP         string         `json:"ip"`
+	UserAgent  string         `gorm:"type:text" json:"user_agent"`
+	Detail     string         `gorm:"type:text" json:"detail"`
+	Meta       JSONB          `gorm:"type:jsonb" json:"meta"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (AuditLog) TableName() string {
+	return "audit_logs"
 }

@@ -1,54 +1,14 @@
-﻿import { useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTheme } from "../../context/ThemeContext";
 import { useWorkspace } from "../../context/WorkspaceContext";
-import { useCreateJob } from "../../hooks/queries";
-
-const BASELINE_MODULES = ["subs", "httpx", "ports"];
 
 export function AppShell() {
-  const { projects, activeProject, setActiveProject } = useWorkspace();
+  const { projects, activeProject, setActiveProject, loading } = useWorkspace();
   const { theme, themes, setTheme } = useTheme();
-  const createJob = useCreateJob();
-
-  const [showScanModal, setShowScanModal] = useState(false);
-  const [scanDomain, setScanDomain] = useState("");
-  const [enableWitness, setEnableWitness] = useState(false);
-  const [enableNuclei, setEnableNuclei] = useState(false);
-  const [scanSubmitting, setScanSubmitting] = useState(false);
-
-  const handleQuickScan = async () => {
-    const domain = scanDomain.trim();
-    if (!domain) return;
-    const modules = [...BASELINE_MODULES];
-    if (enableWitness) modules.push("witness");
-    if (enableNuclei) modules.push("nuclei");
-
-    setScanSubmitting(true);
-    try {
-      await createJob.mutateAsync({
-        domain,
-        modules,
-        mode: "scan",
-        enableNuclei,
-        activeSubs: false,
-        dictSize: 1500,
-        dryRun: false,
-      });
-      setShowScanModal(false);
-      setScanDomain("");
-    } catch (e) {
-      console.error("Scan failed:", e);
-    } finally {
-      setScanSubmitting(false);
-    }
-  };
-
-  const previewModules = [...BASELINE_MODULES, ...(enableWitness ? ["witness"] : []), ...(enableNuclei ? ["nuclei"] : [])];
+  const navigate = useNavigate();
 
   return (
     <div className="app-root">
-      {/* ── Sidebar ── */}
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="brand-icon">MR</div>
@@ -74,6 +34,9 @@ export function AppShell() {
           </NavLink>
 
           <div className="nav-section-title">扫描</div>
+          <NavLink to="/quick-scan" className={({ isActive }) => `nav-link nav-link-quick${isActive ? " active" : ""}`}>
+            <span className="nav-icon">✦</span> 快速扫描
+          </NavLink>
           <NavLink to="/jobs" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             <span className="nav-icon">▷</span> 扫描任务
           </NavLink>
@@ -101,15 +64,14 @@ export function AppShell() {
         </div>
       </aside>
 
-      {/* ── Main Area ── */}
       <div className="main-area">
-        {/* ── Topbar ── */}
         <header className="topbar">
           <div className="topbar-left">
             <div className="topbar-project-select">
               <select
                 value={activeProject?.id ?? ""}
                 onChange={(e) => setActiveProject(e.target.value)}
+                disabled={loading || projects.length === 0}
               >
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -120,15 +82,7 @@ export function AppShell() {
             </div>
           </div>
           <div className="topbar-right">
-            <button
-              className="topbar-btn topbar-btn-scan"
-              onClick={() => {
-                setScanDomain(activeProject?.rootDomains?.[0] ?? "");
-                setEnableWitness(false);
-                setEnableNuclei(false);
-                setShowScanModal(true);
-              }}
-            >
+            <button className="topbar-btn topbar-btn-neon" onClick={() => navigate("/quick-scan")}>
               ✦ 快速扫描
             </button>
             <div className="topbar-divider" />
@@ -151,60 +105,10 @@ export function AppShell() {
           </div>
         </header>
 
-        {/* ── Content ── */}
         <main className="content">
           <Outlet />
         </main>
       </div>
-
-      {/* ── Quick Scan Modal ── */}
-      {showScanModal && (
-        <div className="modal-overlay" onClick={() => setShowScanModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>✦ 快速扫描</h3>
-              <button className="modal-close" onClick={() => setShowScanModal(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <label className="form-label">目标域名</label>
-              <input
-                className="form-input"
-                type="text"
-                placeholder="example.com"
-                value={scanDomain}
-                onChange={(e) => setScanDomain(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleQuickScan()}
-              />
-              <label className="form-label" style={{ marginTop: 16 }}>基础流程（固定）</label>
-              <div className="module-grid">
-                <span className="module-chip active">Passive Subs</span>
-                <span className="module-chip active">Web Probe</span>
-                <span className="module-chip active">Port Scan</span>
-              </div>
-              <label className="form-label" style={{ marginTop: 16 }}>可选阶段</label>
-              <div className="module-grid">
-                <label className={`module-chip${enableWitness ? " active" : ""}`}>
-                  <input type="checkbox" checked={enableWitness} onChange={(e) => setEnableWitness(e.target.checked)} style={{ display: "none" }} />
-                  Screenshot
-                </label>
-                <label className={`module-chip${enableNuclei ? " active" : ""}`}>
-                  <input type="checkbox" checked={enableNuclei} onChange={(e) => setEnableNuclei(e.target.checked)} style={{ display: "none" }} />
-                  Vulnerability
-                </label>
-              </div>
-              <div className="panel-meta" style={{ marginTop: 12 }}>
-                执行流程：{previewModules.join(" -> ")}
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setShowScanModal(false)}>取消</button>
-              <button className="btn btn-primary" onClick={handleQuickScan} disabled={scanSubmitting || !scanDomain.trim()}>
-                {scanSubmitting ? "提交中..." : "开始扫描"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

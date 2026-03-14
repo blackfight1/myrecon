@@ -2,132 +2,25 @@
 import { useMemo } from "react";
 import { StatCard } from "../components/ui/StatCard";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useJobs, useAssets, usePorts, useVulns } from "../hooks/queries";
-import { matchesProjectDomain } from "../lib/projectScope";
-
-function hostnameFromUrl(input?: string): string | undefined {
-  if (!input) return undefined;
-  try {
-    return new URL(input).hostname;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseTime(input?: string): number {
-  if (!input) return 0;
-  const d = new Date(input);
-  if (Number.isNaN(d.getTime())) return 0;
-  return d.getTime();
-}
+import { useDashboard, useJobs, useMonitorTargets } from "../hooks/queries";
 
 export function DashboardPage() {
   const { activeProject } = useWorkspace();
-  const rootDomains = activeProject?.rootDomains ?? [];
+  const projectId = activeProject?.id;
 
-  const jobsQ = useJobs();
-  const assetsQ = useAssets();
-  const portsQ = usePorts();
-  const vulnsQ = useVulns();
+  const dashQ = useDashboard(projectId);
+  const jobsQ = useJobs(projectId);
+  const monTargetsQ = useMonitorTargets(projectId);
 
-  const scoped = useMemo(() => {
-    const jobs = (jobsQ.data ?? []).filter((j) => matchesProjectDomain(j.rootDomain, rootDomains));
-    const assets = (assetsQ.data ?? []).filter((a) =>
-      matchesProjectDomain(a.domain, rootDomains) || matchesProjectDomain(hostnameFromUrl(a.url), rootDomains)
-    );
-    const assetIps = new Set(assets.map((a) => a.ip).filter(Boolean));
-    const ports = (portsQ.data ?? []).filter((p) =>
-      matchesProjectDomain(p.domain, rootDomains) || (p.ip && assetIps.has(p.ip))
-    );
-    const vulns = (vulnsQ.data ?? []).filter((v) =>
-      matchesProjectDomain(v.rootDomain, rootDomains) ||
-      matchesProjectDomain(v.domain, rootDomains) ||
-      matchesProjectDomain(v.host, rootDomains) ||
-      matchesProjectDomain(hostnameFromUrl(v.url), rootDomains)
-    );
-    return { jobs, assets, ports, vulns };
-  }, [jobsQ.data, assetsQ.data, portsQ.data, vulnsQ.data, rootDomains]);
+  const summary = dashQ.data?.summary;
+  const trend = dashQ.data?.trend ?? [];
+  const jobs = jobsQ.data ?? [];
+  const monitorTargetCount = (monTargetsQ.data ?? []).length;
 
-  const uniqueIps = useMemo(() => {
-    const s = new Set<string>();
-    for (const a of scoped.assets) if (a.ip) s.add(a.ip);
-    for (const p of scoped.ports) if (p.ip) s.add(p.ip);
-    return s.size;
-  }, [scoped.assets, scoped.ports]);
+  const loading = dashQ.isLoading;
+  const error = dashQ.error || jobsQ.error;
 
-  const webCount = useMemo(() => scoped.assets.filter((a) => a.url).length, [scoped.assets]);
-
-  const sevCounts = useMemo(() => {
-    const out = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-    for (const v of scoped.vulns) {
-      const s = (v.severity ?? "").toLowerCase();
-      if (s in out) out[s as keyof typeof out]++;
-    }
-    return out;
-  }, [scoped.vulns]);
-
-  const runningJobs = useMemo(
-    () =>
-      scoped.jobs.filter((j) => {
-        const s = String(j.status).toLowerCase();
-        return s.includes("running") || s.includes("pending");
-      }).length,
-    [scoped.jobs]
-  );
-
-  const summary = useMemo(() => {
-    const since24h = Date.now() - 24 * 60 * 60 * 1000;
-
-    const newSubdomains24h = scoped.assets.filter((a) => {
-      const ts = parseTime(a.createdAt) || parseTime(a.updatedAt) || parseTime(a.lastSeen);
-      return ts >= since24h;
-    }).length;
-
-    const newPorts24h = scoped.ports.filter((p) => {
-      const ts = parseTime(p.lastSeen) || parseTime(p.updatedAt);
-      return ts >= since24h;
-    }).length;
-
-    const newVulns24h = scoped.vulns.filter((v) => {
-      const ts = parseTime(v.matchedAt) || parseTime(v.lastSeen);
-      return ts >= since24h;
-    }).length;
-
-    return { newSubdomains24h, newPorts24h, newVulns24h };
-  }, [scoped.assets, scoped.ports, scoped.vulns]);
-
-  const trend = useMemo(() => {
-    const dayMillis = 24 * 60 * 60 * 1000;
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-
-    return Array.from({ length: 7 }).map((_, idx) => {
-      const offset = 6 - idx;
-      const start = todayStart - offset * dayMillis;
-      const end = start + dayMillis;
-
-      const subdomains = scoped.assets.filter((a) => {
-        const ts = parseTime(a.createdAt) || parseTime(a.updatedAt) || parseTime(a.lastSeen);
-        return ts >= start && ts < end;
-      }).length;
-
-      const ports = scoped.ports.filter((p) => {
-        const ts = parseTime(p.lastSeen) || parseTime(p.updatedAt);
-        return ts >= start && ts < end;
-      }).length;
-
-      const vulnerabilities = scoped.vulns.filter((v) => {
-        const ts = parseTime(v.matchedAt) || parseTime(v.lastSeen);
-        return ts >= start && ts < end;
-      }).length;
-
-      const d = new Date(start);
-      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      return { date, subdomains, ports, vulnerabilities };
-    });
-  }, [scoped.assets, scoped.ports, scoped.vulns]);
-
-  const loading = jobsQ.isLoading || assetsQ.isLoading || portsQ.isLoading || vulnsQ.isLoading;
+  const recentJobs = useMemo(() => jobs.slice(0, 10), [jobs]);
 
   const trendLabels = useMemo(() => {
     return trend.map((t) => {
@@ -136,6 +29,11 @@ export function DashboardPage() {
       return t.date;
     });
   }, [trend]);
+
+  const totalVulns24h = summary?.newVulns24h ?? 0;
+
+  // Compute severity from jobs if available (we no longer pull full vulns list)
+  // The dashboard API doesn't return severity breakdown, so we show summary stats only
 
   const trendOption = {
     tooltip: {
@@ -170,10 +68,7 @@ export function DashboardPage() {
         areaStyle: {
           color: {
             type: "linear",
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
+            x: 0, y: 0, x2: 0, y2: 1,
             colorStops: [
               { offset: 0, color: "rgba(245,158,11,0.15)" },
               { offset: 1, color: "rgba(245,158,11,0)" }
@@ -193,10 +88,7 @@ export function DashboardPage() {
         areaStyle: {
           color: {
             type: "linear",
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
+            x: 0, y: 0, x2: 0, y2: 1,
             colorStops: [
               { offset: 0, color: "rgba(34,197,94,0.1)" },
               { offset: 1, color: "rgba(34,197,94,0)" }
@@ -217,55 +109,6 @@ export function DashboardPage() {
     ]
   };
 
-  const totalVulns = scoped.vulns.length;
-  const sevPieOption = {
-    tooltip: {
-      trigger: "item" as const,
-      backgroundColor: "#1a2035",
-      borderColor: "rgba(255,255,255,0.08)",
-      textStyle: { color: "#e2e8f0" }
-    },
-    legend: { show: false },
-    graphic: [
-      {
-        type: "text" as const,
-        left: "center",
-        top: "40%",
-        style: {
-          text: String(totalVulns),
-          fill: "#e2e8f0",
-          fontSize: 28,
-          fontWeight: "bold" as const,
-          textAlign: "center" as const
-        }
-      },
-      {
-        type: "text" as const,
-        left: "center",
-        top: "55%",
-        style: { text: "漏洞", fill: "#64748b", fontSize: 12, textAlign: "center" as const }
-      }
-    ],
-    series: [
-      {
-        type: "pie" as const,
-        radius: ["55%", "78%"],
-        center: ["50%", "50%"],
-        avoidLabelOverlap: false,
-        label: { show: false },
-        data: [
-          { value: sevCounts.critical, name: "严重", itemStyle: { color: "#ef4444" } },
-          { value: sevCounts.high, name: "高危", itemStyle: { color: "#f97316" } },
-          { value: sevCounts.medium, name: "中危", itemStyle: { color: "#eab308" } },
-          { value: sevCounts.low, name: "低危", itemStyle: { color: "#22c55e" } },
-          { value: sevCounts.info, name: "信息", itemStyle: { color: "#64748b" } }
-        ].filter((d) => d.value > 0)
-      }
-    ]
-  };
-
-  const recentJobs = useMemo(() => scoped.jobs.slice(0, 10), [scoped.jobs]);
-
   const formatTime = (s?: string | null) => {
     if (!s) return "—";
     const d = new Date(s);
@@ -275,13 +118,7 @@ export function DashboardPage() {
 
   const formatDuration = (sec?: number, status?: string) => {
     const st = (status ?? "").toLowerCase();
-    const finished =
-      st.includes("success") ||
-      st.includes("done") ||
-      st.includes("ok") ||
-      st.includes("completed") ||
-      st.includes("fail") ||
-      st.includes("error");
+    const finished = st.includes("success") || st.includes("done") || st.includes("ok") || st.includes("completed") || st.includes("fail") || st.includes("error");
     if (sec === undefined || sec === null) return finished ? "< 1s" : "—";
     if (sec <= 0) return finished ? "< 1s" : "—";
     if (sec < 60) return `${sec}s`;
@@ -322,68 +159,103 @@ export function DashboardPage() {
         </div>
       )}
 
+      {error && (
+        <div className="empty-state" style={{ color: "#ef4444" }}>
+          <div className="empty-state-icon">⚠</div>
+          <div className="empty-state-text">加载数据失败：{(error as Error).message}</div>
+        </div>
+      )}
+
       <div className="stats-row">
         <StatCard
           icon="◎"
-          label="发现资产"
-          value={scoped.assets.length}
-          change={summary.newSubdomains24h}
-          desc={`子域名 ${scoped.assets.length} · IP ${uniqueIps} · 端口 ${scoped.ports.length} · 网站 ${webCount}`}
+          label="新增资产 (24h)"
+          value={summary?.newSubdomains24h ?? 0}
+          change={summary?.newPorts24h ?? 0}
+          desc={`新端口 ${summary?.newPorts24h ?? 0} · 平均耗时 ${summary?.scanDurationAvgSec24h ?? 0}s`}
         />
-        <StatCard icon="⚑" label="发现漏洞" value={totalVulns} change={summary.newVulns24h} accent="danger" desc="所有扫描发现的漏洞" />
-        <StatCard icon="◉" label="监控目标" value={uniqueIps} accent="blue" desc="已添加的目标总数" />
-        <StatCard icon="▷" label="正在扫描" value={runningJobs} accent="blue" desc="当前进行中的任务" />
+        <StatCard
+          icon="⚑"
+          label="新增漏洞 (24h)"
+          value={totalVulns24h}
+          change={totalVulns24h}
+          accent="danger"
+          desc={`成功任务 ${summary?.jobsSuccess24h ?? 0} · 失败 ${summary?.jobsFailed24h ?? 0}`}
+        />
+        <StatCard
+          icon="◉"
+          label="监控目标"
+          value={monitorTargetCount}
+          accent="blue"
+          desc="已添加的监控目标总数"
+        />
+        <StatCard
+          icon="▷"
+          label="正在运行"
+          value={summary?.jobsRunning ?? 0}
+          accent="blue"
+          desc="当前进行中的任务"
+        />
       </div>
 
       <div className="two-col">
         <article className="panel">
           <header className="panel-header">
             <h2>资产趋势</h2>
-            <span className="panel-meta">近7天资产变化，点击折线或圆点可隐藏/显示</span>
+            <span className="panel-meta">近7天资产变化</span>
           </header>
           <div className="chart-container">
-            <ReactECharts option={trendOption} style={{ height: 280 }} />
-          </div>
-          <div style={{ display: "flex", gap: 16, padding: "0 20px 16px", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 12, color: "#64748b" }}>总计</span>
-            <span style={{ fontSize: 12, color: "#f59e0b" }}>● 子域名 {scoped.assets.length}</span>
-            <span style={{ fontSize: 12, color: "#ef4444" }}>● IP {uniqueIps}</span>
-            <span style={{ fontSize: 12, color: "#22c55e" }}>● 端口 {scoped.ports.length}</span>
-            <span style={{ fontSize: 12, color: "#3b82f6" }}>● 网站 {webCount}</span>
+            {trend.length > 0 ? (
+              <ReactECharts option={trendOption} style={{ height: 280 }} />
+            ) : (
+              <div className="empty-state" style={{ padding: "40px 0" }}>
+                <div className="empty-state-icon">📊</div>
+                <div className="empty-state-text">暂无趋势数据</div>
+              </div>
+            )}
           </div>
         </article>
 
         <article className="panel">
           <header className="panel-header">
-            <h2>漏洞分布</h2>
-            <span className="panel-meta">按严重程度统计</span>
+            <h2>24h 概览</h2>
+            <span className="panel-meta">最近24小时汇总</span>
           </header>
-          <div className="chart-container">
-            {totalVulns > 0 ? (
-              <ReactECharts option={sevPieOption} style={{ height: 240 }} />
-            ) : (
-              <div className="empty-state" style={{ padding: "40px 0" }}>
-                <div className="empty-state-icon">⚑</div>
-                <div className="empty-state-text">暂无漏洞数据</div>
+          <div style={{ padding: "20px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              <div className="stat-card">
+                <div className="stat-label">成功任务</div>
+                <div className="stat-value" style={{ color: "#22c55e" }}>{summary?.jobsSuccess24h ?? 0}</div>
               </div>
-            )}
-          </div>
-          {totalVulns > 0 && (
-            <div style={{ display: "flex", gap: 12, padding: "0 20px 16px", justifyContent: "center", flexWrap: "wrap" }}>
-              <span className="summary-badge critical">严重 {sevCounts.critical}</span>
-              <span className="summary-badge high">高危 {sevCounts.high}</span>
-              <span className="summary-badge medium">中危 {sevCounts.medium}</span>
-              <span className="summary-badge low">低危 {sevCounts.low}</span>
-              <span style={{ fontSize: 11, color: "#64748b", padding: "2px 8px" }}>信息 {sevCounts.info}</span>
+              <div className="stat-card">
+                <div className="stat-label">失败任务</div>
+                <div className="stat-value" style={{ color: "#ef4444" }}>{summary?.jobsFailed24h ?? 0}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">新子域名</div>
+                <div className="stat-value" style={{ color: "#f59e0b" }}>{summary?.newSubdomains24h ?? 0}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">新端口</div>
+                <div className="stat-value" style={{ color: "#3b82f6" }}>{summary?.newPorts24h ?? 0}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">新漏洞</div>
+                <div className="stat-value" style={{ color: "#ef4444" }}>{summary?.newVulns24h ?? 0}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">平均扫描耗时</div>
+                <div className="stat-value">{formatDuration(summary?.scanDurationAvgSec24h, "success")}</div>
+              </div>
             </div>
-          )}
+          </div>
         </article>
       </div>
 
       <article className="panel">
         <header className="panel-header">
           <h2>扫描历史</h2>
-          <span className="panel-meta">{scoped.jobs.length} 条记录</span>
+          <span className="panel-meta">{jobs.length} 条记录</span>
         </header>
         {recentJobs.length > 0 ? (
           <div className="table-wrap">
@@ -427,15 +299,7 @@ export function DashboardPage() {
                         </span>
                         {j.errorMessage && (
                           <div
-                            style={{
-                              fontSize: 11,
-                              color: "#ef4444",
-                              marginTop: 2,
-                              maxWidth: 200,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap"
-                            }}
+                            style={{ fontSize: 11, color: "#ef4444", marginTop: 2, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                             title={j.errorMessage}
                           >
                             {j.errorMessage}
@@ -456,7 +320,9 @@ export function DashboardPage() {
         )}
       </article>
 
-      <div style={{ textAlign: "right", fontSize: 12, color: "#475569", marginTop: 8 }}>统计更新于 {new Date().toLocaleString("zh-CN")}</div>
+      <div style={{ textAlign: "right", fontSize: 12, color: "#475569", marginTop: 8 }}>
+        统计更新于 {new Date().toLocaleString("zh-CN")}
+      </div>
     </section>
   );
 }

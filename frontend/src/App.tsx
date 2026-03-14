@@ -7,6 +7,7 @@ import { JobsPage } from "./pages/JobsPage";
 import { MonitoringPage } from "./pages/MonitoringPage";
 import { PortsPage } from "./pages/PortsPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
+import { QuickScanPage } from "./pages/QuickScanPage";
 import { ScreenshotsPage } from "./pages/ScreenshotsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
@@ -16,6 +17,7 @@ export default function App() {
       <Route path="/" element={<AppShell />}>
         <Route index element={<DashboardPage />} />
         <Route path="projects" element={<ProjectsPage />} />
+        <Route path="quick-scan" element={<QuickScanPage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="assets" element={<AssetsPage />} />
         <Route path="ports" element={<PortsPage />} />

@@ -19,6 +19,7 @@ export interface TrendPoint {
 
 export interface JobOverview {
   id: string;
+  projectId?: string;
   rootDomain: string;
   mode: "scan" | "monitor";
   modules: string[];
@@ -32,18 +33,10 @@ export interface JobOverview {
   vulnCnt?: number;
 }
 
-export interface PluginStatus {
-  scanner: string;
-  status: HealthStatus;
-  successCount: number;
-  failureCount: number;
-  timeoutCount: number;
-  durationMs: number;
-  error?: string;
-}
-
 export interface Asset {
   id: number;
+  projectId?: string;
+  rootDomain?: string;
   domain: string;
   url?: string;
   ip?: string;
@@ -55,8 +48,17 @@ export interface Asset {
   lastSeen?: string;
 }
 
+export interface PagedAssets {
+  items: Asset[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 export interface PortRecord {
   id: number;
+  projectId?: string;
+  rootDomain?: string;
   assetId?: number;
   domain?: string;
   ip: string;
@@ -71,6 +73,7 @@ export interface PortRecord {
 
 export interface VulnerabilityRecord {
   id: number;
+  projectId?: string;
   rootDomain?: string;
   domain?: string;
   host?: string;
@@ -85,11 +88,20 @@ export interface VulnerabilityRecord {
   reference?: string;
   matchedAt: string;
   fingerprint: string;
+  status?: "open" | "triaged" | "confirmed" | "accepted_risk" | "fixed" | "false_positive" | "duplicate";
+  assignee?: string;
+  ticketRef?: string;
+  dueAt?: string;
+  fixedAt?: string;
+  verifiedAt?: string;
+  reopenCount?: number;
+  lastTransitionAt?: string;
   lastSeen?: string;
 }
 
 export interface MonitorTarget {
   id: number;
+  projectId?: string;
   rootDomain: string;
   enabled: boolean;
   baselineDone: boolean;
@@ -100,6 +112,7 @@ export interface MonitorTarget {
 
 export interface MonitorRun {
   id: number;
+  projectId?: string;
   rootDomain: string;
   status: string;
   startedAt: string;
@@ -115,6 +128,7 @@ export interface MonitorRun {
 
 export interface MonitorChange {
   runId: number;
+  projectId?: string;
   rootDomain: string;
   changeType: string;
   domain?: string;
@@ -129,16 +143,39 @@ export interface ProjectRecord {
   id: string;
   name: string;
   description?: string;
+  owner?: string;
   rootDomains: string[];
   tags: string[];
+  archived?: boolean;
   active: boolean;
   createdAt: string;
   updatedAt: string;
   lastScanAt?: string;
 }
 
+export interface VulnEvent {
+  id: number;
+  projectId: string;
+  vulnId: number;
+  action: string;
+  fromStatus?: string;
+  toStatus?: string;
+  actor?: string;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface RelationEdge {
+  srcType: string;
+  srcId: string;
+  dstType: string;
+  dstId: string;
+  relation: string;
+}
+
 /* Screenshots */
 export interface ScreenshotDomain {
+  projectId?: string;
   rootDomain: string;
   screenshotCount: number;
   screenshotDir: string;
@@ -147,6 +184,7 @@ export interface ScreenshotDomain {
 
 export interface ScreenshotItem {
   id: number;
+  projectId?: string;
   url: string;
   filename: string;
   title?: string;
@@ -179,12 +217,4 @@ export interface SystemSettings {
     defaultActiveSubs: boolean;
     defaultNuclei: boolean;
   };
-  tools: ToolStatus[];
-}
-
-export interface ToolStatus {
-  name: string;
-  installed: boolean;
-  version?: string;
-  path?: string;
 }

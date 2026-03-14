@@ -188,6 +188,16 @@ button {
   color: var(--accent);
 }
 
+.nav-link-quick {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(135deg, rgba(0, 0, 0, 0.2), rgba(255, 255, 255, 0.02));
+}
+
+.nav-link-quick.active {
+  background: linear-gradient(135deg, var(--accent-subtle), rgba(255, 255, 255, 0.04));
+  border-color: color-mix(in srgb, var(--accent) 70%, #ffffff 30%);
+}
+
 .nav-icon {
   width: 20px;
   height: 20px;
@@ -348,6 +358,19 @@ button {
 .topbar-btn-scan:hover {
   background: var(--accent-hover);
   box-shadow: var(--accent-glow);
+}
+
+.topbar-btn-neon {
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, #ffffff 30%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04), var(--accent-glow);
+}
+
+.topbar-btn-neon:hover {
+  background: var(--accent-subtle);
+  color: #fff;
+  border-color: var(--accent-hover);
 }
 
 .topbar-icon-btn {
@@ -940,6 +963,16 @@ button {
   box-shadow: var(--accent-glow);
 }
 
+.btn-neon {
+  border-color: color-mix(in srgb, var(--accent) 65%, #ffffff 35%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.2));
+  box-shadow: var(--accent-glow);
+}
+
+.btn-neon:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
 .btn-danger {
   color: var(--color-danger);
   border-color: rgba(239, 68, 68, 0.3);
@@ -1174,6 +1207,39 @@ button {
   font-size: 12px;
   color: var(--text-tertiary);
   white-space: nowrap;
+}
+
+.module-grid {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.module-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-card);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  transition: all var(--transition-fast);
+}
+
+button.module-chip {
+  cursor: pointer;
+}
+
+.module-chip.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-subtle);
+  box-shadow: var(--accent-glow);
 }
 
 /* ── Empty State ── */

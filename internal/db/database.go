@@ -32,11 +32,73 @@ func NewDatabase(dsn string) (*Database, error) {
 		return nil, fmt.Errorf("failed to connect to database: %v", err)
 	}
 
-	if err := database.AutoMigrate(&Asset{}, &Port{}, &Vulnerability{}, &MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorTarget{}, &MonitorTask{}, &ScanJob{}); err != nil {
+	if err := database.AutoMigrate(
+		&Project{}, &ProjectScope{},
+		&Asset{}, &Port{}, &Vulnerability{}, &VulnEvent{},
+		&MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorTarget{}, &MonitorTask{},
+		&ScanJob{}, &ScanStage{}, &ScanArtifact{}, &AssetEdge{}, &AuditLog{},
+	); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %v", err)
+	}
+	if err := ensureProjectScopedSchema(database); err != nil {
+		return nil, fmt.Errorf("failed to ensure project scoped schema: %v", err)
 	}
 
 	return &Database{DB: database}, nil
+}
+
+func ensureProjectScopedSchema(database *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
+		backfillStatements := []string{
+			"UPDATE assets SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE ports SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE vulnerabilities SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE monitor_targets SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE monitor_tasks SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE monitor_runs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE scan_jobs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE scan_stages SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE scan_artifacts SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE project_scopes SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE asset_changes SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE port_changes SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE asset_edges SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE vuln_events SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE audit_logs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+		}
+		for _, stmt := range backfillStatements {
+			if err := tx.Exec(stmt).Error; err != nil {
+				return err
+			}
+		}
+
+		// Drop old single-column unique constraints that block multi-project duplicates.
+		dropStatements := []string{
+			"ALTER TABLE assets DROP CONSTRAINT IF EXISTS assets_domain_key",
+			"DROP INDEX IF EXISTS idx_assets_domain",
+			"ALTER TABLE vulnerabilities DROP CONSTRAINT IF EXISTS vulnerabilities_fingerprint_key",
+			"DROP INDEX IF EXISTS idx_vulnerabilities_fingerprint",
+			"ALTER TABLE monitor_targets DROP CONSTRAINT IF EXISTS monitor_targets_root_domain_key",
+			"DROP INDEX IF EXISTS idx_monitor_targets_root_domain",
+		}
+		for _, stmt := range dropStatements {
+			if err := tx.Exec(stmt).Error; err != nil {
+				return err
+			}
+		}
+
+		createStatements := []string{
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_project_domain ON assets (project_id, domain)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_project_fingerprint ON vulnerabilities (project_id, fingerprint)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_target_project_root ON monitor_targets (project_id, root_domain)",
+		}
+		for _, stmt := range createStatements {
+			if err := tx.Exec(stmt).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // SaveOrUpdateAsset saves or updates asset info.
@@ -45,6 +107,13 @@ func (d *Database) SaveOrUpdateAsset(data map[string]interface{}) error {
 	if !ok || domain == "" {
 		return fmt.Errorf("domain is required")
 	}
+	projectID := strings.TrimSpace(getStringValue(data, "project_id"))
+	if projectID == "" {
+		projectID = "default"
+	}
+	rootDomain := strings.TrimSpace(getStringValue(data, "root_domain"))
+	sourceJobID := strings.TrimSpace(getStringValue(data, "source_job_id"))
+	sourceModule := strings.TrimSpace(getStringValue(data, "source_module"))
 
 	var techJSON []byte
 	if technologies, exists := data["technologies"]; exists {
@@ -58,17 +127,22 @@ func (d *Database) SaveOrUpdateAsset(data map[string]interface{}) error {
 	}
 
 	var existingAsset Asset
-	result := d.DB.Where("domain = ?", domain).First(&existingAsset)
+	result := d.DB.Where("project_id = ? AND domain = ?", projectID, domain).First(&existingAsset)
 	now := time.Now()
 
 	if result.Error == gorm.ErrRecordNotFound {
 		asset := Asset{
+			ProjectID:    projectID,
+			RootDomain:   rootDomain,
 			Domain:       domain,
 			URL:          getStringValue(data, "url"),
 			IP:           getStringValue(data, "ip"),
 			StatusCode:   getIntValue(data, "status_code"),
 			Title:        getStringValue(data, "title"),
 			Technologies: techJSON,
+			SourceJobID:  sourceJobID,
+			SourceModule: sourceModule,
+			FirstSeenAt:  now,
 			LastSeen:     now,
 		}
 		if err := d.DB.Create(&asset).Error; err != nil {
@@ -76,6 +150,15 @@ func (d *Database) SaveOrUpdateAsset(data map[string]interface{}) error {
 		}
 	} else if result.Error == nil {
 		updates := map[string]interface{}{"last_seen": now}
+		if rootDomain != "" {
+			updates["root_domain"] = rootDomain
+		}
+		if sourceJobID != "" {
+			updates["source_job_id"] = sourceJobID
+		}
+		if sourceModule != "" {
+			updates["source_module"] = sourceModule
+		}
 		if url := getStringValue(data, "url"); url != "" {
 			updates["url"] = url
 		}
@@ -125,6 +208,13 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 	ip := getStringValue(data, "ip")
 	port := getIntValue(data, "port")
 	domain := getStringValue(data, "domain")
+	projectID := strings.TrimSpace(getStringValue(data, "project_id"))
+	if projectID == "" {
+		projectID = "default"
+	}
+	rootDomain := strings.TrimSpace(getStringValue(data, "root_domain"))
+	sourceJobID := strings.TrimSpace(getStringValue(data, "source_job_id"))
+	sourceModule := strings.TrimSpace(getStringValue(data, "source_module"))
 
 	if ip == "" || port == 0 {
 		return fmt.Errorf("ip and port are required")
@@ -132,9 +222,18 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 
 	var asset Asset
 	if domain != "" {
-		result := d.DB.Where("domain = ?", domain).First(&asset)
+		result := d.DB.Where("project_id = ? AND domain = ?", projectID, domain).First(&asset)
 		if result.Error == gorm.ErrRecordNotFound {
-			asset = Asset{Domain: domain, IP: ip, LastSeen: time.Now()}
+			asset = Asset{
+				ProjectID:    projectID,
+				RootDomain:   rootDomain,
+				Domain:       domain,
+				IP:           ip,
+				SourceJobID:  sourceJobID,
+				SourceModule: sourceModule,
+				FirstSeenAt:  time.Now(),
+				LastSeen:     time.Now(),
+			}
 			if err := d.DB.Create(&asset).Error; err != nil {
 				return fmt.Errorf("failed to create asset: %v", err)
 			}
@@ -142,9 +241,18 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 			return fmt.Errorf("database query error: %v", result.Error)
 		}
 	} else {
-		result := d.DB.Where("ip = ?", ip).First(&asset)
+		result := d.DB.Where("project_id = ? AND ip = ?", projectID, ip).First(&asset)
 		if result.Error == gorm.ErrRecordNotFound {
-			asset = Asset{Domain: ip, IP: ip, LastSeen: time.Now()}
+			asset = Asset{
+				ProjectID:    projectID,
+				RootDomain:   rootDomain,
+				Domain:       ip,
+				IP:           ip,
+				SourceJobID:  sourceJobID,
+				SourceModule: sourceModule,
+				FirstSeenAt:  time.Now(),
+				LastSeen:     time.Now(),
+			}
 			if err := d.DB.Create(&asset).Error; err != nil {
 				return fmt.Errorf("failed to create asset: %v", err)
 			}
@@ -154,29 +262,40 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 	}
 
 	var existingPort Port
-	result := d.DB.Where("asset_id = ? AND ip = ? AND port = ?", asset.ID, ip, port).First(&existingPort)
+	result := d.DB.Where("project_id = ? AND asset_id = ? AND ip = ? AND port = ? AND protocol = ? AND domain = ?", projectID, asset.ID, ip, port, defaultProtocol(getStringValue(data, "protocol")), domain).First(&existingPort)
 	now := time.Now()
 
 	if result.Error == gorm.ErrRecordNotFound {
 		portRecord := Port{
-			AssetID:  asset.ID,
-			Domain:   domain,
-			IP:       ip,
-			Port:     port,
-			Protocol: getStringValue(data, "protocol"),
-			Service:  getStringValue(data, "service"),
-			Version:  getStringValue(data, "version"),
-			Banner:   getStringValue(data, "banner"),
-			LastSeen: now,
-		}
-		if portRecord.Protocol == "" {
-			portRecord.Protocol = "tcp"
+			ProjectID:    projectID,
+			RootDomain:   rootDomain,
+			AssetID:      asset.ID,
+			Domain:       domain,
+			IP:           ip,
+			Port:         port,
+			Protocol:     defaultProtocol(getStringValue(data, "protocol")),
+			Service:      getStringValue(data, "service"),
+			Version:      getStringValue(data, "version"),
+			Banner:       getStringValue(data, "banner"),
+			SourceJobID:  sourceJobID,
+			SourceModule: sourceModule,
+			FirstSeenAt:  now,
+			LastSeen:     now,
 		}
 		if err := d.DB.Create(&portRecord).Error; err != nil {
 			return fmt.Errorf("failed to create port: %v", err)
 		}
 	} else if result.Error == nil {
 		updates := map[string]interface{}{"last_seen": now}
+		if rootDomain != "" {
+			updates["root_domain"] = rootDomain
+		}
+		if sourceJobID != "" {
+			updates["source_job_id"] = sourceJobID
+		}
+		if sourceModule != "" {
+			updates["source_module"] = sourceModule
+		}
 		if service := getStringValue(data, "service"); service != "" {
 			updates["service"] = service
 		}
@@ -203,6 +322,11 @@ func (d *Database) SaveOrUpdateVulnerability(data map[string]interface{}) error 
 	if templateID == "" || matchedAt == "" {
 		return fmt.Errorf("template_id and matched_at are required")
 	}
+	projectID := strings.TrimSpace(getStringValue(data, "project_id"))
+	if projectID == "" {
+		projectID = "default"
+	}
+	sourceJobID := strings.TrimSpace(getStringValue(data, "source_job_id"))
 
 	domain := getStringValue(data, "domain")
 	host := getStringValue(data, "host")
@@ -215,7 +339,7 @@ func (d *Database) SaveOrUpdateVulnerability(data map[string]interface{}) error 
 	)
 	fingerprint := getStringValue(data, "fingerprint")
 	if fingerprint == "" {
-		raw := templateID + "|" + matchedAt + "|" + host
+		raw := projectID + "|" + templateID + "|" + matchedAt + "|" + host
 		sum := sha1.Sum([]byte(raw))
 		fingerprint = hex.EncodeToString(sum[:])
 	}
@@ -225,7 +349,7 @@ func (d *Database) SaveOrUpdateVulnerability(data map[string]interface{}) error 
 	var asset *Asset
 	if domain != "" {
 		var a Asset
-		result := d.DB.Where("domain = ?", domain).First(&a)
+		result := d.DB.Where("project_id = ? AND domain = ?", projectID, domain).First(&a)
 		if result.Error == nil {
 			asset = &a
 		}
@@ -239,27 +363,33 @@ func (d *Database) SaveOrUpdateVulnerability(data map[string]interface{}) error 
 	}
 
 	var existing Vulnerability
-	result := d.DB.Where("fingerprint = ?", fingerprint).First(&existing)
+	result := d.DB.Where("project_id = ? AND fingerprint = ?", projectID, fingerprint).First(&existing)
 
 	if result.Error == gorm.ErrRecordNotFound {
+		transitionAt := now
 		record := Vulnerability{
-			RootDomain:   rootDomain,
-			Domain:       domain,
-			Host:         host,
-			URL:          getStringValue(data, "url"),
-			IP:           getStringValue(data, "ip"),
-			TemplateID:   templateID,
-			TemplateName: getStringValue(data, "template_name"),
-			Severity:     getStringValue(data, "severity"),
-			CVE:          getStringValue(data, "cve"),
-			MatcherName:  getStringValue(data, "matcher_name"),
-			Description:  getStringValue(data, "description"),
-			Reference:    getStringValue(data, "reference"),
-			TemplateURL:  getStringValue(data, "template_url"),
-			MatchedAt:    matchedAt,
-			Fingerprint:  fingerprint,
-			Raw:          rawJSON,
-			LastSeen:     now,
+			ProjectID:        projectID,
+			RootDomain:       rootDomain,
+			Domain:           domain,
+			Host:             host,
+			URL:              getStringValue(data, "url"),
+			IP:               getStringValue(data, "ip"),
+			TemplateID:       templateID,
+			TemplateName:     getStringValue(data, "template_name"),
+			Severity:         getStringValue(data, "severity"),
+			CVE:              getStringValue(data, "cve"),
+			MatcherName:      getStringValue(data, "matcher_name"),
+			Description:      getStringValue(data, "description"),
+			Reference:        getStringValue(data, "reference"),
+			TemplateURL:      getStringValue(data, "template_url"),
+			MatchedAt:        matchedAt,
+			Fingerprint:      fingerprint,
+			Status:           "open",
+			SourceJobID:      sourceJobID,
+			Raw:              rawJSON,
+			FirstSeenAt:      now,
+			LastSeen:         now,
+			LastTransitionAt: &transitionAt,
 		}
 		if asset != nil {
 			record.AssetID = &asset.ID
@@ -298,8 +428,17 @@ func (d *Database) SaveOrUpdateVulnerability(data map[string]interface{}) error 
 		if rootDomain != "" {
 			updates["root_domain"] = rootDomain
 		}
+		if sourceJobID != "" {
+			updates["source_job_id"] = sourceJobID
+		}
 		if asset != nil {
 			updates["asset_id"] = asset.ID
+		}
+		if existing.Status == "fixed" {
+			transitionAt := now
+			updates["status"] = "open"
+			updates["reopen_count"] = existing.ReopenCount + 1
+			updates["last_transition_at"] = &transitionAt
 		}
 
 		if err := d.DB.Model(&existing).Updates(updates).Error; err != nil {
@@ -349,8 +488,12 @@ func (d *Database) GetAssetByDomain(domain string) (*Asset, error) {
 }
 
 // CreateMonitorRun creates a new monitor run record.
-func (d *Database) CreateMonitorRun(rootDomain string) (*MonitorRun, error) {
+func (d *Database) CreateMonitorRun(projectID, rootDomain string) (*MonitorRun, error) {
+	if projectID == "" {
+		projectID = "default"
+	}
 	run := &MonitorRun{
+		ProjectID:  projectID,
 		RootDomain: rootDomain,
 		Status:     "running",
 		StartedAt:  time.Now(),
@@ -385,11 +528,11 @@ func (d *Database) CompleteMonitorRun(runID uint, status string, errMsg string, 
 }
 
 // GetLiveAssetsByRootDomain returns live web assets by root domain.
-func (d *Database) GetLiveAssetsByRootDomain(rootDomain string) ([]Asset, error) {
+func (d *Database) GetLiveAssetsByRootDomain(projectID, rootDomain string) ([]Asset, error) {
 	var assets []Asset
 	pattern := "%." + rootDomain
 	if err := d.DB.
-		Where("(domain = ? OR domain LIKE ?) AND url <> ''", rootDomain, pattern).
+		Where("project_id = ? AND (domain = ? OR domain LIKE ?) AND url <> ''", projectID, rootDomain, pattern).
 		Find(&assets).Error; err != nil {
 		return nil, err
 	}
@@ -397,11 +540,11 @@ func (d *Database) GetLiveAssetsByRootDomain(rootDomain string) ([]Asset, error)
 }
 
 // GetPortsByRootDomain returns ports by root domain.
-func (d *Database) GetPortsByRootDomain(rootDomain string) ([]Port, error) {
+func (d *Database) GetPortsByRootDomain(projectID, rootDomain string) ([]Port, error) {
 	var ports []Port
 	pattern := "%." + rootDomain
 	if err := d.DB.
-		Where("domain = ? OR domain LIKE ?", rootDomain, pattern).
+		Where("project_id = ? AND (domain = ? OR domain LIKE ?)", projectID, rootDomain, pattern).
 		Find(&ports).Error; err != nil {
 		return nil, err
 	}
@@ -419,11 +562,15 @@ func (d *Database) SavePortChange(change *PortChange) error {
 }
 
 // GetOrCreateMonitorTarget returns monitor target record for root domain.
-func (d *Database) GetOrCreateMonitorTarget(rootDomain string) (*MonitorTarget, error) {
+func (d *Database) GetOrCreateMonitorTarget(projectID, rootDomain string) (*MonitorTarget, error) {
+	if projectID == "" {
+		projectID = "default"
+	}
 	var target MonitorTarget
-	result := d.DB.Where("root_domain = ?", rootDomain).First(&target)
+	result := d.DB.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).First(&target)
 	if result.Error == gorm.ErrRecordNotFound {
 		target = MonitorTarget{
+			ProjectID:    projectID,
 			RootDomain:   rootDomain,
 			Enabled:      true,
 			BaselineDone: false,
@@ -440,28 +587,40 @@ func (d *Database) GetOrCreateMonitorTarget(rootDomain string) (*MonitorTarget, 
 }
 
 // UpdateMonitorTarget updates baseline and last run time.
-func (d *Database) UpdateMonitorTarget(rootDomain string, baselineDone bool, lastRunAt time.Time) error {
+func (d *Database) UpdateMonitorTarget(projectID, rootDomain string, baselineDone bool, lastRunAt time.Time) error {
 	updates := map[string]interface{}{
 		"baseline_done": baselineDone,
 		"last_run_at":   lastRunAt,
 	}
-	return d.DB.Model(&MonitorTarget{}).Where("root_domain = ?", rootDomain).Updates(updates).Error
+	return d.DB.Model(&MonitorTarget{}).Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Updates(updates).Error
 }
 
 // ListMonitorTargets returns all monitor targets.
-func (d *Database) ListMonitorTargets() ([]MonitorTarget, error) {
+func (d *Database) ListMonitorTargets(projectID string) ([]MonitorTarget, error) {
 	var targets []MonitorTarget
-	if err := d.DB.Order("root_domain asc").Find(&targets).Error; err != nil {
+	query := d.DB.Order("root_domain asc")
+	if projectID != "" {
+		query = query.Where("project_id = ?", projectID)
+	}
+	if err := query.Find(&targets).Error; err != nil {
 		return nil, err
 	}
 	return targets, nil
 }
 
 // StopMonitorTarget disables monitoring for the given root domain.
-func (d *Database) StopMonitorTarget(rootDomain string) error {
+func (d *Database) StopMonitorTarget(projectID, rootDomain string) error {
+	projectID = strings.TrimSpace(projectID)
+	rootDomain = strings.TrimSpace(rootDomain)
+	if projectID == "" {
+		return fmt.Errorf("projectID is required")
+	}
+	if rootDomain == "" {
+		return fmt.Errorf("rootDomain is required")
+	}
 	return d.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&MonitorTarget{}).
-			Where("root_domain = ?", rootDomain).
+			Where("project_id = ? AND root_domain = ?", projectID, rootDomain).
 			Update("enabled", false)
 		if result.Error != nil {
 			return result.Error
@@ -472,7 +631,7 @@ func (d *Database) StopMonitorTarget(rootDomain string) error {
 
 		now := time.Now()
 		if err := tx.Model(&MonitorTask{}).
-			Where("root_domain = ? AND status IN ?", rootDomain, []string{"pending", "running"}).
+			Where("project_id = ? AND root_domain = ? AND status IN ?", projectID, rootDomain, []string{"pending", "running"}).
 			Updates(map[string]interface{}{
 				"status":      "canceled",
 				"finished_at": now,
@@ -484,21 +643,29 @@ func (d *Database) StopMonitorTarget(rootDomain string) error {
 }
 
 // DeleteMonitorDataByRootDomain removes monitor-only data for a root domain.
-func (d *Database) DeleteMonitorDataByRootDomain(rootDomain string) error {
+func (d *Database) DeleteMonitorDataByRootDomain(projectID, rootDomain string) error {
+	projectID = strings.TrimSpace(projectID)
+	rootDomain = strings.TrimSpace(rootDomain)
+	if projectID == "" {
+		return fmt.Errorf("projectID is required")
+	}
+	if rootDomain == "" {
+		return fmt.Errorf("rootDomain is required")
+	}
 	return d.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorTask{}).Error; err != nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorTask{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("root_domain = ?", rootDomain).Delete(&PortChange{}).Error; err != nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&PortChange{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("root_domain = ?", rootDomain).Delete(&AssetChange{}).Error; err != nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&AssetChange{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorRun{}).Error; err != nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorRun{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorTarget{}).Error; err != nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorTarget{}).Error; err != nil {
 			return err
 		}
 		return nil
@@ -506,12 +673,21 @@ func (d *Database) DeleteMonitorDataByRootDomain(rootDomain string) error {
 }
 
 // EnableMonitorTarget enables monitor target and ensures one pending task exists.
-func (d *Database) EnableMonitorTarget(rootDomain string, intervalSec, maxAttempts int) error {
+func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec, maxAttempts int) error {
+	projectID = strings.TrimSpace(projectID)
+	rootDomain = strings.TrimSpace(rootDomain)
+	if projectID == "" {
+		return fmt.Errorf("projectID is required")
+	}
+	if rootDomain == "" {
+		return fmt.Errorf("rootDomain is required")
+	}
 	return d.DB.Transaction(func(tx *gorm.DB) error {
 		var target MonitorTarget
-		result := tx.Where("root_domain = ?", rootDomain).First(&target)
+		result := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).First(&target)
 		if result.Error == gorm.ErrRecordNotFound {
 			target = MonitorTarget{
+				ProjectID:    projectID,
 				RootDomain:   rootDomain,
 				Enabled:      true,
 				BaselineDone: false,
@@ -531,12 +707,13 @@ func (d *Database) EnableMonitorTarget(rootDomain string, intervalSec, maxAttemp
 
 		var count int64
 		if err := tx.Model(&MonitorTask{}).
-			Where("root_domain = ? AND status IN ?", rootDomain, []string{"pending", "running"}).
+			Where("project_id = ? AND root_domain = ? AND status IN ?", projectID, rootDomain, []string{"pending", "running"}).
 			Count(&count).Error; err != nil {
 			return err
 		}
 		if count == 0 {
 			task := MonitorTask{
+				ProjectID:   projectID,
 				RootDomain:  rootDomain,
 				Status:      "pending",
 				RunAt:       time.Now(),
@@ -552,6 +729,32 @@ func (d *Database) EnableMonitorTarget(rootDomain string, intervalSec, maxAttemp
 	})
 }
 
+// ArchiveProject marks project archived and stops related monitor scheduling.
+func (d *Database) ArchiveProject(projectID string) error {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return fmt.Errorf("projectID is required")
+	}
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Project{}).Where("id = ?", projectID).Update("archived", true).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&MonitorTarget{}).Where("project_id = ?", projectID).Update("enabled", false).Error; err != nil {
+			return err
+		}
+		now := time.Now()
+		if err := tx.Model(&MonitorTask{}).
+			Where("project_id = ? AND status IN ?", projectID, []string{"pending", "running"}).
+			Updates(map[string]interface{}{
+				"status":      "canceled",
+				"finished_at": now,
+			}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
 // ClaimDueMonitorTask atomically claims one due pending task.
 func (d *Database) ClaimDueMonitorTask() (*MonitorTask, error) {
 	var claimed *MonitorTask
@@ -560,7 +763,7 @@ func (d *Database) ClaimDueMonitorTask() (*MonitorTask, error) {
 		now := time.Now()
 		result := tx.Model(&MonitorTask{}).
 			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Joins("JOIN monitor_targets mt ON mt.root_domain = monitor_tasks.root_domain").
+			Joins("JOIN monitor_targets mt ON mt.root_domain = monitor_tasks.root_domain AND mt.project_id = monitor_tasks.project_id").
 			Where("monitor_tasks.status = ? AND monitor_tasks.run_at <= ? AND mt.enabled = ?", "pending", now, true).
 			Order("monitor_tasks.run_at asc").
 			First(&task)
@@ -607,13 +810,14 @@ func (d *Database) CompleteMonitorTaskSuccess(taskID uint) error {
 		}
 
 		var target MonitorTarget
-		if err := tx.Where("root_domain = ?", task.RootDomain).First(&target).Error; err == nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", task.ProjectID, task.RootDomain).First(&target).Error; err == nil {
 			if !target.Enabled {
 				return nil
 			}
 		}
 
 		next := MonitorTask{
+			ProjectID:   task.ProjectID,
 			RootDomain:  task.RootDomain,
 			Status:      "pending",
 			RunAt:       now.Add(time.Duration(task.IntervalSec) * time.Second),
@@ -651,13 +855,14 @@ func (d *Database) HandleMonitorTaskFailure(task *MonitorTask, errMsg string) er
 		}
 
 		var target MonitorTarget
-		if err := tx.Where("root_domain = ?", task.RootDomain).First(&target).Error; err == nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", task.ProjectID, task.RootDomain).First(&target).Error; err == nil {
 			if !target.Enabled {
 				return nil
 			}
 		}
 
 		next := MonitorTask{
+			ProjectID:   task.ProjectID,
 			RootDomain:  task.RootDomain,
 			Status:      "pending",
 			RunAt:       now.Add(time.Duration(task.IntervalSec) * time.Second),
@@ -679,7 +884,7 @@ func (d *Database) RecoverStaleRunningTasks(staleAfter time.Duration) (int, erro
 
 	var staleTasks []MonitorTask
 	if err := d.DB.
-		Joins("JOIN monitor_targets mt ON mt.root_domain = monitor_tasks.root_domain").
+		Joins("JOIN monitor_targets mt ON mt.root_domain = monitor_tasks.root_domain AND mt.project_id = monitor_tasks.project_id").
 		Where("monitor_tasks.status = ? AND monitor_tasks.started_at IS NOT NULL AND monitor_tasks.started_at <= ? AND mt.enabled = ?", "running", cutoff, true).
 		Find(&staleTasks).Error; err != nil {
 		return 0, err
@@ -719,9 +924,12 @@ func calcBackoffSec(attempt int) int {
 
 // HasRecentChangeRun reports whether there is a successful monitor run with
 // non-zero changes for the same root domain in the given time window.
-func (d *Database) HasRecentChangeRun(rootDomain string, excludeRunID uint, since time.Time) (bool, error) {
+func (d *Database) HasRecentChangeRun(projectID, rootDomain string, excludeRunID uint, since time.Time) (bool, error) {
+	if projectID == "" {
+		projectID = "default"
+	}
 	query := d.DB.Model(&MonitorRun{}).
-		Where("root_domain = ? AND status = ? AND finished_at IS NOT NULL AND finished_at >= ?", rootDomain, "success", since).
+		Where("project_id = ? AND root_domain = ? AND status = ? AND finished_at IS NOT NULL AND finished_at >= ?", projectID, rootDomain, "success", since).
 		Where("(new_live_count > 0 OR web_changed > 0 OR port_opened > 0 OR port_closed > 0 OR service_change > 0)")
 	if excludeRunID > 0 {
 		query = query.Where("id <> ?", excludeRunID)
@@ -736,9 +944,12 @@ func (d *Database) HasRecentChangeRun(rootDomain string, excludeRunID uint, sinc
 
 // GetPreviousPortCloseState returns the close state for a specific port in the
 // previous successful monitor run: "", "closed_pending", or "closed".
-func (d *Database) GetPreviousPortCloseState(rootDomain string, currentRunID uint, ip string, port int) (string, error) {
+func (d *Database) GetPreviousPortCloseState(projectID, rootDomain string, currentRunID uint, ip string, port int) (string, error) {
+	if projectID == "" {
+		projectID = "default"
+	}
 	var prevRun MonitorRun
-	q := d.DB.Where("root_domain = ? AND status = ?", rootDomain, "success")
+	q := d.DB.Where("project_id = ? AND root_domain = ? AND status = ?", projectID, rootDomain, "success")
 	if currentRunID > 0 {
 		q = q.Where("id < ?", currentRunID)
 	}
@@ -764,50 +975,63 @@ func (d *Database) GetPreviousPortCloseState(rootDomain string, currentRunID uin
 }
 
 // ListAssetDomains returns distinct domains from assets table.
-func (d *Database) ListAssetDomains() ([]string, error) {
+func (d *Database) ListAssetDomains(projectID string) ([]string, error) {
 	var domains []string
-	if err := d.DB.Model(&Asset{}).
-		Distinct("domain").
-		Where("domain <> ''").
-		Order("domain asc").
-		Pluck("domain", &domains).Error; err != nil {
+	query := d.DB.Model(&Asset{}).Distinct("domain").Where("domain <> ''")
+	if strings.TrimSpace(projectID) != "" {
+		query = query.Where("project_id = ?", strings.TrimSpace(projectID))
+	}
+	if err := query.Order("domain asc").Pluck("domain", &domains).Error; err != nil {
 		return nil, err
 	}
 	return domains, nil
 }
 
 // DeleteAllDataByRootDomain removes all related scan/monitor data for a root domain.
-func (d *Database) DeleteAllDataByRootDomain(rootDomain string) error {
+func (d *Database) DeleteAllDataByRootDomain(projectID, rootDomain string) error {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		projectID = "default"
+	}
 	pattern := "%." + rootDomain
 	return d.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorTask{}).Error; err != nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorTask{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where(
-			"root_domain = ? OR domain = ? OR domain LIKE ? OR host = ? OR host LIKE ?",
-			rootDomain, rootDomain, pattern, rootDomain, pattern,
+			"project_id = ? AND (root_domain = ? OR domain = ? OR domain LIKE ? OR host = ? OR host LIKE ?)",
+			projectID, rootDomain, rootDomain, pattern, rootDomain, pattern,
 		).
 			Delete(&Vulnerability{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("domain = ? OR domain LIKE ?", rootDomain, pattern).
+		if err := tx.Where("project_id = ? AND (domain = ? OR domain LIKE ?)", projectID, rootDomain, pattern).
 			Delete(&Port{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("domain = ? OR domain LIKE ?", rootDomain, pattern).
+		if err := tx.Where("project_id = ? AND (domain = ? OR domain LIKE ?)", projectID, rootDomain, pattern).
 			Delete(&Asset{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("root_domain = ?", rootDomain).Delete(&PortChange{}).Error; err != nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&PortChange{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("root_domain = ?", rootDomain).Delete(&AssetChange{}).Error; err != nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&AssetChange{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorRun{}).Error; err != nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorRun{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("root_domain = ?", rootDomain).Delete(&MonitorTarget{}).Error; err != nil {
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorTarget{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&AssetEdge{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&ScanJob{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&ScanStage{}).Error; err != nil {
 			return err
 		}
 		return nil
@@ -836,11 +1060,14 @@ func (d *Database) GetScanJob(jobID string) (*ScanJob, error) {
 }
 
 // ListScanJobs returns scan jobs ordered by created_at desc.
-func (d *Database) ListScanJobs(rootDomain string, limit int) ([]ScanJob, error) {
+func (d *Database) ListScanJobs(projectID, rootDomain string, limit int) ([]ScanJob, error) {
 	if limit <= 0 {
 		limit = 500
 	}
 	query := d.DB.Order("created_at desc").Limit(limit)
+	if projectID != "" {
+		query = query.Where("project_id = ?", projectID)
+	}
 	if rootDomain != "" {
 		query = query.Where("root_domain = ?", rootDomain)
 	}
@@ -881,6 +1108,14 @@ func getIntValue(data map[string]interface{}, key string) int {
 		}
 	}
 	return 0
+}
+
+func defaultProtocol(v string) string {
+	p := strings.TrimSpace(strings.ToLower(v))
+	if p == "" {
+		return "tcp"
+	}
+	return p
 }
 
 func buildRootDomain(candidates ...string) string {

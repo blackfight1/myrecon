@@ -18,6 +18,7 @@ import (
 func main() {
 	runMode := flag.String("mode", "scan", "Run mode: scan, monitor, or web")
 	webAddr := flag.String("web-addr", "0.0.0.0:8080", "API server listen address (web mode)")
+	projectID := flag.String("project", "default", "Project ID for CLI scan/monitor operations")
 	domain := flag.String("d", "", "Single target root domain")
 	domainList := flag.String("dL", "", "Root domain list file")
 	inputFile := flag.String("i", "", "Input file for ports/witness modules")
@@ -72,9 +73,13 @@ func main() {
 		if err != nil {
 			log.Fatalf("database connection failed: %v", err)
 		}
+		pid := strings.TrimSpace(*projectID)
+		if pid == "" {
+			pid = "default"
+		}
 
 		if *monitorList {
-			targets, err := database.ListMonitorTargets()
+			targets, err := database.ListMonitorTargets(pid)
 			if err != nil {
 				log.Fatalf("failed to list monitor targets: %v", err)
 			}
@@ -102,7 +107,7 @@ func main() {
 
 		if strings.TrimSpace(*monitorStop) != "" {
 			target := strings.TrimSpace(*monitorStop)
-			if err := database.StopMonitorTarget(target); err != nil {
+			if err := database.StopMonitorTarget(pid, target); err != nil {
 				log.Fatalf("failed to stop monitor target: %v", err)
 			}
 			fmt.Printf("Stopped monitor target: %s\n", target)
@@ -110,7 +115,7 @@ func main() {
 
 		if strings.TrimSpace(*monitorDelete) != "" {
 			target := strings.TrimSpace(*monitorDelete)
-			if err := database.DeleteMonitorDataByRootDomain(target); err != nil {
+			if err := database.DeleteMonitorDataByRootDomain(pid, target); err != nil {
 				log.Fatalf("failed to delete monitor data: %v", err)
 			}
 			fmt.Printf("Deleted monitor data: %s\n", target)
@@ -124,9 +129,13 @@ func main() {
 		if err != nil {
 			log.Fatalf("database connection failed: %v", err)
 		}
+		pid := strings.TrimSpace(*projectID)
+		if pid == "" {
+			pid = "default"
+		}
 
 		if *scanListDomains {
-			domains, err := database.ListAssetDomains()
+			domains, err := database.ListAssetDomains(pid)
 			if err != nil {
 				log.Fatalf("failed to list asset domains: %v", err)
 			}
@@ -142,7 +151,7 @@ func main() {
 
 		if strings.TrimSpace(*scanDeleteDomain) != "" {
 			target := strings.TrimSpace(*scanDeleteDomain)
-			if err := database.DeleteAllDataByRootDomain(target); err != nil {
+			if err := database.DeleteAllDataByRootDomain(pid, target); err != nil {
 				log.Fatalf("failed to delete domain data: %v", err)
 			}
 			fmt.Printf("Deleted all data for domain: %s\n", target)
@@ -174,6 +183,7 @@ func main() {
 		}
 		notifier := plugins.NewDingTalkNotifierFromEnv(*enableNotify)
 		runMonitorLoop(
+			strings.TrimSpace(*projectID),
 			strings.TrimSpace(*domain),
 			interval,
 			*dryRun,
@@ -275,7 +285,7 @@ func main() {
 	}
 
 	if !*dryRun && database != nil {
-		if err := saveResults(database, results); err != nil {
+		if err := saveResultsWithContext(database, results, strings.TrimSpace(*projectID), "", ""); err != nil {
 			failExit("database write failed: %v", err)
 		}
 	}
@@ -383,6 +393,7 @@ func printUsage() {
 	fmt.Println("  go run . -m subs,ports -d example.com -active-subs -dict-size 800")
 	fmt.Println()
 	fmt.Println("Main flags:")
+	fmt.Println("  -project           Project ID for data isolation (default: default)")
 	fmt.Println("  -active-subs       Enable active subdomain bruteforce (dictgen + dnsx)")
 	fmt.Println("  -dict-size         Dictionary cap for active bruteforce (default 800)")
 	fmt.Println("  -dns-resolvers     Optional resolvers file for dnsx")
@@ -838,7 +849,18 @@ func extractDomainFromURL(rawURL string) string {
 }
 
 func saveResults(database *db.Database, results []engine.Result) error {
+	return saveResultsWithContext(database, results, "", "", "")
+}
+
+func saveResultsWithContext(database *db.Database, results []engine.Result, projectID, defaultRootDomain, sourceJobID string) error {
 	fmt.Println("==> [DB] Writing results to database")
+
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		projectID = "default"
+	}
+	defaultRootDomain = strings.TrimSpace(defaultRootDomain)
+	sourceJobID = strings.TrimSpace(sourceJobID)
 
 	failureCount := 0
 	failureSamples := make([]string, 0, 10)
@@ -852,22 +874,72 @@ func saveResults(database *db.Database, results []engine.Result) error {
 		}
 	}
 
+	normalizeRoot := func(data map[string]interface{}) {
+		if data == nil {
+			return
+		}
+		if v, ok := data["root_domain"].(string); ok && strings.TrimSpace(v) != "" {
+			return
+		}
+		if defaultRootDomain != "" {
+			data["root_domain"] = defaultRootDomain
+			return
+		}
+
+		candidates := []string{
+			getStringFromMap(data, "domain"),
+			getStringFromMap(data, "host"),
+			getStringFromMap(data, "url"),
+			getStringFromMap(data, "matched_at"),
+		}
+		for _, c := range candidates {
+			c = strings.TrimSpace(c)
+			if c == "" {
+				continue
+			}
+			root := plugins.ExtractRootDomain(extractDomainFromURL(c))
+			if root != "" {
+				data["root_domain"] = root
+				return
+			}
+		}
+	}
+
 	for _, result := range results {
+		sourceModule := result.Type
 		switch result.Type {
 		case "domain":
 			if subdomain, ok := result.Data.(string); ok {
-				recordFailure("asset(domain)", database.SaveOrUpdateAsset(map[string]interface{}{"domain": subdomain}))
+				record := map[string]interface{}{
+					"project_id":    projectID,
+					"source_job_id": sourceJobID,
+					"source_module": sourceModule,
+					"domain":        subdomain,
+				}
+				normalizeRoot(record)
+				recordFailure("asset(domain)", database.SaveOrUpdateAsset(record))
 			}
 		case "web_service":
 			if data, ok := result.Data.(map[string]interface{}); ok {
+				data["project_id"] = projectID
+				data["source_job_id"] = sourceJobID
+				data["source_module"] = sourceModule
+				normalizeRoot(data)
 				recordFailure("asset(web_service)", database.SaveOrUpdateAsset(data))
 			}
 		case "port_service", "open_port":
 			if data, ok := result.Data.(map[string]interface{}); ok {
+				data["project_id"] = projectID
+				data["source_job_id"] = sourceJobID
+				data["source_module"] = sourceModule
+				normalizeRoot(data)
 				recordFailure("port", database.SaveOrUpdatePort(data))
 			}
 		case "vulnerability":
 			if data, ok := result.Data.(map[string]interface{}); ok {
+				data["project_id"] = projectID
+				data["source_job_id"] = sourceJobID
+				normalizeRoot(data)
 				recordFailure("vulnerability", database.SaveOrUpdateVulnerability(data))
 			}
 		}

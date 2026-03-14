@@ -27,9 +27,10 @@ function hostnameFromUrl(input?: string): string | undefined {
 
 export function PortsPage() {
   const { activeProject } = useWorkspace();
+  const projectId = activeProject?.id;
   const rootDomains = activeProject?.rootDomains ?? [];
-  const ports = usePorts();
-  const assets = useAssets();
+  const ports = usePorts(projectId);
+  const assets = useAssets(projectId);
 
   const scopedAssetIps = useMemo(() => {
     return new Set(

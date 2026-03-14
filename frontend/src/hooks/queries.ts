@@ -1,18 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { endpoints, type NewScanJobRequest, type CancelJobRequest, type CreateMonitorTargetRequest } from "../api/endpoints";
+import { endpoints, type NewScanJobRequest, type CancelJobRequest, type CreateMonitorTargetRequest, type AssetListQuery, type PatchVulnStatusRequest } from "../api/endpoints";
 
-export function useDashboard(rootDomain?: string) {
+function requiredProjectId(projectId?: string): string {
+  const value = (projectId ?? "").trim();
+  if (!value) throw new Error("projectId is required");
+  return value;
+}
+
+export function useDashboard(projectId?: string, rootDomain?: string) {
   return useQuery({
-    queryKey: ["dashboard", rootDomain ?? ""],
-    queryFn: () => endpoints.getDashboard(rootDomain),
+    queryKey: ["dashboard", projectId ?? "", rootDomain ?? ""],
+    queryFn: () => endpoints.getDashboard(requiredProjectId(projectId), rootDomain),
+    enabled: !!projectId,
     refetchInterval: 10000
   });
 }
 
-export function useJobs(rootDomain?: string) {
+export function useJobs(projectId?: string, rootDomain?: string) {
   return useQuery({
-    queryKey: ["jobs", rootDomain ?? ""],
-    queryFn: () => endpoints.getJobs(rootDomain),
+    queryKey: ["jobs", projectId ?? "", rootDomain ?? ""],
+    queryFn: () => endpoints.getJobs(requiredProjectId(projectId), rootDomain),
+    enabled: !!projectId,
     refetchInterval: 5000
   });
 }
@@ -39,34 +47,47 @@ export function useCancelJob() {
   });
 }
 
-export function useAssets(rootDomain?: string) {
+export function useAssets(projectId?: string, rootDomain?: string) {
   return useQuery({
-    queryKey: ["assets", rootDomain ?? ""],
-    queryFn: () => endpoints.getAssets(rootDomain),
+    queryKey: ["assets", projectId ?? "", rootDomain ?? ""],
+    queryFn: () => endpoints.getAssets(requiredProjectId(projectId), rootDomain),
+    enabled: !!projectId,
     refetchInterval: 20000
   });
 }
 
-export function usePorts(rootDomain?: string) {
+export function useAssetsPage(projectId: string | undefined, q: AssetListQuery) {
   return useQuery({
-    queryKey: ["ports", rootDomain ?? ""],
-    queryFn: () => endpoints.getPorts(rootDomain),
+    queryKey: ["assets-page", projectId ?? "", q.rootDomain ?? "", q.q ?? "", q.liveOnly ? "1" : "0", String(q.page ?? 1), String(q.pageSize ?? 50), q.sortBy ?? "", q.sortDir ?? ""],
+    queryFn: () => endpoints.getAssetsPage(requiredProjectId(projectId), q),
+    enabled: !!projectId,
     refetchInterval: 20000
   });
 }
 
-export function useVulns(rootDomain?: string) {
+export function usePorts(projectId?: string, rootDomain?: string) {
   return useQuery({
-    queryKey: ["vulns", rootDomain ?? ""],
-    queryFn: () => endpoints.getVulns(rootDomain),
+    queryKey: ["ports", projectId ?? "", rootDomain ?? ""],
+    queryFn: () => endpoints.getPorts(requiredProjectId(projectId), rootDomain),
+    enabled: !!projectId,
     refetchInterval: 20000
   });
 }
 
-export function useMonitorTargets() {
+export function useVulns(projectId?: string, rootDomain?: string) {
   return useQuery({
-    queryKey: ["monitor-targets"],
-    queryFn: endpoints.getMonitorTargets,
+    queryKey: ["vulns", projectId ?? "", rootDomain ?? ""],
+    queryFn: () => endpoints.getVulns(requiredProjectId(projectId), rootDomain),
+    enabled: !!projectId,
+    refetchInterval: 20000
+  });
+}
+
+export function useMonitorTargets(projectId?: string) {
+  return useQuery({
+    queryKey: ["monitor-targets", projectId ?? ""],
+    queryFn: () => endpoints.getMonitorTargets(projectId),
+    enabled: !!projectId,
     refetchInterval: 10000
   });
 }
@@ -85,7 +106,8 @@ export function useCreateMonitorTarget() {
 export function useStopMonitorTarget() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (domain: string) => endpoints.stopMonitorTarget(domain),
+    mutationFn: ({ projectId, domain }: { projectId: string; domain: string }) =>
+      endpoints.stopMonitorTarget(projectId, domain),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
       await qc.invalidateQueries({ queryKey: ["jobs"] });
@@ -96,7 +118,8 @@ export function useStopMonitorTarget() {
 export function useDeleteMonitorTarget() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (domain: string) => endpoints.deleteMonitorTarget(domain),
+    mutationFn: ({ projectId, domain }: { projectId: string; domain: string }) =>
+      endpoints.deleteMonitorTarget(projectId, domain),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
       await qc.invalidateQueries({ queryKey: ["monitor-runs"] });
@@ -106,36 +129,74 @@ export function useDeleteMonitorTarget() {
   });
 }
 
-export function useMonitorRuns(rootDomain?: string) {
+export function useMonitorRuns(projectId?: string, rootDomain?: string) {
   return useQuery({
-    queryKey: ["monitor-runs", rootDomain ?? ""],
-    queryFn: () => endpoints.getMonitorRuns(rootDomain),
+    queryKey: ["monitor-runs", projectId ?? "", rootDomain ?? ""],
+    queryFn: () => endpoints.getMonitorRuns(projectId, rootDomain),
+    enabled: !!projectId,
     refetchInterval: 10000
   });
 }
 
-export function useMonitorChanges(rootDomain?: string) {
+export function useMonitorChanges(projectId?: string, rootDomain?: string) {
   return useQuery({
-    queryKey: ["monitor-changes", rootDomain ?? ""],
-    queryFn: () => endpoints.getMonitorChanges(rootDomain),
+    queryKey: ["monitor-changes", projectId ?? "", rootDomain ?? ""],
+    queryFn: () => endpoints.getMonitorChanges(projectId, rootDomain),
+    enabled: !!projectId,
     refetchInterval: 10000
+  });
+}
+
+/* ── Vuln Status Management ── */
+
+export function usePatchVulnStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: PatchVulnStatusRequest) =>
+      endpoints.patchVulnStatus(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["vulns"] });
+      await qc.invalidateQueries({ queryKey: ["vuln-events"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+    }
+  });
+}
+
+export function useVulnEvents(projectId?: string, vulnId?: number) {
+  return useQuery({
+    queryKey: ["vuln-events", projectId ?? "", vulnId ?? ""],
+    queryFn: () => endpoints.getVulnEvents(projectId!, vulnId != null ? String(vulnId) : undefined),
+    enabled: !!projectId
+  });
+}
+
+/* ── Enable Monitor Target ── */
+
+export function useEnableMonitorTarget() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateMonitorTargetRequest) => endpoints.createMonitorTarget(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
+      await qc.invalidateQueries({ queryKey: ["jobs"] });
+    }
   });
 }
 
 /* ── Screenshots ── */
 
-export function useScreenshotDomains() {
+export function useScreenshotDomains(projectId?: string) {
   return useQuery({
-    queryKey: ["screenshot-domains"],
-    queryFn: endpoints.getScreenshotDomains,
+    queryKey: ["screenshot-domains", projectId ?? ""],
+    queryFn: () => endpoints.getScreenshotDomains(projectId),
     refetchInterval: 30000
   });
 }
 
-export function useScreenshots(rootDomain: string) {
+export function useScreenshots(rootDomain: string, projectId?: string) {
   return useQuery({
-    queryKey: ["screenshots", rootDomain],
-    queryFn: () => endpoints.getScreenshots(rootDomain),
+    queryKey: ["screenshots", projectId ?? "", rootDomain],
+    queryFn: () => endpoints.getScreenshots(rootDomain, projectId),
     enabled: !!rootDomain,
     refetchInterval: 30000
   });
@@ -157,14 +218,6 @@ export function useUpdateSettings() {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["settings"] });
     }
-  });
-}
-
-export function useToolStatus() {
-  return useQuery({
-    queryKey: ["tool-status"],
-    queryFn: endpoints.getToolStatus,
-    refetchInterval: 60000
   });
 }
 

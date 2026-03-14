@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -19,6 +18,8 @@ import (
 	"hunter/internal/db"
 	"hunter/internal/engine"
 	"hunter/internal/plugins"
+
+	"gorm.io/gorm"
 )
 
 const (
@@ -93,6 +94,7 @@ type trendPointResponse struct {
 
 type jobOverviewResponse struct {
 	ID           string   `json:"id"`
+	ProjectID    string   `json:"projectId,omitempty"`
 	RootDomain   string   `json:"rootDomain"`
 	Mode         string   `json:"mode"`
 	Modules      []string `json:"modules"`
@@ -107,6 +109,7 @@ type jobOverviewResponse struct {
 }
 
 type createJobRequest struct {
+	ProjectID    string   `json:"projectId"`
 	Domain       string   `json:"domain"`
 	Mode         string   `json:"mode"`
 	Modules      []string `json:"modules"`
@@ -130,6 +133,13 @@ type assetResponse struct {
 	LastSeen     string   `json:"lastSeen,omitempty"`
 }
 
+type pagedAssetsResponse struct {
+	Items    []assetResponse `json:"items"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"pageSize"`
+	Total    int64           `json:"total"`
+}
+
 type portResponse struct {
 	ID        int    `json:"id"`
 	AssetID   int    `json:"assetId,omitempty"`
@@ -145,26 +155,35 @@ type portResponse struct {
 }
 
 type vulnerabilityResponse struct {
-	ID           int    `json:"id"`
-	RootDomain   string `json:"rootDomain,omitempty"`
-	Domain       string `json:"domain,omitempty"`
-	Host         string `json:"host,omitempty"`
-	URL          string `json:"url,omitempty"`
-	IP           string `json:"ip,omitempty"`
-	TemplateID   string `json:"templateId"`
-	TemplateName string `json:"templateName,omitempty"`
-	Severity     string `json:"severity,omitempty"`
-	CVE          string `json:"cve,omitempty"`
-	MatcherName  string `json:"matcherName,omitempty"`
-	Description  string `json:"description,omitempty"`
-	Reference    string `json:"reference,omitempty"`
-	MatchedAt    string `json:"matchedAt"`
-	Fingerprint  string `json:"fingerprint"`
-	LastSeen     string `json:"lastSeen,omitempty"`
+	ID               int    `json:"id"`
+	RootDomain       string `json:"rootDomain,omitempty"`
+	Domain           string `json:"domain,omitempty"`
+	Host             string `json:"host,omitempty"`
+	URL              string `json:"url,omitempty"`
+	IP               string `json:"ip,omitempty"`
+	TemplateID       string `json:"templateId"`
+	TemplateName     string `json:"templateName,omitempty"`
+	Severity         string `json:"severity,omitempty"`
+	CVE              string `json:"cve,omitempty"`
+	MatcherName      string `json:"matcherName,omitempty"`
+	Description      string `json:"description,omitempty"`
+	Reference        string `json:"reference,omitempty"`
+	MatchedAt        string `json:"matchedAt"`
+	Fingerprint      string `json:"fingerprint"`
+	Status           string `json:"status,omitempty"`
+	Assignee         string `json:"assignee,omitempty"`
+	TicketRef        string `json:"ticketRef,omitempty"`
+	DueAt            string `json:"dueAt,omitempty"`
+	FixedAt          string `json:"fixedAt,omitempty"`
+	VerifiedAt       string `json:"verifiedAt,omitempty"`
+	ReopenCount      int    `json:"reopenCount,omitempty"`
+	LastTransitionAt string `json:"lastTransitionAt,omitempty"`
+	LastSeen         string `json:"lastSeen,omitempty"`
 }
 
 type monitorTargetResponse struct {
 	ID           int    `json:"id"`
+	ProjectID    string `json:"projectId,omitempty"`
 	RootDomain   string `json:"rootDomain"`
 	Enabled      bool   `json:"enabled"`
 	BaselineDone bool   `json:"baselineDone"`
@@ -175,6 +194,7 @@ type monitorTargetResponse struct {
 
 type monitorRunResponse struct {
 	ID            int    `json:"id"`
+	ProjectID     string `json:"projectId,omitempty"`
 	RootDomain    string `json:"rootDomain"`
 	Status        string `json:"status"`
 	StartedAt     string `json:"startedAt"`
@@ -190,6 +210,7 @@ type monitorRunResponse struct {
 
 type monitorChangeResponse struct {
 	RunID      int    `json:"runId"`
+	ProjectID  string `json:"projectId,omitempty"`
 	RootDomain string `json:"rootDomain"`
 	ChangeType string `json:"changeType"`
 	Domain     string `json:"domain,omitempty"`
@@ -201,6 +222,7 @@ type monitorChangeResponse struct {
 }
 
 type screenshotDomainResponse struct {
+	ProjectID       string `json:"projectId,omitempty"`
 	RootDomain      string `json:"rootDomain"`
 	ScreenshotCount int    `json:"screenshotCount"`
 	ScreenshotDir   string `json:"screenshotDir"`
@@ -209,6 +231,7 @@ type screenshotDomainResponse struct {
 
 type screenshotItemResponse struct {
 	ID           int    `json:"id"`
+	ProjectID    string `json:"projectId,omitempty"`
 	URL          string `json:"url"`
 	Filename     string `json:"filename"`
 	Title        string `json:"title,omitempty"`
@@ -223,7 +246,6 @@ type systemSettingsResponse struct {
 	Database      databaseSettingsResponse     `json:"database"`
 	Notifications notificationSettingsResponse `json:"notifications"`
 	Scanner       scannerSettingsResponse      `json:"scanner"`
-	Tools         []toolStatusResponse         `json:"tools"`
 }
 
 type databaseSettingsResponse struct {
@@ -249,17 +271,9 @@ type scannerSettingsResponse struct {
 	DefaultNuclei     bool   `json:"defaultNuclei"`
 }
 
-type toolStatusResponse struct {
-	Name      string `json:"name"`
-	Installed bool   `json:"installed"`
-	Version   string `json:"version,omitempty"`
-	Path      string `json:"path,omitempty"`
-}
-
 type settingsPatchRequest struct {
-	Database      *databaseSettingsPatch     `json:"database"`
-	Notifications *notificationSettingsPatch `json:"notifications"`
-	Scanner       *scannerSettingsPatch      `json:"scanner"`
+	Database *databaseSettingsPatch `json:"database"`
+	Scanner  *scannerSettingsPatch  `json:"scanner"`
 }
 
 type databaseSettingsPatch struct {
@@ -268,12 +282,6 @@ type databaseSettingsPatch struct {
 	User    *string `json:"user"`
 	DBName  *string `json:"dbname"`
 	SSLMode *string `json:"sslmode"`
-}
-
-type notificationSettingsPatch struct {
-	DingTalkWebhook *string `json:"dingtalkWebhook"`
-	DingTalkSecret  *string `json:"dingtalkSecret"`
-	Enabled         *bool   `json:"enabled"`
 }
 
 type scannerSettingsPatch struct {
@@ -290,8 +298,62 @@ type monitorChangeSortItem struct {
 }
 
 type createMonitorRequest struct {
+	ProjectID   string `json:"projectId"`
 	Domain      string `json:"domain"`
 	IntervalSec int    `json:"intervalSec"`
+}
+
+type projectResponse struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Owner       string   `json:"owner,omitempty"`
+	Tags        []string `json:"tags"`
+	Archived    bool     `json:"archived"`
+	RootDomains []string `json:"rootDomains"`
+	CreatedAt   string   `json:"createdAt,omitempty"`
+	UpdatedAt   string   `json:"updatedAt,omitempty"`
+	LastScanAt  string   `json:"lastScanAt,omitempty"`
+}
+
+type projectUpsertRequest struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Owner       string   `json:"owner"`
+	Tags        []string `json:"tags"`
+	RootDomains []string `json:"rootDomains"`
+	Archived    *bool    `json:"archived"`
+}
+
+type vulnStatusPatchRequest struct {
+	VulnID    int    `json:"vulnId"`
+	ProjectID string `json:"projectId"`
+	Status    string `json:"status"`
+	Reason    string `json:"reason"`
+	Actor     string `json:"actor"`
+	Assignee  string `json:"assignee"`
+	TicketRef string `json:"ticketRef"`
+}
+
+type vulnEventResponse struct {
+	ID         int    `json:"id"`
+	ProjectID  string `json:"projectId"`
+	VulnID     int    `json:"vulnId"`
+	Action     string `json:"action"`
+	FromStatus string `json:"fromStatus"`
+	ToStatus   string `json:"toStatus"`
+	Actor      string `json:"actor"`
+	Reason     string `json:"reason"`
+	CreatedAt  string `json:"createdAt"`
+}
+
+type edgeResponse struct {
+	SrcType  string `json:"srcType"`
+	SrcID    string `json:"srcId"`
+	DstType  string `json:"dstType"`
+	DstID    string `json:"dstId"`
+	Relation string `json:"relation"`
 }
 
 // NewServer creates a new API server.
@@ -342,12 +404,16 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) registerRoutes() {
+	s.mux.HandleFunc("/api/projects", s.handleProjects)
 	s.mux.HandleFunc("/api/dashboard/summary", s.handleDashboard)
 	s.mux.HandleFunc("/api/jobs", s.handleJobs)
 	s.mux.HandleFunc("/api/jobs/cancel", s.handleCancelJob)
 	s.mux.HandleFunc("/api/assets", s.handleAssets)
 	s.mux.HandleFunc("/api/ports", s.handlePorts)
 	s.mux.HandleFunc("/api/vulns", s.handleVulns)
+	s.mux.HandleFunc("/api/vulns/status", s.handlePatchVulnStatus)
+	s.mux.HandleFunc("/api/vulns/events", s.handleVulnEvents)
+	s.mux.HandleFunc("/api/graph/relations", s.handleRelations)
 	s.mux.HandleFunc("/api/monitor/targets", s.handleMonitorTargets)
 	s.mux.HandleFunc("/api/monitor/runs", s.handleMonitorRuns)
 	s.mux.HandleFunc("/api/monitor/changes", s.handleMonitorChanges)
@@ -355,7 +421,6 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/screenshots/file/", s.handleScreenshotFile)
 	s.mux.HandleFunc("/api/screenshots/", s.handleScreenshots)
 	s.mux.HandleFunc("/api/settings", s.handleSettings)
-	s.mux.HandleFunc("/api/settings/tools", s.handleToolStatus)
 	s.mux.HandleFunc("/api/settings/test-notify", s.handleTestNotify)
 }
 
@@ -369,6 +434,305 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		var projects []db.Project
+		if err := s.db.DB.Preload("Scopes", "enabled = ?", true).Where("archived = ?", false).Order("created_at desc").Find(&projects).Error; err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		resp := make([]projectResponse, 0, len(projects))
+		for _, p := range projects {
+			rootDomains := make([]string, 0, len(p.Scopes))
+			for _, sc := range p.Scopes {
+				rootDomains = append(rootDomains, sc.RootDomain)
+			}
+			sort.Strings(rootDomains)
+			resp = append(resp, projectResponse{
+				ID:          p.ID,
+				Name:        p.Name,
+				Description: p.Description,
+				Owner:       p.Owner,
+				Tags:        decodeJSONBStrings(p.Tags),
+				Archived:    p.Archived,
+				RootDomains: rootDomains,
+				CreatedAt:   timeToISO(p.CreatedAt),
+				UpdatedAt:   timeToISO(p.UpdatedAt),
+				LastScanAt:  timePtrToISO(p.LastScanAt),
+			})
+		}
+		writeJSON(w, http.StatusOK, resp)
+	case http.MethodPost:
+		var req projectUpsertRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		req.Name = strings.TrimSpace(req.Name)
+		if req.Name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		rootDomains := normalizeRootDomains(req.RootDomains)
+		if len(rootDomains) == 0 {
+			writeError(w, http.StatusBadRequest, "at least one root domain is required")
+			return
+		}
+		id := strings.TrimSpace(req.ID)
+		if id == "" {
+			id = fmt.Sprintf("project_%d", time.Now().UnixNano())
+		}
+		tagsJSON, _ := json.Marshal(dedupTrimmed(req.Tags))
+		project := db.Project{
+			ID:          id,
+			Name:        req.Name,
+			Description: strings.TrimSpace(req.Description),
+			Owner:       strings.TrimSpace(req.Owner),
+			Tags:        tagsJSON,
+			Archived:    false,
+		}
+		err := s.db.DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&project).Error; err != nil {
+				return err
+			}
+			for _, rd := range rootDomains {
+				sc := db.ProjectScope{
+					ProjectID:  id,
+					RootDomain: rd,
+					Enabled:    true,
+				}
+				if err := tx.Create(&sc).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.writeAudit(id, actorFromRequest(r), "project_create", "project", id, map[string]interface{}{
+			"name": req.Name, "rootDomains": rootDomains,
+		}, r)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "id": id})
+	case http.MethodPut:
+		var req projectUpsertRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		id := strings.TrimSpace(req.ID)
+		if id == "" {
+			writeError(w, http.StatusBadRequest, "id is required")
+			return
+		}
+		updates := map[string]interface{}{}
+		if name := strings.TrimSpace(req.Name); name != "" {
+			updates["name"] = name
+		}
+		if req.Description != "" {
+			updates["description"] = strings.TrimSpace(req.Description)
+		}
+		if req.Owner != "" {
+			updates["owner"] = strings.TrimSpace(req.Owner)
+		}
+		if req.Archived != nil {
+			updates["archived"] = *req.Archived
+		}
+		if req.Tags != nil {
+			tagsJSON, _ := json.Marshal(dedupTrimmed(req.Tags))
+			updates["tags"] = tagsJSON
+		}
+		rootDomains := normalizeRootDomains(req.RootDomains)
+		err := s.db.DB.Transaction(func(tx *gorm.DB) error {
+			if len(updates) > 0 {
+				if err := tx.Model(&db.Project{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+					return err
+				}
+			}
+			if req.Archived != nil && *req.Archived {
+				if err := tx.Model(&db.MonitorTarget{}).Where("project_id = ?", id).Update("enabled", false).Error; err != nil {
+					return err
+				}
+				now := time.Now()
+				if err := tx.Model(&db.MonitorTask{}).
+					Where("project_id = ? AND status IN ?", id, []string{"pending", "running"}).
+					Updates(map[string]interface{}{
+						"status":      "canceled",
+						"finished_at": now,
+					}).Error; err != nil {
+					return err
+				}
+			}
+			if req.RootDomains != nil {
+				if err := tx.Where("project_id = ?", id).Delete(&db.ProjectScope{}).Error; err != nil {
+					return err
+				}
+				for _, rd := range rootDomains {
+					sc := db.ProjectScope{ProjectID: id, RootDomain: rd, Enabled: true}
+					if err := tx.Create(&sc).Error; err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.writeAudit(id, actorFromRequest(r), "project_update", "project", id, map[string]interface{}{
+			"updatedFields": keysOfMap(updates),
+		}, r)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "id": id})
+	case http.MethodDelete:
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			writeError(w, http.StatusBadRequest, "id is required")
+			return
+		}
+		if err := s.db.ArchiveProject(id); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.writeAudit(id, actorFromRequest(r), "project_archive", "project", id, nil, r)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "id": id})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handlePatchVulnStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req vulnStatusPatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	status := strings.ToLower(strings.TrimSpace(req.Status))
+	if req.VulnID <= 0 || strings.TrimSpace(req.ProjectID) == "" || status == "" {
+		writeError(w, http.StatusBadRequest, "vulnId, projectId and status are required")
+		return
+	}
+	valid := map[string]bool{
+		"open": true, "triaged": true, "confirmed": true, "accepted_risk": true,
+		"fixed": true, "false_positive": true, "duplicate": true,
+	}
+	if !valid[status] {
+		writeError(w, http.StatusBadRequest, "invalid status")
+		return
+	}
+	var vuln db.Vulnerability
+	if err := s.db.DB.Where("id = ? AND project_id = ?", req.VulnID, req.ProjectID).First(&vuln).Error; err != nil {
+		writeError(w, http.StatusNotFound, "vulnerability not found")
+		return
+	}
+	now := time.Now()
+	updates := map[string]interface{}{
+		"status":             status,
+		"last_transition_at": &now,
+	}
+	if strings.TrimSpace(req.Assignee) != "" {
+		updates["assignee"] = strings.TrimSpace(req.Assignee)
+	}
+	if strings.TrimSpace(req.TicketRef) != "" {
+		updates["ticket_ref"] = strings.TrimSpace(req.TicketRef)
+	}
+	if status == "fixed" {
+		updates["fixed_at"] = &now
+	}
+	if status == "open" && vuln.Status == "fixed" {
+		updates["reopen_count"] = vuln.ReopenCount + 1
+	}
+	if err := s.db.DB.Model(&db.Vulnerability{}).Where("id = ? AND project_id = ?", req.VulnID, req.ProjectID).Updates(updates).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	event := db.VulnEvent{
+		ProjectID:  req.ProjectID,
+		VulnID:     uint(req.VulnID),
+		Action:     "status_change",
+		FromStatus: vuln.Status,
+		ToStatus:   status,
+		Actor:      defaultActor(req.Actor),
+		Reason:     strings.TrimSpace(req.Reason),
+	}
+	if err := s.db.DB.Create(&event).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeAudit(req.ProjectID, event.Actor, "vuln_status_change", "vulnerability", strconv.Itoa(req.VulnID), map[string]interface{}{
+		"from": vuln.Status, "to": status, "reason": event.Reason,
+	}, r)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "ok", "vulnId": req.VulnID, "from": vuln.Status, "to": status,
+	})
+}
+
+func (s *Server) handleVulnEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
+	vulnID, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("vuln_id")))
+	query := s.db.DB.Where("project_id = ?", projectID).Order("created_at desc").Limit(500)
+	if vulnID > 0 {
+		query = query.Where("vuln_id = ?", vulnID)
+	}
+	var events []db.VulnEvent
+	if err := query.Find(&events).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := make([]vulnEventResponse, 0, len(events))
+	for _, e := range events {
+		resp = append(resp, vulnEventResponse{
+			ID: int(e.ID), ProjectID: e.ProjectID, VulnID: int(e.VulnID), Action: e.Action,
+			FromStatus: e.FromStatus, ToStatus: e.ToStatus, Actor: e.Actor, Reason: e.Reason,
+			CreatedAt: timeToISO(e.CreatedAt),
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleRelations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
+	rd := normalizeRootDomain(r.URL.Query().Get("root_domain"))
+	query := s.db.DB.Where("project_id = ?", projectID).Order("updated_at desc").Limit(1000)
+	if rd != "" {
+		query = query.Where("root_domain = ?", rd)
+	}
+	var edges []db.AssetEdge
+	if err := query.Find(&edges).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := make([]edgeResponse, 0, len(edges))
+	for _, e := range edges {
+		resp = append(resp, edgeResponse{
+			SrcType: e.SrcType, SrcID: e.SrcID, DstType: e.DstType, DstID: e.DstID, Relation: e.Relation,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // ──────────────────────────────────────────
@@ -398,14 +762,14 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 	log.Printf("[Scheduler] executing monitor task %d for %s", task.ID, rootDomain)
 
 	// Create a monitor run record
-	run, err := s.db.CreateMonitorRun(rootDomain)
+	run, err := s.db.CreateMonitorRun(task.ProjectID, rootDomain)
 	if err != nil {
 		log.Printf("[Scheduler] failed to create monitor run: %v", err)
 		_ = s.db.HandleMonitorTaskFailure(task, fmt.Sprintf("create run failed: %v", err))
 		return
 	}
 
-	target, err := s.db.GetOrCreateMonitorTarget(rootDomain)
+	target, err := s.db.GetOrCreateMonitorTarget(task.ProjectID, rootDomain)
 	if err != nil {
 		log.Printf("[Scheduler] failed to get monitor target: %v", err)
 		_ = s.db.CompleteMonitorRun(run.ID, "failed", err.Error(), 0, 0, 0, 0, 0)
@@ -432,12 +796,12 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 	allResults := append(subResults, networkResults...)
 
 	// Save results to DB
-	if dbErr := s.saveResultsToDB(allResults); dbErr != nil {
+	if dbErr := s.saveResultsToDB(task.ProjectID, rootDomain, fmt.Sprintf("mon-run-%d", run.ID), allResults); dbErr != nil {
 		log.Printf("[Scheduler] DB save warning: %v", dbErr)
 	}
 
 	// Detect changes
-	newLive, webChanged, portOpened, portClosed, svcChanged := s.detectChanges(rootDomain, run.ID, target)
+	newLive, webChanged, portOpened, portClosed, svcChanged := s.detectChanges(task.ProjectID, rootDomain, run.ID, target)
 
 	// Complete run
 	status := "success"
@@ -445,7 +809,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 
 	// Update target baseline
 	now := time.Now()
-	_ = s.db.UpdateMonitorTarget(rootDomain, true, now)
+	_ = s.db.UpdateMonitorTarget(task.ProjectID, rootDomain, true, now)
 
 	// Complete task and schedule next
 	_ = s.db.CompleteMonitorTaskSuccess(task.ID)
@@ -473,7 +837,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 }
 
 // detectChanges compares current state with previous baseline.
-func (s *Server) detectChanges(rootDomain string, runID uint, target *db.MonitorTarget) (newLive, webChanged, portOpened, portClosed, svcChanged int) {
+func (s *Server) detectChanges(projectID, rootDomain string, runID uint, target *db.MonitorTarget) (newLive, webChanged, portOpened, portClosed, svcChanged int) {
 	if !target.BaselineDone {
 		// First run = baseline, no changes to detect
 		return 0, 0, 0, 0, 0
@@ -482,9 +846,10 @@ func (s *Server) detectChanges(rootDomain string, runID uint, target *db.Monitor
 	// Detect new live subdomains (created in last interval)
 	recentAssets, _ := s.db.GetRecentAssets(target.LastRunAt.Add(-1 * time.Minute))
 	for _, a := range recentAssets {
-		if a.URL != "" && matchesRootDomain(a.Domain, rootDomain) {
+		if a.ProjectID == projectID && a.URL != "" && matchesRootDomain(a.Domain, rootDomain) {
 			newLive++
 			_ = s.db.SaveAssetChange(&db.AssetChange{
+				ProjectID:  projectID,
 				RunID:      runID,
 				RootDomain: rootDomain,
 				ChangeType: "new_live",
@@ -503,9 +868,10 @@ func (s *Server) detectChanges(rootDomain string, runID uint, target *db.Monitor
 	}
 	recentPorts, _ := s.db.GetRecentPorts(since)
 	for _, p := range recentPorts {
-		if matchesRootDomain(p.Domain, rootDomain) {
+		if p.ProjectID == projectID && matchesRootDomain(p.Domain, rootDomain) {
 			portOpened++
 			_ = s.db.SavePortChange(&db.PortChange{
+				ProjectID:  projectID,
 				RunID:      runID,
 				RootDomain: rootDomain,
 				ChangeType: "opened",
@@ -533,6 +899,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	since24h := now.Add(-24 * time.Hour)
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
 
 	var (
 		jobsRunningScans int64
@@ -546,38 +917,41 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// Count running scan jobs
-	s.db.DB.Model(&db.ScanJob{}).
-		Where("status IN ?", []string{"running", "pending"}).
-		Count(&jobsRunningScans)
-	s.db.DB.Model(&db.MonitorTask{}).
-		Where("status IN ?", []string{"running", "pending"}).
-		Count(&jobsRunningTasks)
+	qScanRunning := s.db.DB.Model(&db.ScanJob{}).
+		Where("project_id = ? AND status IN ?", projectID, []string{"running", "pending"})
+	qTaskRunning := s.db.DB.Model(&db.MonitorTask{}).
+		Where("project_id = ? AND status IN ?", projectID, []string{"running", "pending"})
+	qScanRunning.Count(&jobsRunningScans)
+	qTaskRunning.Count(&jobsRunningTasks)
 
 	// Count success/failed in 24h (scan_jobs + monitor_runs)
 	var scanSuccess, scanFailed int64
-	s.db.DB.Model(&db.ScanJob{}).
-		Where("status = ? AND finished_at >= ?", "success", since24h).
-		Count(&scanSuccess)
-	s.db.DB.Model(&db.ScanJob{}).
-		Where("status = ? AND finished_at >= ?", "failed", since24h).
-		Count(&scanFailed)
+	qScanSuccess := s.db.DB.Model(&db.ScanJob{}).
+		Where("project_id = ? AND status = ? AND finished_at >= ?", projectID, "success", since24h)
+	qScanFailed := s.db.DB.Model(&db.ScanJob{}).
+		Where("project_id = ? AND status = ? AND finished_at >= ?", projectID, "failed", since24h)
+	qScanSuccess.Count(&scanSuccess)
+	qScanFailed.Count(&scanFailed)
 	var monSuccess, monFailed int64
-	s.db.DB.Model(&db.MonitorRun{}).
-		Where("status = ? AND COALESCE(finished_at, updated_at) >= ?", "success", since24h).
-		Count(&monSuccess)
-	s.db.DB.Model(&db.MonitorRun{}).
-		Where("status = ? AND COALESCE(finished_at, updated_at) >= ?", "failed", since24h).
-		Count(&monFailed)
+	qMonSuccess := s.db.DB.Model(&db.MonitorRun{}).
+		Where("project_id = ? AND status = ? AND COALESCE(finished_at, updated_at) >= ?", projectID, "success", since24h)
+	qMonFailed := s.db.DB.Model(&db.MonitorRun{}).
+		Where("project_id = ? AND status = ? AND COALESCE(finished_at, updated_at) >= ?", projectID, "failed", since24h)
+	qMonSuccess.Count(&monSuccess)
+	qMonFailed.Count(&monFailed)
 	jobsSuccess24h = scanSuccess + monSuccess
 	jobsFailed24h = scanFailed + monFailed
 
-	s.db.DB.Model(&db.Asset{}).Where("created_at >= ?", since24h).Count(&newSub24h)
-	s.db.DB.Model(&db.Port{}).Where("created_at >= ?", since24h).Count(&newPorts24h)
-	s.db.DB.Model(&db.Vulnerability{}).Where("created_at >= ?", since24h).Count(&newVulns24h)
-	s.db.DB.Model(&db.ScanJob{}).
+	qAsset24 := s.db.DB.Model(&db.Asset{}).Where("project_id = ? AND created_at >= ?", projectID, since24h)
+	qPort24 := s.db.DB.Model(&db.Port{}).Where("project_id = ? AND created_at >= ?", projectID, since24h)
+	qVuln24 := s.db.DB.Model(&db.Vulnerability{}).Where("project_id = ? AND created_at >= ?", projectID, since24h)
+	qAvgDuration := s.db.DB.Model(&db.ScanJob{}).
 		Select("COALESCE(AVG(duration_sec), 0)").
-		Where("status = ? AND finished_at >= ?", "success", since24h).
-		Scan(&avgDuration)
+		Where("project_id = ? AND status = ? AND finished_at >= ?", projectID, "success", since24h)
+	qAsset24.Count(&newSub24h)
+	qPort24.Count(&newPorts24h)
+	qVuln24.Count(&newVulns24h)
+	qAvgDuration.Scan(&avgDuration)
 
 	trend := make([]trendPointResponse, 0, 7)
 	for i := 6; i >= 0; i-- {
@@ -586,9 +960,12 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		dayEnd := dayStart.Add(24 * time.Hour)
 
 		var subCount, portCount, vulnCount int64
-		s.db.DB.Model(&db.Asset{}).Where("created_at >= ? AND created_at < ?", dayStart, dayEnd).Count(&subCount)
-		s.db.DB.Model(&db.Port{}).Where("created_at >= ? AND created_at < ?", dayStart, dayEnd).Count(&portCount)
-		s.db.DB.Model(&db.Vulnerability{}).Where("created_at >= ? AND created_at < ?", dayStart, dayEnd).Count(&vulnCount)
+		qSub := s.db.DB.Model(&db.Asset{}).Where("project_id = ? AND created_at >= ? AND created_at < ?", projectID, dayStart, dayEnd)
+		qPort := s.db.DB.Model(&db.Port{}).Where("project_id = ? AND created_at >= ? AND created_at < ?", projectID, dayStart, dayEnd)
+		qVuln := s.db.DB.Model(&db.Vulnerability{}).Where("project_id = ? AND created_at >= ? AND created_at < ?", projectID, dayStart, dayEnd)
+		qSub.Count(&subCount)
+		qPort.Count(&portCount)
+		qVuln.Count(&vulnCount)
 
 		trend = append(trend, trendPointResponse{
 			Date:            dayStart.Format("2006-01-02"),
@@ -614,7 +991,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 // ──────────────────────────────────────────
-// Assets / Ports / Vulns (unchanged logic)
+// Assets / Ports / Vulns
 // ──────────────────────────────────────────
 
 func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
@@ -622,14 +999,71 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
+	paged := isTruthy(r.URL.Query().Get("paged"))
+	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	liveOnly := isTruthy(r.URL.Query().Get("live_only"))
 
-	var assets []db.Asset
-	query := s.db.DB.Order("created_at desc").Limit(maxListRows)
-
+	base := s.db.DB.Model(&db.Asset{}).Where("project_id = ?", projectID)
 	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
 		pattern := "%." + rd
-		query = query.Where("domain = ? OR domain LIKE ?", rd, pattern)
+		base = base.Where("domain = ? OR domain LIKE ?", rd, pattern)
 	}
+	if search != "" {
+		pattern := "%" + search + "%"
+		base = base.Where(
+			"LOWER(domain) LIKE ? OR LOWER(url) LIKE ? OR LOWER(ip) LIKE ? OR LOWER(title) LIKE ?",
+			pattern, pattern, pattern, pattern,
+		)
+	}
+	if liveOnly {
+		base = base.Where("status_code > 0")
+	}
+
+	var assets []db.Asset
+	query := base.Order(resolveAssetOrder(r.URL.Query().Get("sort_by"), r.URL.Query().Get("sort_dir")))
+	if paged {
+		page := parseBoundedInt(r.URL.Query().Get("page"), 1, 1, 100000)
+		pageSize := parseBoundedInt(r.URL.Query().Get("page_size"), 50, 10, 200)
+		var total int64
+		if err := base.Count(&total).Error; err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		offset := (page - 1) * pageSize
+		query = query.Offset(offset).Limit(pageSize)
+		if err := query.Find(&assets).Error; err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		resp := make([]assetResponse, 0, len(assets))
+		for _, a := range assets {
+			resp = append(resp, assetResponse{
+				ID:           int(a.ID),
+				Domain:       a.Domain,
+				URL:          a.URL,
+				IP:           a.IP,
+				StatusCode:   a.StatusCode,
+				Title:        a.Title,
+				Technologies: decodeJSONBStrings(a.Technologies),
+				CreatedAt:    timeToISO(a.CreatedAt),
+				UpdatedAt:    timeToISO(a.UpdatedAt),
+				LastSeen:     timeToISO(a.LastSeen),
+			})
+		}
+		writeJSON(w, http.StatusOK, pagedAssetsResponse{
+			Items:    resp,
+			Page:     page,
+			PageSize: pageSize,
+			Total:    total,
+		})
+		return
+	}
+	query = query.Limit(maxListRows)
 
 	if err := query.Find(&assets).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -660,9 +1094,14 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
 
 	var ports []db.Port
-	query := s.db.DB.Order("created_at desc").Limit(maxListRows)
+	query := s.db.DB.Where("project_id = ?", projectID).Order("created_at desc").Limit(maxListRows)
 
 	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
 		pattern := "%." + rd
@@ -699,9 +1138,14 @@ func (s *Server) handleVulns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
 
 	var vulns []db.Vulnerability
-	query := s.db.DB.Order("created_at desc").Limit(maxListRows)
+	query := s.db.DB.Where("project_id = ?", projectID).Order("created_at desc").Limit(maxListRows)
 
 	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
 		pattern := "%." + rd
@@ -730,7 +1174,11 @@ func (s *Server) handleVulns(w http.ResponseWriter, r *http.Request) {
 			URL: v.URL, IP: v.IP, TemplateID: v.TemplateID, TemplateName: v.TemplateName,
 			Severity: v.Severity, CVE: v.CVE, MatcherName: v.MatcherName,
 			Description: v.Description, Reference: v.Reference, MatchedAt: matchedAt,
-			Fingerprint: v.Fingerprint, LastSeen: timeToISO(v.LastSeen),
+			Fingerprint: v.Fingerprint, Status: v.Status, Assignee: v.Assignee,
+			TicketRef: v.TicketRef, DueAt: timePtrToISO(v.DueAt),
+			FixedAt: timePtrToISO(v.FixedAt), VerifiedAt: timePtrToISO(v.VerifiedAt),
+			ReopenCount: v.ReopenCount, LastTransitionAt: timePtrToISO(v.LastTransitionAt),
+			LastSeen: timeToISO(v.LastSeen),
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -752,10 +1200,15 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	projectFilter := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectFilter == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
 	rootDomainFilter := normalizeRootDomain(r.URL.Query().Get("root_domain"))
 
 	// Fetch scan jobs from DB
-	scanJobs, err := s.db.ListScanJobs(rootDomainFilter, 300)
+	scanJobs, err := s.db.ListScanJobs(projectFilter, rootDomainFilter, 300)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -773,6 +1226,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		}
 		jobs = append(jobs, jobOverviewResponse{
 			ID:           sj.JobID,
+			ProjectID:    sj.ProjectID,
 			RootDomain:   sj.RootDomain,
 			Mode:         sj.Mode,
 			Modules:      modules,
@@ -789,7 +1243,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 
 	// Also include monitor tasks/runs
 	var tasks []db.MonitorTask
-	taskQuery := s.db.DB.Order("created_at desc").Limit(200)
+	taskQuery := s.db.DB.Where("project_id = ?", projectFilter).Order("created_at desc").Limit(200)
 	if rootDomainFilter != "" {
 		taskQuery = taskQuery.Where("root_domain = ?", rootDomainFilter)
 	}
@@ -807,7 +1261,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			jobs = append(jobs, jobOverviewResponse{
-				ID: fmt.Sprintf("task-%d", t.ID), RootDomain: t.RootDomain, Mode: "monitor",
+				ID: fmt.Sprintf("task-%d", t.ID), ProjectID: t.ProjectID, RootDomain: t.RootDomain, Mode: "monitor",
 				Modules: []string{"subs", "ports", "monitor"}, Status: normalizeHealthStatus(t.Status),
 				StartedAt: started, FinishedAt: finished, DurationSec: duration,
 				ErrorMessage: strings.TrimSpace(t.LastError),
@@ -830,10 +1284,22 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON payload")
 		return
 	}
+	projectID := strings.TrimSpace(req.ProjectID)
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "projectId is required")
+		return
+	}
 
 	rootDomain := normalizeRootDomain(req.Domain)
 	if rootDomain == "" {
 		writeError(w, http.StatusBadRequest, "domain is required")
+		return
+	}
+	if ok, err := s.isDomainInProjectScope(projectID, rootDomain); err != nil {
+		writeError(w, http.StatusInternalServerError, "project scope check failed: "+err.Error())
+		return
+	} else if !ok {
+		writeError(w, http.StatusBadRequest, "domain is not in project scope")
 		return
 	}
 
@@ -868,23 +1334,27 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if mode == "monitor" {
-		if err := s.db.EnableMonitorTarget(rootDomain, defaultMonitorIntervalSec, 3); err != nil {
+		if err := s.db.EnableMonitorTarget(projectID, rootDomain, defaultMonitorIntervalSec, 3); err != nil {
 			writeJSON(w, http.StatusOK, jobOverviewResponse{
-				ID: jobID, RootDomain: rootDomain, Mode: mode, Modules: modules,
+				ID: jobID, ProjectID: projectID, RootDomain: rootDomain, Mode: mode, Modules: modules,
 				Status: "error", StartedAt: now.Format(time.RFC3339), ErrorMessage: err.Error(),
 			})
 			return
 		}
 		writeJSON(w, http.StatusOK, jobOverviewResponse{
-			ID: jobID, RootDomain: rootDomain, Mode: mode, Modules: modules,
+			ID: jobID, ProjectID: projectID, RootDomain: rootDomain, Mode: mode, Modules: modules,
 			Status: "pending", StartedAt: now.Format(time.RFC3339),
 		})
+		s.writeAudit(projectID, actorFromRequest(r), "create_monitor", "job", jobID, map[string]interface{}{
+			"domain": rootDomain, "modules": modules,
+		}, r)
 		return
 	}
 
 	// Persist scan job to DB
 	scanJob := db.ScanJob{
 		JobID:      jobID,
+		ProjectID:  projectID,
 		RootDomain: rootDomain,
 		Mode:       mode,
 		Modules:    strings.Join(modules, ","),
@@ -896,13 +1366,16 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !req.DryRun {
-		go s.runScanAsync(jobID, rootDomain, modules, req.EnableNuclei, req.ActiveSubs, req.DictSize, req.DNSResolvers)
+		go s.runScanAsync(projectID, jobID, rootDomain, modules, req.EnableNuclei, req.ActiveSubs, req.DictSize, req.DNSResolvers)
 	}
 
 	writeJSON(w, http.StatusOK, jobOverviewResponse{
-		ID: jobID, RootDomain: rootDomain, Mode: mode, Modules: modules,
+		ID: jobID, ProjectID: projectID, RootDomain: rootDomain, Mode: mode, Modules: modules,
 		Status: "pending", StartedAt: now.Format(time.RFC3339),
 	})
+	s.writeAudit(projectID, actorFromRequest(r), "create_scan", "job", jobID, map[string]interface{}{
+		"domain": rootDomain, "modules": modules, "dryRun": req.DryRun,
+	}, r)
 }
 
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
@@ -928,12 +1401,17 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 
 	// Update DB
 	_ = s.db.CancelScanJob(body.JobID)
+	if job, err := s.db.GetScanJob(body.JobID); err == nil {
+		s.writeAudit(job.ProjectID, actorFromRequest(r), "cancel_scan", "job", body.JobID, map[string]interface{}{
+			"rootDomain": job.RootDomain,
+		}, r)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "canceled", "jobId": body.JobID})
 }
 
 // runScanAsync executes the scan pipeline in a background goroutine.
-func (s *Server) runScanAsync(jobID, rootDomain string, modules []string, enableNuclei, activeSubs bool, dictSize int, dnsResolvers string) {
+func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []string, enableNuclei, activeSubs bool, dictSize int, dnsResolvers string) {
 	startTime := time.Now()
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -950,6 +1428,14 @@ func (s *Server) runScanAsync(jobID, rootDomain string, modules []string, enable
 
 	nowStart := startTime
 	_ = s.db.UpdateScanJob(jobID, map[string]interface{}{"status": "running", "started_at": nowStart})
+	_ = s.db.DB.Create(&db.ScanStage{
+		ProjectID: projectID,
+		JobID:     jobID,
+		Stage:     "pipeline",
+		Module:    strings.Join(modules, ","),
+		Status:    "running",
+		StartedAt: &nowStart,
+	}).Error
 
 	log.Printf("[Scan] Job %s started for %s, modules=%v", jobID, rootDomain, modules)
 
@@ -984,7 +1470,7 @@ func (s *Server) runScanAsync(jobID, rootDomain string, modules []string, enable
 	// Check for cancellation
 	select {
 	case <-ctx.Done():
-		s.finishScan(jobID, startTime, nil, fmt.Errorf("canceled"))
+		s.finishScan(projectID, rootDomain, jobID, startTime, nil, fmt.Errorf("canceled"))
 		return
 	default:
 	}
@@ -994,7 +1480,7 @@ func (s *Server) runScanAsync(jobID, rootDomain string, modules []string, enable
 		allResults = append(allResults, subResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("subdomain collection failed: %v", err)
-			s.finishScan(jobID, startTime, allResults, scanErr)
+			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr)
 			return
 		}
 
@@ -1023,12 +1509,12 @@ func (s *Server) runScanAsync(jobID, rootDomain string, modules []string, enable
 		}
 	}
 
-	s.finishScan(jobID, startTime, allResults, scanErr)
+	s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr)
 }
 
-func (s *Server) finishScan(jobID string, startTime time.Time, results []engine.Result, scanErr error) {
+func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.Time, results []engine.Result, scanErr error) {
 	duration := int(time.Since(startTime).Seconds())
-	dbErr := s.saveResultsToDB(results)
+	dbErr := s.saveResultsToDB(projectID, rootDomain, jobID, results)
 
 	finalStatus := "success"
 	errMsg := ""
@@ -1051,9 +1537,20 @@ func (s *Server) finishScan(jobID string, startTime time.Time, results []engine.
 		"port_cnt":      counts["ports"],
 		"vuln_cnt":      counts["vulnerabilities"],
 	})
+	_ = s.db.DB.Model(&db.ScanStage{}).
+		Where("project_id = ? AND job_id = ? AND stage = ? AND status = ?", projectID, jobID, "pipeline", "running").
+		Updates(map[string]interface{}{
+			"status":       finalStatus,
+			"output_count": len(results),
+			"error":        errMsg,
+			"finished_at":  &now,
+		}).Error
 
 	log.Printf("[Scan] Job %s finished: status=%s duration=%ds subs=%d ports=%d vulns=%d",
 		jobID, finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"])
+	s.writeAudit(projectID, "system", "finish_scan", "job", jobID, map[string]interface{}{
+		"status": finalStatus, "durationSec": duration, "subdomains": counts["subdomains"], "ports": counts["ports"], "vulns": counts["vulnerabilities"],
+	}, nil)
 }
 
 // ──────────────────────────────────────────
@@ -1120,26 +1617,60 @@ func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, 
 	return pipeline.ExecuteFromSubdomains(targets)
 }
 
-func (s *Server) saveResultsToDB(results []engine.Result) error {
+func (s *Server) saveResultsToDB(projectID, rootDomain, jobID string, results []engine.Result) error {
 	failureCount := 0
 	for _, result := range results {
 		var err error
+		sourceModule := result.Type
 		switch result.Type {
 		case "domain":
 			if subdomain, ok := result.Data.(string); ok {
-				err = s.db.SaveOrUpdateAsset(map[string]interface{}{"domain": subdomain})
+				err = s.db.SaveOrUpdateAsset(map[string]interface{}{
+					"project_id":    projectID,
+					"root_domain":   rootDomain,
+					"source_job_id": jobID,
+					"source_module": sourceModule,
+					"domain":        subdomain,
+				})
 			}
 		case "web_service":
 			if data, ok := result.Data.(map[string]interface{}); ok {
+				data["project_id"] = projectID
+				if mapString(data, "root_domain") == "" {
+					data["root_domain"] = rootDomain
+				}
+				data["source_job_id"] = jobID
+				data["source_module"] = sourceModule
 				err = s.db.SaveOrUpdateAsset(data)
+				if err == nil {
+					s.saveSimpleEdge(projectID, rootDomain, "domain", mapString(data, "domain"), "ip", mapString(data, "ip"), "resolves_to", jobID)
+				}
 			}
 		case "port_service", "open_port":
 			if data, ok := result.Data.(map[string]interface{}); ok {
+				data["project_id"] = projectID
+				if mapString(data, "root_domain") == "" {
+					data["root_domain"] = rootDomain
+				}
+				data["source_job_id"] = jobID
+				data["source_module"] = sourceModule
 				err = s.db.SaveOrUpdatePort(data)
+				if err == nil {
+					s.saveSimpleEdge(projectID, rootDomain, "ip", mapString(data, "ip"), "port", fmt.Sprintf("%d", mapInt(data, "port")), "hosts_port", jobID)
+				}
 			}
 		case "vulnerability":
 			if data, ok := result.Data.(map[string]interface{}); ok {
+				data["project_id"] = projectID
+				if mapString(data, "root_domain") == "" {
+					data["root_domain"] = rootDomain
+				}
+				data["source_job_id"] = jobID
 				err = s.db.SaveOrUpdateVulnerability(data)
+				if err == nil {
+					vulnID := mapString(data, "template_id")
+					s.saveSimpleEdge(projectID, rootDomain, "domain", mapString(data, "domain"), "vuln", vulnID, "has_vuln", jobID)
+				}
 			}
 		}
 		if err != nil {
@@ -1247,7 +1778,12 @@ func (s *Server) handleMonitorTargets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListMonitorTargets(w http.ResponseWriter, r *http.Request) {
-	targets, err := s.db.ListMonitorTargets()
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
+	targets, err := s.db.ListMonitorTargets(projectID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1255,7 +1791,7 @@ func (s *Server) handleListMonitorTargets(w http.ResponseWriter, r *http.Request
 	resp := make([]monitorTargetResponse, 0, len(targets))
 	for _, t := range targets {
 		resp = append(resp, monitorTargetResponse{
-			ID: int(t.ID), RootDomain: t.RootDomain, Enabled: t.Enabled,
+			ID: int(t.ID), ProjectID: t.ProjectID, RootDomain: t.RootDomain, Enabled: t.Enabled,
 			BaselineDone: t.BaselineDone, LastRunAt: timePtrToISO(t.LastRunAt),
 			CreatedAt: timeToISO(t.CreatedAt), UpdatedAt: timeToISO(t.UpdatedAt),
 		})
@@ -1269,23 +1805,40 @@ func (s *Server) handleCreateMonitorTarget(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+	projectID := strings.TrimSpace(req.ProjectID)
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "projectId is required")
+		return
+	}
 	domain := normalizeRootDomain(req.Domain)
 	if domain == "" {
 		writeError(w, http.StatusBadRequest, "domain is required")
+		return
+	}
+	if ok, err := s.isDomainInProjectScope(projectID, domain); err != nil {
+		writeError(w, http.StatusInternalServerError, "project scope check failed: "+err.Error())
+		return
+	} else if !ok {
+		writeError(w, http.StatusBadRequest, "domain is not in project scope")
 		return
 	}
 	intervalSec := req.IntervalSec
 	if intervalSec <= 0 {
 		intervalSec = defaultMonitorIntervalSec
 	}
-	if err := s.db.EnableMonitorTarget(domain, intervalSec, 3); err != nil {
+	if err := s.db.EnableMonitorTarget(projectID, domain, intervalSec, 3); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "domain": domain, "intervalSec": intervalSec})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "projectId": projectID, "domain": domain, "intervalSec": intervalSec})
 }
 
 func (s *Server) handleDeleteMonitorTarget(w http.ResponseWriter, r *http.Request) {
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
 	domain := normalizeRootDomain(r.URL.Query().Get("domain"))
 	action := strings.TrimSpace(r.URL.Query().Get("action"))
 	if domain == "" {
@@ -1294,24 +1847,24 @@ func (s *Server) handleDeleteMonitorTarget(w http.ResponseWriter, r *http.Reques
 	}
 	switch action {
 	case "stop":
-		if err := s.db.StopMonitorTarget(domain); err != nil {
+		if err := s.db.StopMonitorTarget(projectID, domain); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped", "domain": domain})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped", "projectId": projectID, "domain": domain})
 	case "delete":
-		if err := s.db.DeleteMonitorDataByRootDomain(domain); err != nil {
+		if err := s.db.DeleteMonitorDataByRootDomain(projectID, domain); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "domain": domain})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "projectId": projectID, "domain": domain})
 	default:
 		// Default: toggle stop
-		if err := s.db.StopMonitorTarget(domain); err != nil {
+		if err := s.db.StopMonitorTarget(projectID, domain); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped", "domain": domain})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped", "projectId": projectID, "domain": domain})
 	}
 }
 
@@ -1320,8 +1873,13 @@ func (s *Server) handleMonitorRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
 	var runs []db.MonitorRun
-	query := s.db.DB.Order("started_at desc").Limit(500)
+	query := s.db.DB.Where("project_id = ?", projectID).Order("started_at desc").Limit(500)
 	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
 		query = query.Where("root_domain = ?", rd)
 	}
@@ -1332,7 +1890,7 @@ func (s *Server) handleMonitorRuns(w http.ResponseWriter, r *http.Request) {
 	resp := make([]monitorRunResponse, 0, len(runs))
 	for _, run := range runs {
 		resp = append(resp, monitorRunResponse{
-			ID: int(run.ID), RootDomain: run.RootDomain, Status: normalizeHealthStatus(run.Status),
+			ID: int(run.ID), ProjectID: run.ProjectID, RootDomain: run.RootDomain, Status: normalizeHealthStatus(run.Status),
 			StartedAt: timeToISO(run.StartedAt), FinishedAt: timePtrToISO(run.FinishedAt),
 			DurationSec: run.DurationSec, ErrorMessage: strings.TrimSpace(run.ErrorMessage),
 			NewLiveCount: run.NewLiveCount, WebChanged: run.WebChanged,
@@ -1347,11 +1905,16 @@ func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	pid := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if pid == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
 	rd := normalizeRootDomain(r.URL.Query().Get("root_domain"))
 	sorted := make([]monitorChangeSortItem, 0, 400)
 
 	var assetChanges []db.AssetChange
-	aq := s.db.DB.Order("created_at desc").Limit(200)
+	aq := s.db.DB.Where("project_id = ?", pid).Order("created_at desc").Limit(200)
 	if rd != "" {
 		aq = aq.Where("root_domain = ?", rd)
 	}
@@ -1360,7 +1923,7 @@ func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 			sorted = append(sorted, monitorChangeSortItem{
 				createdAt: ac.CreatedAt,
 				item: monitorChangeResponse{
-					RunID: int(ac.RunID), RootDomain: ac.RootDomain, ChangeType: ac.ChangeType,
+					RunID: int(ac.RunID), ProjectID: ac.ProjectID, RootDomain: ac.RootDomain, ChangeType: ac.ChangeType,
 					Domain: ac.Domain, StatusCode: ac.StatusCode, Title: ac.Title,
 					CreatedAt: timeToISO(ac.CreatedAt),
 				},
@@ -1369,7 +1932,7 @@ func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var portChanges []db.PortChange
-	pq := s.db.DB.Order("created_at desc").Limit(200)
+	pq := s.db.DB.Where("project_id = ?", pid).Order("created_at desc").Limit(200)
 	if rd != "" {
 		pq = pq.Where("root_domain = ?", rd)
 	}
@@ -1378,7 +1941,7 @@ func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 			sorted = append(sorted, monitorChangeSortItem{
 				createdAt: pc.CreatedAt,
 				item: monitorChangeResponse{
-					RunID: int(pc.RunID), RootDomain: pc.RootDomain, ChangeType: pc.ChangeType,
+					RunID: int(pc.RunID), ProjectID: pc.ProjectID, RootDomain: pc.RootDomain, ChangeType: pc.ChangeType,
 					Domain: pc.Domain, IP: pc.IP, Port: pc.Port, CreatedAt: timeToISO(pc.CreatedAt),
 				},
 			})
@@ -1405,6 +1968,27 @@ func (s *Server) handleScreenshotDomains(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	scopeSet := map[string]bool(nil)
+	if projectID != "" {
+		var scopes []db.ProjectScope
+		if err := s.db.DB.Where("project_id = ? AND enabled = ?", projectID, true).Find(&scopes).Error; err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if len(scopes) == 0 {
+			writeJSON(w, http.StatusOK, []screenshotDomainResponse{})
+			return
+		}
+		scopeSet = make(map[string]bool, len(scopes))
+		for _, sc := range scopes {
+			rd := normalizeRootDomain(sc.RootDomain)
+			if rd != "" {
+				scopeSet[rd] = true
+			}
+		}
+	}
+
 	domains, err := plugins.ListScreenshotDomains(s.screenshotDir)
 	if err != nil {
 		writeJSON(w, http.StatusOK, []screenshotDomainResponse{})
@@ -1412,6 +1996,9 @@ func (s *Server) handleScreenshotDomains(w http.ResponseWriter, r *http.Request)
 	}
 	resp := make([]screenshotDomainResponse, 0, len(domains))
 	for _, rootDomain := range domains {
+		if scopeSet != nil && !scopeSet[normalizeRootDomain(rootDomain)] {
+			continue
+		}
 		domainDir := filepath.Join(s.screenshotDir, rootDomain)
 		ssDir := filepath.Join(domainDir, "screenshots")
 		count := 0
@@ -1424,6 +2011,7 @@ func (s *Server) handleScreenshotDomains(w http.ResponseWriter, r *http.Request)
 		}
 		dbPath := filepath.Join(domainDir, "gowitness.sqlite3")
 		resp = append(resp, screenshotDomainResponse{
+			ProjectID:       projectID,
 			RootDomain:      rootDomain,
 			ScreenshotCount: count,
 			ScreenshotDir:   ssDir,
@@ -1438,6 +2026,7 @@ func (s *Server) handleScreenshots(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
 	pathParts := strings.TrimPrefix(r.URL.Path, "/api/screenshots/")
 	rootDomain := normalizeRootDomain(pathParts)
 	if rootDomain == "" {
@@ -1446,6 +2035,17 @@ func (s *Server) handleScreenshots(w http.ResponseWriter, r *http.Request) {
 	if rootDomain == "" {
 		writeJSON(w, http.StatusOK, []screenshotItemResponse{})
 		return
+	}
+	if projectID != "" {
+		ok, err := s.isDomainInProjectScope(projectID, rootDomain)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "project scope check failed: "+err.Error())
+			return
+		}
+		if !ok {
+			writeJSON(w, http.StatusOK, []screenshotItemResponse{})
+			return
+		}
 	}
 
 	items, err := plugins.ListScreenshots(s.screenshotDir, rootDomain)
@@ -1457,6 +2057,7 @@ func (s *Server) handleScreenshots(w http.ResponseWriter, r *http.Request) {
 	for i, item := range items {
 		resp = append(resp, screenshotItemResponse{
 			ID:           i + 1,
+			ProjectID:    projectID,
 			URL:          item.URL,
 			Filename:     item.Filename,
 			Title:        item.Title,
@@ -1513,6 +2114,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 	s.settingsMu.RLock()
 	settings := s.settings
 	s.settingsMu.RUnlock()
+	// Notification credentials are managed by environment variables only.
+	settings.Notifications.DingTalkWebhook = os.Getenv("DINGTALK_WEBHOOK")
+	settings.Notifications.DingTalkSecret = os.Getenv("DINGTALK_SECRET")
+	settings.Notifications.Enabled = strings.TrimSpace(settings.Notifications.DingTalkWebhook) != ""
 
 	resp := systemSettingsResponse{
 		Database: databaseSettingsResponse{
@@ -1521,7 +2126,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 			SSLMode: settings.Database.SSLMode, Connected: s.db.DB != nil,
 		},
 		Notifications: notificationSettingsResponse{
-			DingTalkWebhook: settings.Notifications.DingTalkWebhook,
+			DingTalkWebhook: maskSecret(settings.Notifications.DingTalkWebhook),
 			DingTalkSecret:  maskSecret(settings.Notifications.DingTalkSecret),
 			Enabled:         settings.Notifications.Enabled,
 		},
@@ -1532,7 +2137,6 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 			DefaultActiveSubs: settings.Scanner.DefaultActiveSubs,
 			DefaultNuclei:     settings.Scanner.DefaultNuclei,
 		},
-		Tools: s.collectToolStatus(),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1545,24 +2149,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.settingsMu.Lock()
-	if p := patch.Notifications; p != nil {
-		if p.DingTalkWebhook != nil {
-			s.settings.Notifications.DingTalkWebhook = *p.DingTalkWebhook
-			os.Setenv("DINGTALK_WEBHOOK", *p.DingTalkWebhook)
-		}
-		if p.DingTalkSecret != nil {
-			// Ignore masked/empty values from UI to avoid overwriting the real
-			// secret with placeholders like "ab****yz".
-			incoming := strings.TrimSpace(*p.DingTalkSecret)
-			if incoming != "" && !strings.Contains(incoming, "*") {
-				s.settings.Notifications.DingTalkSecret = incoming
-				os.Setenv("DINGTALK_SECRET", incoming)
-			}
-		}
-		if p.Enabled != nil {
-			s.settings.Notifications.Enabled = *p.Enabled
-		}
-	}
 	if p := patch.Scanner; p != nil {
 		if p.ScreenshotDir != nil {
 			s.settings.Scanner.ScreenshotDir = *p.ScreenshotDir
@@ -1584,47 +2170,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	s.settingsMu.Unlock()
 
 	s.handleGetSettings(w, r)
-}
-
-func (s *Server) handleToolStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	writeJSON(w, http.StatusOK, s.collectToolStatus())
-}
-
-func (s *Server) collectToolStatus() []toolStatusResponse {
-	tools := []string{"subfinder", "findomain", "bbot", "naabu", "nmap", "httpx", "nuclei", "gowitness", "dnsx", "shosubgo"}
-	resp := make([]toolStatusResponse, 0, len(tools))
-	for _, name := range tools {
-		ts := toolStatusResponse{Name: name}
-		if path, ok := resolveToolPath(name); ok {
-			ts.Installed = true
-			ts.Path = path
-			if out, err := exec.Command(path, "--version").CombinedOutput(); err == nil {
-				ver := strings.TrimSpace(string(out))
-				if len(ver) > 100 {
-					ver = ver[:100]
-				}
-				ts.Version = ver
-			}
-		}
-		resp = append(resp, ts)
-	}
-	return resp
-}
-
-func resolveToolPath(name string) (string, bool) {
-	if path, err := exec.LookPath(name); err == nil {
-		return path, true
-	}
-	// Common GOPATH bin fallback on VPS.
-	fallback := filepath.Join("/root/go/bin", name)
-	if st, err := os.Stat(fallback); err == nil && !st.IsDir() {
-		return fallback, true
-	}
-	return "", false
 }
 
 func ensureCommonToolPaths() {
@@ -1825,4 +2370,243 @@ func decodeJSONBStrings(data db.JSONB) []string {
 		return nil
 	}
 	return items
+}
+
+func normalizeRootDomains(items []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(items))
+	for _, raw := range items {
+		d := normalizeRootDomain(raw)
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func dedupTrimmed(items []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(items))
+	for _, raw := range items {
+		v := strings.TrimSpace(raw)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func mapString(data map[string]interface{}, key string) string {
+	v, ok := data[key]
+	if !ok || v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case fmt.Stringer:
+		return strings.TrimSpace(t.String())
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", t))
+	}
+}
+
+func mapInt(data map[string]interface{}, key string) int {
+	v, ok := data[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch t := v.(type) {
+	case int:
+		return t
+	case int32:
+		return int(t)
+	case int64:
+		return int(t)
+	case float64:
+		return int(t)
+	case float32:
+		return int(t)
+	case json.Number:
+		i, _ := t.Int64()
+		return int(i)
+	default:
+		return 0
+	}
+}
+
+func parseBoundedInt(raw string, defaultValue, minValue, maxValue int) int {
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return defaultValue
+	}
+	if v < minValue {
+		return minValue
+	}
+	if v > maxValue {
+		return maxValue
+	}
+	return v
+}
+
+func isTruthy(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveAssetOrder(sortByRaw, sortDirRaw string) string {
+	sortBy := strings.ToLower(strings.TrimSpace(sortByRaw))
+	sortDir := strings.ToLower(strings.TrimSpace(sortDirRaw))
+	if sortDir != "asc" {
+		sortDir = "desc"
+	}
+	allowed := map[string]string{
+		"created_at":  "created_at",
+		"updated_at":  "updated_at",
+		"last_seen":   "last_seen",
+		"domain":      "domain",
+		"status_code": "status_code",
+	}
+	column, ok := allowed[sortBy]
+	if !ok {
+		column = "created_at"
+	}
+	return fmt.Sprintf("%s %s", column, sortDir)
+}
+
+func keysOfMap(m map[string]interface{}) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func defaultActor(actor string) string {
+	a := strings.TrimSpace(actor)
+	if a == "" {
+		return "system"
+	}
+	return a
+}
+
+func actorFromRequest(r *http.Request) string {
+	if r == nil {
+		return "system"
+	}
+	if a := strings.TrimSpace(r.Header.Get("X-Actor")); a != "" {
+		return a
+	}
+	return "system"
+}
+
+func (s *Server) writeAudit(projectID, actor, action, targetType, targetID string, meta map[string]interface{}, r *http.Request) {
+	if s == nil || s.db == nil || s.db.DB == nil {
+		return
+	}
+	var rawMeta []byte
+	if meta != nil {
+		rawMeta, _ = json.Marshal(meta)
+	}
+	detail := ""
+	if meta != nil {
+		if b, err := json.Marshal(meta); err == nil {
+			detail = string(b)
+		}
+	}
+	logRecord := db.AuditLog{
+		ProjectID:  strings.TrimSpace(projectID),
+		Actor:      defaultActor(actor),
+		Action:     strings.TrimSpace(action),
+		TargetType: strings.TrimSpace(targetType),
+		TargetID:   strings.TrimSpace(targetID),
+		Detail:     detail,
+		Meta:       rawMeta,
+	}
+	if r != nil {
+		logRecord.IP = strings.TrimSpace(r.RemoteAddr)
+		logRecord.UserAgent = strings.TrimSpace(r.UserAgent())
+	}
+	_ = s.db.DB.Create(&logRecord).Error
+}
+
+func (s *Server) saveSimpleEdge(projectID, rootDomain, srcType, srcID, dstType, dstID, relation, jobID string) {
+	srcID = strings.TrimSpace(srcID)
+	dstID = strings.TrimSpace(dstID)
+	if srcID == "" || dstID == "" {
+		return
+	}
+	now := time.Now()
+	var existing db.AssetEdge
+	q := s.db.DB.Where("project_id = ? AND src_type = ? AND src_id = ? AND dst_type = ? AND dst_id = ? AND relation = ?",
+		projectID, srcType, srcID, dstType, dstID, relation)
+	if err := q.First(&existing).Error; err == nil {
+		_ = s.db.DB.Model(&existing).Updates(map[string]interface{}{
+			"last_seen": now,
+			"job_id":    jobID,
+		}).Error
+		return
+	}
+	edge := db.AssetEdge{
+		ProjectID:  projectID,
+		RootDomain: rootDomain,
+		SrcType:    srcType,
+		SrcID:      srcID,
+		DstType:    dstType,
+		DstID:      dstID,
+		Relation:   relation,
+		Confidence: 100,
+		JobID:      jobID,
+		FirstSeen:  now,
+		LastSeen:   now,
+	}
+	_ = s.db.DB.Create(&edge).Error
+}
+
+func (s *Server) isDomainInProjectScope(projectID, domain string) (bool, error) {
+	domain = normalizeRootDomain(domain)
+	if projectID == "" || domain == "" {
+		return false, nil
+	}
+	var project db.Project
+	if err := s.db.DB.Select("id", "archived").Where("id = ?", projectID).First(&project).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	if project.Archived {
+		return false, nil
+	}
+	var scopes []db.ProjectScope
+	if err := s.db.DB.Where("project_id = ? AND enabled = ?", projectID, true).Find(&scopes).Error; err != nil {
+		return false, err
+	}
+	if len(scopes) == 0 {
+		return false, nil
+	}
+	for _, sc := range scopes {
+		rd := normalizeRootDomain(sc.RootDomain)
+		if rd == "" {
+			continue
+		}
+		if domain == rd || strings.HasSuffix(domain, "."+rd) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

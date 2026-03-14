@@ -1,9 +1,10 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { useWorkspace } from "../context/WorkspaceContext";
 import { formatDate } from "../lib/format";
+import type { ProjectRecord } from "../types/models";
 
 export function ProjectsPage() {
-  const { projects, activeProject, setActiveProject, createProject, updateProject, deleteProject } = useWorkspace();
+  const { projects, activeProject, setActiveProject, createProject, updateProject, deleteProject, loading } = useWorkspace();
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
@@ -11,14 +12,13 @@ export function ProjectsPage() {
   const [rootDomainsRaw, setRootDomainsRaw] = useState("");
   const [tagsRaw, setTagsRaw] = useState("");
 
-  // 编辑状态
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [editDomains, setEditDomains] = useState("");
   const [editTags, setEditTags] = useState("");
 
-  const startEdit = (p: typeof projects[0]) => {
+  const startEdit = (p: ProjectRecord) => {
     setEditingId(p.id);
     setEditName(p.name);
     setEditDesc(p.description ?? "");
@@ -26,22 +26,22 @@ export function ProjectsPage() {
     setEditTags(p.tags.join(", "));
   };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editingId || !editName.trim() || !editDomains.trim()) return;
-    updateProject(editingId, {
+    await updateProject(editingId, {
       name: editName.trim(),
       description: editDesc.trim() || undefined,
       rootDomainsRaw: editDomains.trim(),
-      tagsRaw: editTags.trim() || undefined,
+      tagsRaw: editTags.trim() || undefined
     });
     setEditingId(null);
   };
 
   const cancelEdit = () => setEditingId(null);
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!name.trim() || !rootDomainsRaw.trim()) return;
-    createProject({
+    await createProject({
       name: name.trim(),
       description: description.trim() || undefined,
       rootDomainsRaw: rootDomainsRaw.trim(),
@@ -58,13 +58,15 @@ export function ProjectsPage() {
     <section className="page">
       <div className="page-header">
         <h1 className="page-title">项目管理</h1>
-        <p className="page-desc">管理项目范围，当前激活的项目会筛选所有页面中的数据展示。</p>
+        <p className="page-desc">项目数据来自后端，项目隔离由 projectId 强制约束。</p>
       </div>
+
+      {loading && <div className="empty-state">正在加载项目...</div>}
 
       <article className="panel">
         <header className="panel-header">
           <h2>项目列表</h2>
-          <button className="btn btn-sm" onClick={() => setShowForm(!showForm)}>
+          <button className="btn btn-sm" onClick={() => setShowForm((v) => !v)}>
             {showForm ? "取消" : "+ 新建项目"}
           </button>
         </header>
@@ -90,7 +92,7 @@ export function ProjectsPage() {
               <input className="form-input" value={tagsRaw} onChange={(e) => setTagsRaw(e.target.value)} placeholder="漏洞赏金, 客户项目" />
             </div>
             <div className="form-actions">
-              <button className="btn" onClick={handleCreate} disabled={!name.trim() || !rootDomainsRaw.trim()}>
+              <button className="btn" onClick={() => { void handleCreate(); }} disabled={!name.trim() || !rootDomainsRaw.trim()}>
                 创建项目
               </button>
               <button className="btn btn-ghost" onClick={() => setShowForm(false)}>
@@ -100,10 +102,10 @@ export function ProjectsPage() {
           </div>
         )}
 
-        {projects.length === 0 && !showForm && (
+        {projects.length === 0 && !showForm && !loading && (
           <div className="empty-state">
             <div className="empty-state-icon">⊟</div>
-            <div className="empty-state-text">暂无项目，创建一个项目以开始您的侦察工作。</div>
+            <div className="empty-state-text">暂无项目，创建一个项目以开始侦查。</div>
           </div>
         )}
 
@@ -113,7 +115,6 @@ export function ProjectsPage() {
             return (
               <div key={p.id} className={`project-card${isActive ? " project-card-active" : ""}`}>
                 {editingId === p.id ? (
-                  /* 编辑模式 */
                   <div className="form-section" style={{ margin: 0, padding: 0, border: "none" }}>
                     <div className="form-group">
                       <label className="form-label">项目名称</label>
@@ -132,12 +133,11 @@ export function ProjectsPage() {
                       <input className="form-input" value={editTags} onChange={(e) => setEditTags(e.target.value)} />
                     </div>
                     <div className="form-actions">
-                      <button className="btn btn-primary btn-sm" onClick={saveEdit} disabled={!editName.trim() || !editDomains.trim()}>保存</button>
+                      <button className="btn btn-primary btn-sm" onClick={() => { void saveEdit(); }} disabled={!editName.trim() || !editDomains.trim()}>保存</button>
                       <button className="btn btn-sm" onClick={cancelEdit}>取消</button>
                     </div>
                   </div>
                 ) : (
-                  /* 展示模式 */
                   <>
                     <div className="project-card-header">
                       <h3 className="project-card-title">{p.name}</h3>
@@ -150,7 +150,7 @@ export function ProjectsPage() {
                           {isActive ? "✓ 已激活" : "设为活跃"}
                         </button>
                         {projects.length > 1 && (
-                          <button className="btn btn-sm btn-danger" onClick={() => { if (confirm(`确定要删除项目"${p.name}"吗？`)) deleteProject(p.id); }}>删除</button>
+                          <button className="btn btn-sm btn-danger" onClick={() => { if (confirm(`确定要归档项目"${p.name}"吗？归档后项目将不再显示。`)) void deleteProject(p.id); }}>归档</button>
                         )}
                       </div>
                     </div>

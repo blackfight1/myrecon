@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { endpoints } from "../api/endpoints";
+import { useWorkspace } from "../context/WorkspaceContext";
 import type { ScreenshotDomain, ScreenshotItem } from "../types/models";
 
 export function ScreenshotsPage() {
+    const { activeProject } = useWorkspace();
+    const projectId = activeProject?.id;
     const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
     const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
     const [filterStatus, setFilterStatus] = useState<string>("all");
@@ -11,13 +14,13 @@ export function ScreenshotsPage() {
     const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
     const domainsQuery = useQuery({
-        queryKey: ["screenshot-domains"],
-        queryFn: endpoints.getScreenshotDomains,
+        queryKey: ["screenshot-domains", projectId ?? ""],
+        queryFn: () => endpoints.getScreenshotDomains(projectId),
     });
 
     const screenshotsQuery = useQuery({
-        queryKey: ["screenshots", selectedDomain],
-        queryFn: () => endpoints.getScreenshots(selectedDomain!),
+        queryKey: ["screenshots", projectId ?? "", selectedDomain],
+        queryFn: () => endpoints.getScreenshots(selectedDomain!, projectId),
         enabled: !!selectedDomain,
     });
 

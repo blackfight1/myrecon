@@ -43,12 +43,16 @@ type monitorChangeSummary struct {
 	Highlights        []string
 }
 
-func runMonitorLoop(rootDomain string, interval time.Duration, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) {
+func runMonitorLoop(projectID, rootDomain string, interval time.Duration, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) {
 	dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
 	database, err := db.NewDatabase(dsn)
 	if err != nil {
-		fmt.Printf("⚠️  监控数据库连接失败: %v\n", err)
+		fmt.Printf("[Monitor] database connection failed: %v\n", err)
 		return
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		projectID = "default"
 	}
 
 	intervalSec := int(interval.Seconds())
@@ -56,12 +60,12 @@ func runMonitorLoop(rootDomain string, interval time.Duration, dryRun bool, acti
 		intervalSec = 3600
 	}
 
-	if err := database.EnableMonitorTarget(rootDomain, intervalSec, 3); err != nil {
-		fmt.Printf("⚠️  启用监控目标失败: %v\n", err)
+	if err := database.EnableMonitorTarget(projectID, rootDomain, intervalSec, 3); err != nil {
+		fmt.Printf("[Monitor] enable target failed: %v\n", err)
 		return
 	}
 
-	fmt.Printf("🔁 监控调度已启动: %s | 间隔: %s\n", rootDomain, interval.String())
+	fmt.Printf("[Monitor] scheduler started: %s | interval=%s\n", rootDomain, interval.String())
 
 	// Try immediately once.
 	runDueMonitorTasks(database, dryRun, activeSubs, dictSize, dnsResolvers, notifier)
@@ -75,9 +79,9 @@ func runMonitorLoop(rootDomain string, interval time.Duration, dryRun bool, acti
 }
 func runDueMonitorTasks(database *db.Database, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) {
 	if recovered, err := database.RecoverStaleRunningTasks(monitorTaskStaleAfter); err != nil {
-		fmt.Printf("⚠️  回收卡死监控任务失败: %v\n", err)
+		fmt.Printf("[Monitor] recover stale tasks failed: %v\n", err)
 	} else if recovered > 0 {
-		fmt.Printf("♻️  已回收 %d 个卡死监控任务\n", recovered)
+		fmt.Printf("[Monitor] recovered stale tasks: %d\n", recovered)
 	}
 
 	for {
@@ -90,7 +94,7 @@ func runDueMonitorTasks(database *db.Database, dryRun bool, activeSubs bool, dic
 func runOneDueMonitorTask(database *db.Database, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) bool {
 	task, err := database.ClaimDueMonitorTask()
 	if err != nil {
-		fmt.Printf("⚠️  抢占监控任务失败: %v\n", err)
+		fmt.Printf("[Monitor] claim due task failed: %v\n", err)
 		return false
 	}
 	if task == nil {
@@ -104,7 +108,11 @@ func runOneDueMonitorTask(database *db.Database, dryRun bool, activeSubs bool, d
 func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) {
 	start := time.Now()
 	rootDomain := task.RootDomain
-	fmt.Printf("🛰️  执行监控任务: %s (attempt=%d/%d)\n", rootDomain, task.Attempt+1, task.MaxAttempts)
+	projectID := strings.TrimSpace(task.ProjectID)
+	if projectID == "" {
+		projectID = "default"
+	}
+	fmt.Printf("[Monitor] run task: %s (attempt=%d/%d)\n", rootDomain, task.Attempt+1, task.MaxAttempts)
 
 	if notifier.Enabled() {
 		modules := []string{"subs", "ports", "monitor"}
@@ -116,10 +124,10 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 		}
 	}
 
-	target, err := database.GetOrCreateMonitorTarget(rootDomain)
+	target, err := database.GetOrCreateMonitorTarget(projectID, rootDomain)
 	if err != nil {
-		errMsg := fmt.Sprintf("获取监控目标状态失败: %v", err)
-		fmt.Printf("⚠️  %s\n", errMsg)
+		errMsg := fmt.Sprintf("monitor target load failed: %v", err)
+		fmt.Printf("[Monitor] %s\n", errMsg)
 		_ = database.HandleMonitorTaskFailure(task, errMsg)
 		if notifier.Enabled() {
 			if err := notifier.SendReconEnd(false, time.Since(start), map[string]int{}, errMsg); err != nil {
@@ -130,18 +138,18 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 	}
 	baselineMode := !target.BaselineDone
 	if baselineMode {
-		fmt.Println("🧱 首次监控：建立基线，不发送资产变化通知")
+		fmt.Println("[Monitor] first baseline run; skip change notifications")
 	}
 
-	run, err := database.CreateMonitorRun(rootDomain)
+	run, err := database.CreateMonitorRun(projectID, rootDomain)
 	if err != nil {
-		fmt.Printf("⚠️  创建监控运行记录失败: %v\n", err)
+		fmt.Printf("[Monitor] create run record failed: %v\n", err)
 	}
 
 	results, scanErr := runSubsAndPorts([]string{rootDomain}, false, activeSubs, dictSize, dnsResolvers)
 	if scanErr != nil {
-		errMsg := fmt.Sprintf("监控扫描失败: %v", scanErr)
-		fmt.Printf("⚠️  %s\n", errMsg)
+		errMsg := fmt.Sprintf("monitor scan failed: %v", scanErr)
+		fmt.Printf("[Monitor] %s\n", errMsg)
 		if run != nil {
 			_ = database.CompleteMonitorRun(run.ID, "failed", errMsg, 0, 0, 0, 0, 0)
 		}
@@ -157,13 +165,17 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 	changeSummary := monitorChangeSummary{}
 	if !baselineMode {
 		currentLive, currentPorts := extractCurrentSnapshots(results)
-		prevLiveAssets, _ := database.GetLiveAssetsByRootDomain(rootDomain)
-		prevPorts, _ := database.GetPortsByRootDomain(rootDomain)
-		changeSummary = detectAndPersistChanges(database, run, rootDomain, currentLive, currentPorts, prevLiveAssets, prevPorts)
+		prevLiveAssets, _ := database.GetLiveAssetsByRootDomain(projectID, rootDomain)
+		prevPorts, _ := database.GetPortsByRootDomain(projectID, rootDomain)
+		changeSummary = detectAndPersistChanges(database, projectID, run, rootDomain, currentLive, currentPorts, prevLiveAssets, prevPorts)
 	}
 
 	if !dryRun {
-		if err := saveResults(database, results); err != nil {
+		jobID := fmt.Sprintf("monitor-task-%d", task.ID)
+		if run != nil {
+			jobID = fmt.Sprintf("mon-run-%d", run.ID)
+		}
+		if err := saveResultsWithContext(database, results, projectID, rootDomain, jobID); err != nil {
 			errMsg := fmt.Sprintf("monitor database write failed: %v", err)
 			fmt.Printf("[ERROR] %s\n", errMsg)
 			if run != nil {
@@ -192,15 +204,15 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 		)
 	}
 	if !dryRun {
-		_ = database.UpdateMonitorTarget(rootDomain, true, time.Now())
+		_ = database.UpdateMonitorTarget(projectID, rootDomain, true, time.Now())
 	}
 
 	if err := database.CompleteMonitorTaskSuccess(task.ID); err != nil {
-		fmt.Printf("⚠️  完成监控任务失败: %v\n", err)
+		fmt.Printf("[Monitor] complete task failed: %v\n", err)
 	}
 
 	stats := collectResultCounts(results)
-	fmt.Printf("✅ 监控任务完成: %s | 新存活=%d Web变化=%d 端口新增=%d 端口关闭=%d 服务变化=%d\n",
+	fmt.Printf("[Monitor] task done: %s | new_live=%d web_changed=%d port_opened=%d port_closed=%d service_changed=%d\n",
 		rootDomain,
 		changeSummary.NewLiveSubdomains,
 		changeSummary.WebChanged,
@@ -216,12 +228,12 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 		if !baselineMode && hasMonitorChanges(changeSummary) {
 			shouldSend := true
 			if run != nil {
-				recent, err := database.HasRecentChangeRun(rootDomain, run.ID, time.Now().Add(-monitorChangeNotifyCooldown))
+				recent, err := database.HasRecentChangeRun(projectID, rootDomain, run.ID, time.Now().Add(-monitorChangeNotifyCooldown))
 				if err != nil {
-					fmt.Printf("⚠️  检查告警冷却窗口失败: %v\n", err)
+					fmt.Printf("[Monitor] cooldown check failed: %v\n", err)
 				} else if recent {
 					shouldSend = false
-					fmt.Printf("🔕 变化通知已去抖: %s 在 %s 内已发送过变化告警\n", rootDomain, monitorChangeNotifyCooldown)
+					fmt.Printf("[Monitor] change alert suppressed by cooldown: %s within %s\n", rootDomain, monitorChangeNotifyCooldown)
 				}
 			}
 			if shouldSend {
@@ -288,6 +300,7 @@ func extractCurrentSnapshots(results []engine.Result) (map[string]liveAssetSnaps
 
 func detectAndPersistChanges(
 	database *db.Database,
+	projectID string,
 	run *db.MonitorRun,
 	rootDomain string,
 	currentLive map[string]liveAssetSnapshot,
@@ -316,11 +329,12 @@ func detectAndPersistChanges(
 		prev, exists := prevLive[domain]
 		if !exists {
 			summary.NewLiveSubdomains++
-			summary.Highlights = append(summary.Highlights, fmt.Sprintf("新存活子域: %s (%d)", domain, cur.StatusCode))
+			summary.Highlights = append(summary.Highlights, fmt.Sprintf("New live subdomain: %s (%d)", domain, cur.StatusCode))
 			techJSON, _ := json.Marshal(cur.Technologies)
 			if runID > 0 {
 				_ = database.SaveAssetChange(&db.AssetChange{
 					RunID:        runID,
+					ProjectID:    projectID,
 					RootDomain:   rootDomain,
 					ChangeType:   "new_live_subdomain",
 					Domain:       cur.Domain,
@@ -335,11 +349,12 @@ func detectAndPersistChanges(
 
 		if cur.StatusCode != prev.StatusCode || cur.Title != prev.Title || !equalStringSet(cur.Technologies, prev.Technologies) {
 			summary.WebChanged++
-			summary.Highlights = append(summary.Highlights, fmt.Sprintf("Web变化: %s (%d -> %d)", domain, prev.StatusCode, cur.StatusCode))
+			summary.Highlights = append(summary.Highlights, fmt.Sprintf("Web changed: %s (%d -> %d)", domain, prev.StatusCode, cur.StatusCode))
 			techJSON, _ := json.Marshal(cur.Technologies)
 			if runID > 0 {
 				_ = database.SaveAssetChange(&db.AssetChange{
 					RunID:        runID,
+					ProjectID:    projectID,
 					RootDomain:   rootDomain,
 					ChangeType:   "web_changed",
 					Domain:       cur.Domain,
@@ -369,10 +384,11 @@ func detectAndPersistChanges(
 		prev, exists := prevPortMap[key]
 		if !exists {
 			summary.PortOpened++
-			summary.Highlights = append(summary.Highlights, fmt.Sprintf("端口新增: %s:%d", cur.IP, cur.Port))
+			summary.Highlights = append(summary.Highlights, fmt.Sprintf("Port opened: %s:%d", cur.IP, cur.Port))
 			if runID > 0 {
 				_ = database.SavePortChange(&db.PortChange{
 					RunID:      runID,
+					ProjectID:  projectID,
 					RootDomain: rootDomain,
 					ChangeType: "opened",
 					Domain:     cur.Domain,
@@ -388,10 +404,11 @@ func detectAndPersistChanges(
 
 		if cur.Service != prev.Service || cur.Version != prev.Version {
 			summary.ServiceChanged++
-			summary.Highlights = append(summary.Highlights, fmt.Sprintf("服务变化: %s:%d %s/%s -> %s/%s", cur.IP, cur.Port, prev.Service, prev.Version, cur.Service, cur.Version))
+			summary.Highlights = append(summary.Highlights, fmt.Sprintf("Service changed: %s:%d %s/%s -> %s/%s", cur.IP, cur.Port, prev.Service, prev.Version, cur.Service, cur.Version))
 			if runID > 0 {
 				_ = database.SavePortChange(&db.PortChange{
 					RunID:      runID,
+					ProjectID:  projectID,
 					RootDomain: rootDomain,
 					ChangeType: "service_changed",
 					Domain:     cur.Domain,
@@ -410,9 +427,9 @@ func detectAndPersistChanges(
 			continue
 		}
 
-		prevCloseState, err := database.GetPreviousPortCloseState(rootDomain, runID, prev.IP, prev.Port)
+		prevCloseState, err := database.GetPreviousPortCloseState(projectID, rootDomain, runID, prev.IP, prev.Port)
 		if err != nil {
-			fmt.Printf("⚠️  读取端口关闭状态失败(%s:%d): %v\n", prev.IP, prev.Port, err)
+			fmt.Printf("[Monitor] load previous close state failed (%s:%d): %v\n", prev.IP, prev.Port, err)
 			prevCloseState = ""
 		}
 
@@ -423,10 +440,11 @@ func detectAndPersistChanges(
 		case "closed_pending":
 			// Second consecutive absence confirms closure.
 			summary.PortClosed++
-			summary.Highlights = append(summary.Highlights, fmt.Sprintf("端口关闭: %s:%d", prev.IP, prev.Port))
+			summary.Highlights = append(summary.Highlights, fmt.Sprintf("Port closed: %s:%d", prev.IP, prev.Port))
 			if runID > 0 {
 				_ = database.SavePortChange(&db.PortChange{
 					RunID:      runID,
+					ProjectID:  projectID,
 					RootDomain: rootDomain,
 					ChangeType: "closed",
 					Domain:     prev.Domain,
@@ -442,6 +460,7 @@ func detectAndPersistChanges(
 			if runID > 0 {
 				_ = database.SavePortChange(&db.PortChange{
 					RunID:      runID,
+					ProjectID:  projectID,
 					RootDomain: rootDomain,
 					ChangeType: "closed_pending",
 					Domain:     prev.Domain,

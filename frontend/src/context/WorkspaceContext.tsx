@@ -1,37 +1,48 @@
-﻿import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { endpoints } from "../api/endpoints";
 import type { ProjectRecord } from "../types/models";
 import { parseDomainList } from "../lib/projectScope";
 
-const STORAGE_KEY = "myrecon.workspace.v1";
+const ACTIVE_PROJECT_KEY = "myrecon.activeProjectId.v2";
 
 interface WorkspaceState {
   projects: ProjectRecord[];
   activeProject: ProjectRecord | null;
+  loading: boolean;
+  refresh: () => Promise<void>;
   setActiveProject: (id: string) => void;
   createProject: (input: {
     name: string;
     description?: string;
+    owner?: string;
     rootDomainsRaw: string;
     tagsRaw?: string;
-  }) => ProjectRecord;
-  updateProject: (id: string, patch: { name?: string; description?: string; rootDomainsRaw?: string; tagsRaw?: string; active?: boolean }) => void;
-  deleteProject: (id: string) => void;
+  }) => Promise<void>;
+  updateProject: (id: string, patch: {
+    name?: string;
+    description?: string;
+    owner?: string;
+    rootDomainsRaw?: string;
+    tagsRaw?: string;
+    archived?: boolean;
+  }) => Promise<void>;
+  deleteProject: (id: string) => Promise<void>;
 }
 
 const WorkspaceContext = createContext<WorkspaceState | null>(null);
 
-function nowISO(): string {
-  return new Date().toISOString();
+function loadActiveProjectId(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(ACTIVE_PROJECT_KEY) ?? "";
 }
 
-function makeId(prefix: string): string {
-  return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+function saveActiveProjectId(id: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(ACTIVE_PROJECT_KEY, id);
 }
 
 function parseTags(raw?: string): string[] {
-  if (!raw) {
-    return [];
-  }
+  if (!raw) return [];
   return Array.from(
     new Set(
       raw
@@ -42,203 +53,86 @@ function parseTags(raw?: string): string[] {
   );
 }
 
-function seedProjects(): ProjectRecord[] {
-  const ts = nowISO();
-  return [
-    {
-      id: "project_default",
-      name: "Default Workspace",
-      description: "Create projects here and scope recon by root domains.",
-      rootDomains: ["example.com"],
-      tags: ["baseline"],
-      active: true,
-      createdAt: ts,
-      updatedAt: ts
-    }
-  ];
-}
-
-function toSafeString(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  return "";
-}
-
-function toStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((item) => (typeof item === "string" ? item.trim() : ""))
-    .filter(Boolean);
-}
-
-function normalizeStoredProject(input: unknown, index: number): ProjectRecord | null {
-  if (!input || typeof input !== "object") {
-    return null;
-  }
-
-  const raw = input as Record<string, unknown>;
-  const fallbackName = `Project ${index + 1}`;
-  const ts = nowISO();
-
-  const rawDomains = Array.isArray(raw.rootDomains)
-    ? toStringArray(raw.rootDomains)
-    : Array.isArray(raw.root_domains)
-      ? toStringArray(raw.root_domains)
-      : parseDomainList(toSafeString(raw.rootDomainsRaw));
-
-  const rootDomains = parseDomainList(rawDomains.join(","));
-  const tags = toStringArray(raw.tags);
-
-  const id = toSafeString(raw.id) || `project_migrated_${index}_${Date.now().toString(36)}`;
-  const name = toSafeString(raw.name) || fallbackName;
-  const description = toSafeString(raw.description) || undefined;
-  const createdAt = toSafeString(raw.createdAt) || ts;
-  const updatedAt = toSafeString(raw.updatedAt) || ts;
-  const lastScanAt = toSafeString(raw.lastScanAt) || undefined;
-  const active = raw.active === true;
-
-  return {
-    id,
-    name,
-    description,
-    rootDomains,
-    tags,
-    active,
-    createdAt,
-    updatedAt,
-    lastScanAt
-  };
-}
-
-function loadProjects(): ProjectRecord[] {
-  if (typeof window === "undefined") {
-    return seedProjects();
-  }
-
-  const raw = window.localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    return seedProjects();
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      return seedProjects();
-    }
-
-    const normalized = parsed
-      .map((item, idx) => normalizeStoredProject(item, idx))
-      .filter((item): item is ProjectRecord => item !== null);
-
-    if (normalized.length === 0) {
-      return seedProjects();
-    }
-
-    if (!normalized.some((item) => item.active)) {
-      normalized[0] = { ...normalized[0], active: true };
-    }
-
-    return normalized;
-  } catch {
-    return seedProjects();
-  }
-}
-
-function saveProjects(projects: ProjectRecord[]): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+async function ensureDefaultProject(): Promise<void> {
+  const projects = await endpoints.getProjects();
+  if (projects.length > 0) return;
+  await endpoints.createProject({
+    name: "Default Workspace",
+    description: "Initial project scope",
+    rootDomains: ["example.com"],
+    tags: ["baseline"]
+  });
 }
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const [projects, setProjects] = useState<ProjectRecord[]>(() => loadProjects());
-  const [activeProjectId, setActiveProjectId] = useState<string>(() => {
-    const current = loadProjects().find((item) => item.active);
-    return current?.id ?? loadProjects()[0]?.id ?? "";
-  });
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeProjectId, setActiveProjectId] = useState<string>(() => loadActiveProjectId());
 
-  const createProject: WorkspaceState["createProject"] = (input) => {
-    const timestamp = nowISO();
-    const item: ProjectRecord = {
-      id: makeId("project"),
-      name: input.name.trim(),
-      description: input.description?.trim(),
-      rootDomains: parseDomainList(input.rootDomainsRaw),
-      tags: parseTags(input.tagsRaw),
-      active: true,
-      createdAt: timestamp,
-      updatedAt: timestamp
-    };
-
-    setProjects((prev) => {
-      const next = prev.map((p) => ({ ...p, active: false })).concat(item);
-      saveProjects(next);
-      return next;
-    });
-    setActiveProjectId(item.id);
-    return item;
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      await ensureDefaultProject();
+      const list = await endpoints.getProjects();
+      const normalized = list.map((p) => ({ ...p, active: false }));
+      setProjects(normalized);
+      if (!normalized.some((p) => p.id === activeProjectId)) {
+        const fallback = normalized[0]?.id ?? "";
+        setActiveProjectId(fallback);
+        saveActiveProjectId(fallback);
+      }
+    } catch (err) {
+      console.error("Failed to load projects:", err);
+      setProjects([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const updateProject: WorkspaceState["updateProject"] = (id, patch) => {
-    setProjects((prev) => {
-      let switched = false;
-      const next = prev.map((item) => {
-        if (item.id !== id) {
-          return patch.active ? { ...item, active: false } : item;
-        }
-
-        switched = Boolean(patch.active);
-        return {
-          ...item,
-          name: patch.name != null ? patch.name.trim() || item.name : item.name,
-          description: patch.description ?? item.description,
-          rootDomains: patch.rootDomainsRaw != null ? parseDomainList(patch.rootDomainsRaw) : item.rootDomains,
-          tags: patch.tagsRaw != null ? parseTags(patch.tagsRaw) : item.tags,
-          active: patch.active ?? item.active,
-          updatedAt: nowISO()
-        };
-      });
-
-      saveProjects(next);
-      if (switched) {
-        setActiveProjectId(id);
-      }
-      return next;
-    });
-  };
-
-  const deleteProject: WorkspaceState["deleteProject"] = (id) => {
-    setProjects((prev) => {
-      if (prev.length <= 1) {
-        return prev;
-      }
-
-      const nextRaw = prev.filter((item) => item.id !== id);
-      if (nextRaw.length === prev.length) {
-        return prev;
-      }
-
-      const fallbackActiveId =
-        activeProjectId === id ? nextRaw[0]?.id ?? "" : nextRaw.find((item) => item.id === activeProjectId)?.id ?? nextRaw[0]?.id ?? "";
-      const next = nextRaw.map((item) => ({ ...item, active: item.id === fallbackActiveId }));
-
-      setActiveProjectId(fallbackActiveId);
-      saveProjects(next);
-      return next;
-    });
-  };
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const setActiveProject = (id: string) => {
     setActiveProjectId(id);
-    setProjects((prev) => {
-      const next = prev.map((item) => ({ ...item, active: item.id === id }));
-      saveProjects(next);
-      return next;
+    saveActiveProjectId(id);
+  };
+
+  const createProject: WorkspaceState["createProject"] = async (input) => {
+    await endpoints.createProject({
+      name: input.name.trim(),
+      description: input.description?.trim() || "",
+      owner: input.owner?.trim() || "",
+      rootDomains: parseDomainList(input.rootDomainsRaw),
+      tags: parseTags(input.tagsRaw)
     });
+    await refresh();
+    const latest = await endpoints.getProjects();
+    const found = latest.find((p) => p.name === input.name.trim());
+    if (found) {
+      setActiveProject(found.id);
+    }
+  };
+
+  const updateProject: WorkspaceState["updateProject"] = async (id, patch) => {
+    const current = projects.find((p) => p.id === id);
+    if (!current) return;
+    await endpoints.updateProject({
+      id,
+      name: patch.name?.trim() || current.name,
+      description: patch.description?.trim() ?? current.description ?? "",
+      owner: patch.owner?.trim() ?? current.owner ?? "",
+      rootDomains: patch.rootDomainsRaw ? parseDomainList(patch.rootDomainsRaw) : current.rootDomains,
+      tags: patch.tagsRaw ? parseTags(patch.tagsRaw) : current.tags,
+      archived: patch.archived
+    });
+    await refresh();
+  };
+
+  const deleteProject: WorkspaceState["deleteProject"] = async (id) => {
+    await endpoints.deleteProject(id);
+    await refresh();
   };
 
   const activeProject = useMemo(
@@ -247,8 +141,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<WorkspaceState>(
-    () => ({ projects, activeProject, setActiveProject, createProject, updateProject, deleteProject }),
-    [projects, activeProject]
+    () => ({ projects, activeProject, loading, refresh, setActiveProject, createProject, updateProject, deleteProject }),
+    [projects, activeProject, loading]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

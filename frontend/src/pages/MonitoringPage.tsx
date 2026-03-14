@@ -7,17 +7,7 @@ import { useWorkspace } from "../context/WorkspaceContext";
 import { useMonitorChanges, useMonitorRuns, useMonitorTargets, useCreateMonitorTarget, useStopMonitorTarget, useDeleteMonitorTarget } from "../hooks/queries";
 import { formatDate } from "../lib/format";
 import { matchesProjectDomain } from "../lib/projectScope";
-import type { MonitorChange, MonitorRun, MonitorTarget } from "../types/models";
-
-/* ---------- 监控目标表 ---------- */
-const tCol = createColumnHelper<MonitorTarget>();
-const targetColumns = [
-  tCol.accessor("rootDomain", { header: "根域名" }),
-  tCol.accessor("enabled", { header: "启用状态", cell: (c) => c.getValue() ? <span className="badge badge-success">开启</span> : <span className="badge badge-danger">关闭</span> }),
-  tCol.accessor("baselineDone", { header: "基线", cell: (c) => c.getValue() ? "✓" : "—" }),
-  tCol.accessor("lastRunAt", { header: "上次运行", cell: (c) => formatDate(c.getValue()) }),
-  tCol.accessor("updatedAt", { header: "更新时间", cell: (c) => formatDate(c.getValue()) })
-];
+import type { MonitorChange, MonitorRun } from "../types/models";
 
 /* ---------- 监控运行记录表 ---------- */
 const rCol = createColumnHelper<MonitorRun>();
@@ -51,11 +41,12 @@ const changeColumns = [
 
 export function MonitoringPage() {
   const { activeProject } = useWorkspace();
+  const projectId = activeProject?.id;
   const rootDomains = activeProject?.rootDomains ?? [];
 
-  const targetsQ = useMonitorTargets();
-  const runsQ = useMonitorRuns();
-  const changesQ = useMonitorChanges();
+  const targetsQ = useMonitorTargets(projectId);
+  const runsQ = useMonitorRuns(projectId);
+  const changesQ = useMonitorChanges(projectId);
   const createMonitor = useCreateMonitorTarget();
   const stopMonitor = useStopMonitorTarget();
   const deleteMonitor = useDeleteMonitorTarget();
@@ -66,10 +57,10 @@ export function MonitoringPage() {
 
   const handleAddMonitor = async () => {
     const domain = newDomain.trim();
-    if (!domain) return;
+    if (!domain || !projectId) return;
     setSubmitting(true);
     try {
-      await createMonitor.mutateAsync({ domain });
+      await createMonitor.mutateAsync({ projectId, domain });
       setShowAddModal(false);
       setNewDomain("");
     } catch (e) { console.error(e); }
@@ -77,13 +68,20 @@ export function MonitoringPage() {
   };
 
   const handleStop = async (domain: string) => {
+    if (!projectId) return;
     if (!confirm(`确定要停止监控 ${domain} 吗？`)) return;
-    try { await stopMonitor.mutateAsync(domain); } catch (e) { console.error(e); }
+    try { await stopMonitor.mutateAsync({ projectId, domain }); } catch (e) { console.error(e); }
+  };
+
+  const handleReEnable = async (domain: string) => {
+    if (!projectId) return;
+    try { await createMonitor.mutateAsync({ projectId, domain }); } catch (e) { console.error(e); }
   };
 
   const handleDelete = async (domain: string) => {
+    if (!projectId) return;
     if (!confirm(`确定要删除 ${domain} 的所有监控数据吗？此操作不可恢复。`)) return;
-    try { await deleteMonitor.mutateAsync(domain); } catch (e) { console.error(e); }
+    try { await deleteMonitor.mutateAsync({ projectId, domain }); } catch (e) { console.error(e); }
   };
 
   const targets = useMemo(() => (targetsQ.data ?? []).filter((t) => matchesProjectDomain(t.rootDomain, rootDomains)), [targetsQ.data, rootDomains]);
@@ -134,7 +132,11 @@ export function MonitoringPage() {
                     <td className="cell-muted">{formatDate(t.updatedAt)}</td>
                     <td>
                       <div style={{ display: "flex", gap: 6 }}>
-                        {t.enabled && <button className="btn btn-sm btn-warning" onClick={() => handleStop(t.rootDomain)}>停止</button>}
+                        {t.enabled ? (
+                          <button className="btn btn-sm btn-warning" onClick={() => handleStop(t.rootDomain)}>停止</button>
+                        ) : (
+                          <button className="btn btn-sm btn-primary" onClick={() => handleReEnable(t.rootDomain)} disabled={createMonitor.isPending}>重新启用</button>
+                        )}
                         <button className="btn btn-sm btn-danger" onClick={() => handleDelete(t.rootDomain)}>删除</button>
                       </div>
                     </td>

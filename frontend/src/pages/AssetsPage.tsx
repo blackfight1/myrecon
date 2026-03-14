@@ -1,12 +1,12 @@
 ﻿import { createColumnHelper } from "@tanstack/react-table";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useAssets } from "../hooks/queries";
+import { useAssetsPage } from "../hooks/queries";
+import { formatDate, joinList } from "../lib/format";
 import { matchesProjectDomain } from "../lib/projectScope";
 import type { Asset } from "../types/models";
-import { formatDate, joinList } from "../lib/format";
 
 const col = createColumnHelper<Asset>();
 
@@ -27,31 +27,42 @@ function hostnameFromUrl(input?: string): string | undefined {
 
 export function AssetsPage() {
   const { activeProject } = useWorkspace();
+  const projectId = activeProject?.id;
   const rootDomains = activeProject?.rootDomains ?? [];
-  const { data, isLoading, error } = useAssets();
+
   const [search, setSearch] = useState("");
   const [liveOnly, setLiveOnly] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [sortBy, setSortBy] = useState<"created_at" | "updated_at" | "last_seen" | "domain" | "status_code">("last_seen");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  useEffect(() => {
+    setPage(1);
+  }, [projectId, search, liveOnly, pageSize, sortBy, sortDir]);
+
+  const assetsQ = useAssetsPage(projectId, {
+    q: search.trim() || undefined,
+    liveOnly,
+    page,
+    pageSize,
+    sortBy,
+    sortDir
+  });
 
   const scoped = useMemo(() => {
-    return (data ?? []).filter((a) =>
+    return (assetsQ.data?.items ?? []).filter((a) =>
       matchesProjectDomain(a.domain, rootDomains) || matchesProjectDomain(hostnameFromUrl(a.url), rootDomains)
     );
-  }, [data, rootDomains]);
-
-  const rows = useMemo(() => {
-    return scoped.filter((a) => {
-      if (liveOnly && (!a.statusCode || a.statusCode <= 0)) return false;
-      if (!search.trim()) return true;
-      const q = search.trim().toLowerCase();
-      return (
-        a.domain.toLowerCase().includes(q) || (a.url ?? "").toLowerCase().includes(q) ||
-        (a.ip ?? "").toLowerCase().includes(q) || (a.title ?? "").toLowerCase().includes(q) ||
-        (a.technologies ?? []).join(",").toLowerCase().includes(q)
-      );
-    });
-  }, [scoped, liveOnly, search]);
+  }, [assetsQ.data?.items, rootDomains]);
 
   const liveCount = useMemo(() => scoped.filter((a) => a.statusCode != null && a.statusCode > 0).length, [scoped]);
+  const total = assetsQ.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   return (
     <section className="page">
@@ -65,7 +76,7 @@ export function AssetsPage() {
       <article className="panel">
         <header className="panel-header">
           <h2>筛选条件</h2>
-          <span className="panel-meta">存活: {liveCount} / 总计: {scoped.length}</span>
+          <span className="panel-meta">当前页存活: {liveCount} / 当前页: {scoped.length} / 总计: {total}</span>
         </header>
         <div className="filter-bar">
           <input
@@ -78,18 +89,41 @@ export function AssetsPage() {
             <input type="checkbox" checked={liveOnly} onChange={(e) => setLiveOnly(e.target.checked)} />
             仅显示存活
           </label>
-          <span className="filter-summary">匹配 {rows.length} 条</span>
+          <select className="form-select" value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)}>
+            <option value="last_seen">按最后发现</option>
+            <option value="created_at">按创建时间</option>
+            <option value="updated_at">按更新时间</option>
+            <option value="domain">按域名</option>
+            <option value="status_code">按状态码</option>
+          </select>
+          <select className="form-select" value={sortDir} onChange={(e) => setSortDir(e.target.value as typeof sortDir)}>
+            <option value="desc">降序</option>
+            <option value="asc">升序</option>
+          </select>
+          <select className="form-select" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+            <option value={25}>25/页</option>
+            <option value={50}>50/页</option>
+            <option value={100}>100/页</option>
+          </select>
+          <span className="filter-summary">第 {page} / {totalPages} 页</span>
         </div>
       </article>
 
       <article className="panel">
         <header className="panel-header">
           <h2>资产清单</h2>
-          <span className="panel-meta">{rows.length} 条记录</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button className="btn btn-sm" onClick={() => setPage(1)} disabled={page <= 1}>« 首页</button>
+            <button className="btn btn-sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>‹ 上一页</button>
+            <span className="panel-meta">{scoped.length} 条记录</span>
+            <button className="btn btn-sm" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>下一页 ›</button>
+            <button className="btn btn-sm" onClick={() => setPage(totalPages)} disabled={page >= totalPages}>末页 »</button>
+          </div>
         </header>
-        {isLoading && <div className="empty-state">正在加载资产数据...</div>}
-        {error && <div className="empty-state">加载资产失败。</div>}
-        {!isLoading && !error && <DataTable data={rows} columns={columns} />}
+        {!projectId && <div className="empty-state">未选择项目，无法加载资产数据。</div>}
+        {assetsQ.isLoading && <div className="empty-state">正在加载资产数据...</div>}
+        {assetsQ.error && <div className="empty-state">加载资产失败。</div>}
+        {!assetsQ.isLoading && !assetsQ.error && projectId && <DataTable data={scoped} columns={columns} pageSize={1000} />}
       </article>
     </section>
   );

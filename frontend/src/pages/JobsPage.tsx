@@ -4,7 +4,7 @@ import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useJobs } from "../hooks/queries";
+import { useJobs, useCancelJob } from "../hooks/queries";
 import { formatDate } from "../lib/format";
 import { matchesProjectDomain } from "../lib/projectScope";
 import { endpoints } from "../api/endpoints";
@@ -12,23 +12,19 @@ import type { JobOverview } from "../types/models";
 
 const col = createColumnHelper<JobOverview>();
 
-const columns = [
-  col.accessor("id", { header: "ID", cell: (c) => <span className="cell-mono">{c.getValue()}</span> }),
-  col.accessor("rootDomain", { header: "根域名" }),
-  col.accessor("modules", { header: "模块", cell: (c) => (c.getValue() ?? []).join(", ") || <span className="cell-muted">—</span> }),
-  col.accessor("status", { header: "状态", cell: (c) => <StatusBadge status={c.getValue()} /> }),
-  col.accessor("startedAt", { header: "开始时间", cell: (c) => formatDate(c.getValue()) }),
-  col.accessor("finishedAt", { header: "结束时间", cell: (c) => formatDate(c.getValue()) }),
-  col.accessor("durationSec", { header: "耗时", cell: (c) => { const v = c.getValue(); return v != null ? `${v}s` : <span className="cell-muted">—</span>; } }),
-  col.accessor("errorMessage", { header: "错误信息", cell: (c) => c.getValue() ? <span style={{ color: "var(--color-danger)", fontSize: 12 }}>{c.getValue()}</span> : <span className="cell-muted">—</span> })
-];
+function isRunning(status: string): boolean {
+  const s = status.toLowerCase();
+  return s.includes("running") || s.includes("pending");
+}
 
 const QUICK_BASELINE_MODULES = ["subs", "httpx", "ports"];
 
 export function JobsPage() {
   const { activeProject } = useWorkspace();
+  const projectId = activeProject?.id;
   const rootDomains = activeProject?.rootDomains ?? [];
-  const { data, isLoading, error, refetch } = useJobs();
+  const { data, isLoading, error, refetch } = useJobs(projectId);
+  const cancelJob = useCancelJob();
   const [filter, setFilter] = useState("all");
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
@@ -49,6 +45,40 @@ export function JobsPage() {
     });
   }, [scoped, filter]);
 
+  const handleCancel = (jobId: string) => {
+    if (!confirm("确认取消此任务？")) return;
+    cancelJob.mutate({ jobId }, { onSuccess: () => refetch() });
+  };
+
+  const columns = [
+    col.accessor("id", { header: "ID", cell: (c) => <span className="cell-mono">{c.getValue()}</span> }),
+    col.accessor("rootDomain", { header: "根域名" }),
+    col.accessor("modules", { header: "模块", cell: (c) => (c.getValue() ?? []).join(", ") || <span className="cell-muted">—</span> }),
+    col.accessor("status", { header: "状态", cell: (c) => <StatusBadge status={c.getValue()} /> }),
+    col.accessor("startedAt", { header: "开始时间", cell: (c) => formatDate(c.getValue()) }),
+    col.accessor("finishedAt", { header: "结束时间", cell: (c) => formatDate(c.getValue()) }),
+    col.accessor("durationSec", { header: "耗时", cell: (c) => { const v = c.getValue(); return v != null ? `${v}s` : <span className="cell-muted">—</span>; } }),
+    col.accessor("errorMessage", { header: "错误信息", cell: (c) => c.getValue() ? <span style={{ color: "var(--color-danger)", fontSize: 12 }}>{c.getValue()}</span> : <span className="cell-muted">—</span> }),
+    col.display({
+      id: "actions",
+      header: "操作",
+      cell: (c) => {
+        const j = c.row.original;
+        if (!isRunning(j.status)) return <span className="cell-muted">—</span>;
+        return (
+          <button
+            className="btn btn-sm btn-danger"
+            onClick={() => handleCancel(j.id)}
+            disabled={cancelJob.isPending}
+            style={{ fontSize: 11, padding: "2px 8px" }}
+          >
+            取消
+          </button>
+        );
+      }
+    })
+  ];
+
   const previewModules = useMemo(
     () => [...QUICK_BASELINE_MODULES, ...(enableWitness ? ["witness"] : []), ...(enableNuclei ? ["nuclei"] : [])],
     [enableWitness, enableNuclei]
@@ -63,6 +93,7 @@ export function JobsPage() {
     for (const rd of rootDomains) {
       try {
         await endpoints.createJob({
+          projectId: activeProject.id,
           domain: rd,
           mode: "scan",
           modules,
