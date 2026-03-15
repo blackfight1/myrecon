@@ -1,15 +1,10 @@
-﻿import { createColumnHelper } from "@tanstack/react-table";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { useWorkspace } from "../context/WorkspaceContext";
 import { useAssetsPage, useBulkDeleteAssets } from "../hooks/queries";
 import { formatDate, joinList } from "../lib/format";
-import { matchesProjectDomain } from "../lib/projectScope";
 import type { Asset } from "../types/models";
-
-const col = createColumnHelper<Asset>();
 
 function DomainLink({ asset }: { asset: Asset }) {
   const navigate = useNavigate();
@@ -17,8 +12,14 @@ function DomainLink({ asset }: { asset: Asset }) {
     <button
       onClick={() => navigate(`/assets/${asset.id}`)}
       style={{
-        background: "none", border: "none", color: "#60a5fa", cursor: "pointer",
-        textDecoration: "underline", padding: 0, font: "inherit", textAlign: "left"
+        background: "none",
+        border: "none",
+        color: "#60a5fa",
+        cursor: "pointer",
+        textDecoration: "underline",
+        padding: 0,
+        font: "inherit",
+        textAlign: "left"
       }}
     >
       {asset.domain}
@@ -26,28 +27,9 @@ function DomainLink({ asset }: { asset: Asset }) {
   );
 }
 
-const columns = [
-  col.accessor("domain", {
-    header: "域名",
-    cell: (c) => <DomainLink asset={c.row.original} />
-  }),
-  col.accessor("url", { header: "URL", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
-  col.accessor("ip", { header: "IP", cell: (c) => c.getValue() ? <span className="cell-mono">{c.getValue()}</span> : <span className="cell-muted">—</span> }),
-  col.accessor("statusCode", { header: "状态码", cell: (c) => { const v = c.getValue(); if (!v) return <span className="cell-muted">—</span>; const cls = v >= 200 && v < 300 ? "badge badge-success" : v >= 400 ? "badge badge-danger" : "badge badge-warning"; return <span className={cls}>{v}</span>; } }),
-  col.accessor("title", { header: "标题", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
-  col.accessor("technologies", { header: "技术栈", cell: (c) => joinList(c.getValue(), " · ") || <span className="cell-muted">—</span> }),
-  col.accessor("lastSeen", { header: "最后发现", cell: (c) => formatDate(c.getValue()) })
-];
-
-function hostnameFromUrl(input?: string): string | undefined {
-  if (!input) return undefined;
-  try { return new URL(input).hostname; } catch { return undefined; }
-}
-
 export function AssetsPage() {
   const { activeProject } = useWorkspace();
   const projectId = activeProject?.id;
-  const rootDomains = activeProject?.rootDomains ?? [];
 
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -71,33 +53,32 @@ export function AssetsPage() {
     sortDir
   });
 
-  const scoped = useMemo(() => {
-    return (assetsQ.data?.items ?? []).filter((a) =>
-      matchesProjectDomain(a.domain, rootDomains) || matchesProjectDomain(hostnameFromUrl(a.url), rootDomains)
-    );
-  }, [assetsQ.data?.items, rootDomains]);
-
-  const liveCount = useMemo(() => scoped.filter((a) => a.statusCode != null && a.statusCode > 0).length, [scoped]);
+  const items = assetsQ.data?.items ?? [];
+  const liveCount = useMemo(() => items.filter((a) => a.statusCode != null && a.statusCode > 0).length, [items]);
   const total = assetsQ.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  // clear selection on page/filter change
-  useEffect(() => { setSelectedIds(new Set()); }, [page, search, liveOnly, sortBy, sortDir]);
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [page, search, liveOnly, sortBy, sortDir]);
 
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
+
   const toggleAll = () => {
-    if (selectedIds.size === scoped.length) {
+    if (selectedIds.size === items.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(scoped.map((a) => a.id)));
+      setSelectedIds(new Set(items.map((a) => a.id)));
     }
   };
+
   const handleBulkDelete = async () => {
     if (!projectId || selectedIds.size === 0) return;
     if (!confirm(`确认删除选中的 ${selectedIds.size} 条资产？此操作不可恢复。`)) return;
@@ -120,12 +101,12 @@ export function AssetsPage() {
         <p className="page-desc">项目范围内的 Web 资产清单，包含响应状态和技术栈详情。</p>
       </div>
 
-      <ProjectScopeBanner title="资产范围" hint="按根域名后缀匹配过滤。" />
+      <ProjectScopeBanner title="资产范围" hint="服务端按项目范围过滤，支持分页与排序。" />
 
       <article className="panel">
         <header className="panel-header">
           <h2>筛选条件</h2>
-          <span className="panel-meta">当前页存活: {liveCount} / 当前页: {scoped.length} / 总计: {total}</span>
+          <span className="panel-meta">当前页存活: {liveCount} / 当前页: {items.length} / 总计: {total}</span>
         </header>
         <div className="filter-bar">
           <input
@@ -169,7 +150,7 @@ export function AssetsPage() {
             )}
             <button className="btn btn-sm" onClick={() => setPage(1)} disabled={page <= 1}>« 首页</button>
             <button className="btn btn-sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>‹ 上一页</button>
-            <span className="panel-meta">{scoped.length} 条记录</span>
+            <span className="panel-meta">{items.length} 条记录</span>
             <button className="btn btn-sm" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>下一页 ›</button>
             <button className="btn btn-sm" onClick={() => setPage(totalPages)} disabled={page >= totalPages}>末页 »</button>
           </div>
@@ -183,7 +164,7 @@ export function AssetsPage() {
               <thead>
                 <tr>
                   <th style={{ width: 36 }}>
-                    <input type="checkbox" checked={scoped.length > 0 && selectedIds.size === scoped.length} onChange={toggleAll} />
+                    <input type="checkbox" checked={items.length > 0 && selectedIds.size === items.length} onChange={toggleAll} />
                   </th>
                   <th>域名</th>
                   <th>URL</th>
@@ -195,7 +176,7 @@ export function AssetsPage() {
                 </tr>
               </thead>
               <tbody>
-                {scoped.map((a) => (
+                {items.map((a) => (
                   <tr key={a.id} style={{ background: selectedIds.has(a.id) ? "rgba(96,165,250,0.08)" : undefined }}>
                     <td><input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelect(a.id)} /></td>
                     <td><DomainLink asset={a} /></td>
@@ -207,7 +188,7 @@ export function AssetsPage() {
                     <td className="cell-muted">{formatDate(a.lastSeen)}</td>
                   </tr>
                 ))}
-                {scoped.length === 0 && (
+                {items.length === 0 && (
                   <tr><td colSpan={8} style={{ textAlign: "center", padding: 32, color: "#888" }}>暂无数据</td></tr>
                 )}
               </tbody>

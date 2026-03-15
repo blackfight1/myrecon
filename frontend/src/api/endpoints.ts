@@ -232,9 +232,9 @@ export const endpoints = {
     apiGet<MonitorChange[]>(withQuery("/monitor/changes", { project_id: projectId, root_domain: rootDomain })),
 
   // Screenshots
-  getScreenshotDomains: (projectId?: string) =>
+  getScreenshotDomains: (projectId: string) =>
     apiGet<ScreenshotDomain[]>(withQuery("/screenshots/domains", { project_id: projectId })),
-  getScreenshots: (rootDomain: string, projectId?: string) =>
+  getScreenshots: (rootDomain: string, projectId: string) =>
     apiGet<ScreenshotItem[]>(
       withQuery(`/screenshots/${encodeURIComponent(rootDomain)}`, { project_id: projectId })
     ),

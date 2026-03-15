@@ -52,6 +52,7 @@ export function useCreateJob() {
     mutationFn: (body: NewScanJobRequest) => endpoints.createJob(body),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["jobs"] });
+      await qc.invalidateQueries({ queryKey: ["jobs-page"] });
       await qc.invalidateQueries({ queryKey: ["dashboard"] });
     }
   });
@@ -63,6 +64,7 @@ export function useCancelJob() {
     mutationFn: (body: CancelJobRequest) => endpoints.cancelJob(body),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["jobs"] });
+      await qc.invalidateQueries({ queryKey: ["jobs-page"] });
       await qc.invalidateQueries({ queryKey: ["dashboard"] });
     }
   });
@@ -138,6 +140,7 @@ export function useCreateMonitorTarget() {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
       await qc.invalidateQueries({ queryKey: ["jobs"] });
+      await qc.invalidateQueries({ queryKey: ["jobs-page"] });
     }
   });
 }
@@ -150,6 +153,7 @@ export function useStopMonitorTarget() {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
       await qc.invalidateQueries({ queryKey: ["jobs"] });
+      await qc.invalidateQueries({ queryKey: ["jobs-page"] });
     }
   });
 }
@@ -164,6 +168,7 @@ export function useDeleteMonitorTarget() {
       await qc.invalidateQueries({ queryKey: ["monitor-runs"] });
       await qc.invalidateQueries({ queryKey: ["monitor-changes"] });
       await qc.invalidateQueries({ queryKey: ["jobs"] });
+      await qc.invalidateQueries({ queryKey: ["jobs-page"] });
     }
   });
 }
@@ -218,6 +223,7 @@ export function useEnableMonitorTarget() {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
       await qc.invalidateQueries({ queryKey: ["jobs"] });
+      await qc.invalidateQueries({ queryKey: ["jobs-page"] });
     }
   });
 }
@@ -227,7 +233,8 @@ export function useEnableMonitorTarget() {
 export function useScreenshotDomains(projectId?: string) {
   return useQuery({
     queryKey: ["screenshot-domains", projectId ?? ""],
-    queryFn: () => endpoints.getScreenshotDomains(projectId),
+    queryFn: () => endpoints.getScreenshotDomains(requiredProjectId(projectId)),
+    enabled: !!projectId,
     refetchInterval: 30000
   });
 }
@@ -235,8 +242,8 @@ export function useScreenshotDomains(projectId?: string) {
 export function useScreenshots(rootDomain: string, projectId?: string) {
   return useQuery({
     queryKey: ["screenshots", projectId ?? "", rootDomain],
-    queryFn: () => endpoints.getScreenshots(rootDomain, projectId),
-    enabled: !!rootDomain,
+    queryFn: () => endpoints.getScreenshots(rootDomain, requiredProjectId(projectId)),
+    enabled: !!projectId && !!rootDomain,
     refetchInterval: 30000
   });
 }

@@ -2,25 +2,29 @@
 import { useMemo } from "react";
 import { StatCard } from "../components/ui/StatCard";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useDashboard, useJobs, useMonitorTargets } from "../hooks/queries";
+import { useDashboard, useJobsPage, useMonitorTargets } from "../hooks/queries";
 
 export function DashboardPage() {
   const { activeProject } = useWorkspace();
   const projectId = activeProject?.id;
 
   const dashQ = useDashboard(projectId);
-  const jobsQ = useJobs(projectId);
+  const jobsQ = useJobsPage(projectId, {
+    page: 1,
+    pageSize: 10,
+    sortBy: "started_at",
+    sortDir: "desc"
+  });
   const monTargetsQ = useMonitorTargets(projectId);
 
   const summary = dashQ.data?.summary;
   const trend = dashQ.data?.trend ?? [];
-  const jobs = jobsQ.data ?? [];
+  const jobs = jobsQ.data?.items ?? [];
+  const jobsTotal = jobsQ.data?.total ?? 0;
   const monitorTargetCount = (monTargetsQ.data ?? []).length;
 
-  const loading = dashQ.isLoading;
-  const error = dashQ.error || jobsQ.error;
-
-  const recentJobs = useMemo(() => jobs.slice(0, 10), [jobs]);
+  const loading = dashQ.isLoading || jobsQ.isLoading || monTargetsQ.isLoading;
+  const error = dashQ.error || jobsQ.error || monTargetsQ.error;
 
   const trendLabels = useMemo(() => {
     return trend.map((t) => {
@@ -255,9 +259,9 @@ export function DashboardPage() {
       <article className="panel">
         <header className="panel-header">
           <h2>扫描历史</h2>
-          <span className="panel-meta">{jobs.length} 条记录</span>
+          <span className="panel-meta">{jobsTotal} 条记录</span>
         </header>
-        {recentJobs.length > 0 ? (
+        {jobs.length > 0 ? (
           <div className="table-wrap">
             <table className="data-table">
               <thead>
@@ -271,7 +275,7 @@ export function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {recentJobs.map((j) => {
+                {jobs.map((j) => {
                   const cls = statusClass(j.status);
                   return (
                     <tr key={j.id}>

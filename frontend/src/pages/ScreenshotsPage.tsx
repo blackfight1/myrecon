@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { endpoints } from "../api/endpoints";
 import { useWorkspace } from "../context/WorkspaceContext";
@@ -13,15 +13,20 @@ export function ScreenshotsPage() {
     const [searchTerm, setSearchTerm] = useState("");
     const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
+    useEffect(() => {
+        setSelectedDomain(null);
+    }, [projectId]);
+
     const domainsQuery = useQuery({
         queryKey: ["screenshot-domains", projectId ?? ""],
-        queryFn: () => endpoints.getScreenshotDomains(projectId),
+        queryFn: () => endpoints.getScreenshotDomains(projectId!),
+        enabled: !!projectId
     });
 
     const screenshotsQuery = useQuery({
         queryKey: ["screenshots", projectId ?? "", selectedDomain],
-        queryFn: () => endpoints.getScreenshots(selectedDomain!, projectId),
-        enabled: !!selectedDomain,
+        queryFn: () => endpoints.getScreenshots(selectedDomain!, projectId!),
+        enabled: !!selectedDomain && !!projectId,
     });
 
     const domains: ScreenshotDomain[] = domainsQuery.data ?? [];
