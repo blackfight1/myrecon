@@ -1,12 +1,12 @@
-﻿import { createColumnHelper } from "@tanstack/react-table";
-import { useMemo, useState } from "react";
+﻿import { createColumnHelper, type SortingState } from "@tanstack/react-table";
+import { useState, useCallback, useMemo } from "react";
 import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useVulns, usePatchVulnStatus } from "../hooks/queries";
+import { useVulnsPage, usePatchVulnStatus } from "../hooks/queries";
 import { formatDate } from "../lib/format";
-import { matchesProjectDomain } from "../lib/projectScope";
 import type { VulnerabilityRecord } from "../types/models";
+import type { VulnListQuery } from "../api/endpoints";
 
 type VulnStatus = "open" | "triaged" | "confirmed" | "accepted_risk" | "fixed" | "false_positive" | "duplicate";
 
@@ -32,56 +32,71 @@ function statusColor(s?: string): string {
 
 const col = createColumnHelper<VulnerabilityRecord>();
 
-function hostnameFromUrl(input?: string): string | undefined {
-  if (!input) return undefined;
-  try { return new URL(input).hostname; } catch { return undefined; }
-}
+const SORT_KEY_MAP: Record<string, VulnListQuery["sortBy"]> = {
+  severity: "severity",
+  status: "status",
+  rootDomain: "domain",
+  domain: "domain",
+  templateId: "template_id",
+  matchedAt: "created_at",
+  lastSeen: "last_seen"
+};
 
 export function FindingsPage() {
   const { activeProject } = useWorkspace();
   const projectId = activeProject?.id;
   const rootDomains = activeProject?.rootDomains ?? [];
-  const { data, isLoading, error } = useVulns(projectId);
   const patchStatus = usePatchVulnStatus();
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [severity, setSeverity] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [sorting, setSorting] = useState<SortingState>([]);
   const [editingVuln, setEditingVuln] = useState<VulnerabilityRecord | null>(null);
   const [newStatus, setNewStatus] = useState<VulnStatus>("open");
   const [statusReason, setStatusReason] = useState("");
 
-  const scoped = useMemo(() => {
-    return (data ?? []).filter((v) =>
-      matchesProjectDomain(v.rootDomain, rootDomains) || matchesProjectDomain(v.domain, rootDomains) ||
-      matchesProjectDomain(v.host, rootDomains) || matchesProjectDomain(hostnameFromUrl(v.url), rootDomains)
-    );
-  }, [data, rootDomains]);
+  const sortBy = sorting.length > 0 ? SORT_KEY_MAP[sorting[0].id] ?? "created_at" : "created_at";
+  const sortDir = sorting.length > 0 && sorting[0].desc ? "desc" : sorting.length > 0 ? "asc" : "desc";
 
-  const rows = useMemo(() => {
-    return scoped.filter((f) => {
-      const fs = (f.severity ?? "unknown").toLowerCase();
-      if (severity !== "all" && fs !== severity) return false;
-      const vs = (f.status ?? "open").toLowerCase();
-      if (statusFilter !== "all" && vs !== statusFilter) return false;
-      if (!search.trim()) return true;
-      const q = search.trim().toLowerCase();
-      return (
-        (f.rootDomain ?? "").toLowerCase().includes(q) || (f.domain ?? "").toLowerCase().includes(q) ||
-        (f.templateId ?? "").toLowerCase().includes(q) || (f.cve ?? "").toLowerCase().includes(q) ||
-        (f.url ?? "").toLowerCase().includes(q) || f.fingerprint.toLowerCase().includes(q)
-      );
-    });
-  }, [scoped, search, severity, statusFilter]);
+  const query: VulnListQuery = {
+    rootDomain: rootDomains.length === 1 ? rootDomains[0] : undefined,
+    severity: severity !== "all" ? severity : undefined,
+    status: statusFilter !== "all" ? statusFilter : undefined,
+    q: search.trim() || undefined,
+    page,
+    pageSize,
+    sortBy: sortBy as VulnListQuery["sortBy"],
+    sortDir: sortDir as VulnListQuery["sortDir"]
+  };
 
+  const { data, isLoading, isError } = useVulnsPage(projectId, query);
+
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  const handlePageChange = useCallback((p: number) => setPage(p + 1), []);
+  const handlePageSizeChange = useCallback((s: number) => { setPageSize(s); setPage(1); }, []);
+  const handleSortingChange = useCallback((s: SortingState) => { setSorting(s); setPage(1); }, []);
+
+  const handleSeverityChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => { setSeverity(e.target.value); setPage(1); }, []);
+  const handleStatusFilterChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => { setStatusFilter(e.target.value); setPage(1); }, []);
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => { setSearch(e.target.value); setPage(1); }, []);
+
+  // Severity counts — estimated from the current page data (server doesn't provide global counts)
+  // For a truly accurate count, a separate summary API would be needed.
+  // For now we show total from the server and note it's page-scoped.
   const sevCounts = useMemo(() => {
     const o = { critical: 0, high: 0, medium: 0, low: 0, info: 0, unknown: 0 };
-    for (const f of scoped) {
+    for (const f of items) {
       const k = (f.severity ?? "unknown").toLowerCase();
       if (k === "critical" || k === "high" || k === "medium" || k === "low" || k === "info") o[k]++;
       else o.unknown++;
     }
     return o;
-  }, [scoped]);
+  }, [items]);
 
   const handleStatusChange = (vuln: VulnerabilityRecord) => {
     setEditingVuln(vuln);
@@ -143,10 +158,10 @@ export function FindingsPage() {
     <section className="page">
       <div className="page-header">
         <h1 className="page-title">漏洞发现</h1>
-        <p className="page-desc">基于项目范围的 Nuclei 漏洞分类，支持按严重等级、状态和指纹搜索。</p>
+        <p className="page-desc">基于项目范围的 Nuclei 漏洞分类，支持按严重等级、状态和指纹搜索，服务端分页。</p>
       </div>
 
-      <ProjectScopeBanner title="漏洞范围" hint="优先匹配 root_domain，然后回退到 host/domain/url 后缀匹配。" />
+      <ProjectScopeBanner title="漏洞范围" hint="服务端按项目范围过滤并分页返回。" />
 
       <div className="stats-row">
         <div className="stat-card accent-danger"><div className="stat-label">严重</div><div className="stat-value">{sevCounts.critical}</div></div>
@@ -160,10 +175,10 @@ export function FindingsPage() {
       <article className="panel">
         <header className="panel-header">
           <h2>筛选条件</h2>
-          <span className="panel-meta">共 {scoped.length} 条</span>
+          <span className="panel-meta">共 {total} 条</span>
         </header>
         <div className="filter-bar">
-          <select className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+          <select className="form-select" value={severity} onChange={handleSeverityChange}>
             <option value="all">全部等级</option>
             <option value="critical">严重</option>
             <option value="high">高危</option>
@@ -172,25 +187,39 @@ export function FindingsPage() {
             <option value="info">信息</option>
             <option value="unknown">未知</option>
           </select>
-          <select className="form-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <select className="form-select" value={statusFilter} onChange={handleStatusFilterChange}>
             <option value="all">全部状态</option>
             {STATUS_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
-          <input className="form-input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索根域名/域名/模板/CVE/URL/指纹..." />
-          <span className="filter-summary">匹配 {rows.length} 条</span>
+          <input className="form-input" value={search} onChange={handleSearchChange} placeholder="搜索根域名/域名/模板/CVE/URL/指纹..." />
+          <span className="filter-summary">第 {page} 页，每页 {pageSize} 条</span>
         </div>
       </article>
 
       <article className="panel">
         <header className="panel-header">
           <h2>漏洞记录</h2>
-          <span className="panel-meta">{rows.length} 条记录</span>
+          <span className="panel-meta">{total} 条记录</span>
         </header>
         {isLoading && <div className="empty-state">正在加载漏洞数据...</div>}
-        {error && <div className="empty-state">加载漏洞数据失败。</div>}
-        {!isLoading && !error && <DataTable data={rows} columns={columns} />}
+        {isError && <div className="empty-state">加载漏洞数据失败。</div>}
+        {!isLoading && !isError && (
+          <DataTable
+            data={items}
+            columns={columns}
+            manualPagination
+            manualSorting
+            totalRows={total}
+            pageIndex={page - 1}
+            onPageIndexChange={handlePageChange}
+            onPageSizeChange={handlePageSizeChange}
+            sorting={sorting}
+            onSortingChange={handleSortingChange}
+            pageSize={pageSize}
+          />
+        )}
       </article>
 
       {/* Status Change Dialog */}

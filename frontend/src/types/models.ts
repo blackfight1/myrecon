@@ -33,6 +33,13 @@ export interface JobOverview {
   vulnCnt?: number;
 }
 
+export interface PagedJobs {
+  items: JobOverview[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 export interface Asset {
   id: number;
   projectId?: string;
@@ -71,6 +78,13 @@ export interface PortRecord {
   updatedAt?: string;
 }
 
+export interface PagedPorts {
+  items: PortRecord[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 export interface VulnerabilityRecord {
   id: number;
   projectId?: string;
@@ -97,6 +111,13 @@ export interface VulnerabilityRecord {
   reopenCount?: number;
   lastTransitionAt?: string;
   lastSeen?: string;
+}
+
+export interface PagedVulns {
+  items: VulnerabilityRecord[];
+  page: number;
+  pageSize: number;
+  total: number;
 }
 
 export interface MonitorTarget {
@@ -193,6 +214,20 @@ export interface ScreenshotItem {
   thumbnailUrl: string;
   fullUrl: string;
   createdAt?: string;
+}
+
+/* Asset Detail */
+export interface AssetDetail {
+  asset: Asset;
+  ports: PortRecord[];
+  vulns: VulnerabilityRecord[];
+}
+
+/* Global Search */
+export interface GlobalSearchResult {
+  assets: Asset[];
+  ports: PortRecord[];
+  vulns: VulnerabilityRecord[];
 }
 
 /* Settings */

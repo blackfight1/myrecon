@@ -1,5 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { endpoints, type NewScanJobRequest, type CancelJobRequest, type CreateMonitorTargetRequest, type AssetListQuery, type PatchVulnStatusRequest } from "../api/endpoints";
+import {
+  endpoints,
+  type NewScanJobRequest,
+  type CancelJobRequest,
+  type CreateMonitorTargetRequest,
+  type AssetListQuery,
+  type JobListQuery,
+  type PortListQuery,
+  type VulnListQuery,
+  type PatchVulnStatusRequest,
+  type BulkDeleteAssetsRequest,
+  type BulkVulnStatusRequest
+} from "../api/endpoints";
 
 function requiredProjectId(projectId?: string): string {
   const value = (projectId ?? "").trim();
@@ -20,6 +32,15 @@ export function useJobs(projectId?: string, rootDomain?: string) {
   return useQuery({
     queryKey: ["jobs", projectId ?? "", rootDomain ?? ""],
     queryFn: () => endpoints.getJobs(requiredProjectId(projectId), rootDomain),
+    enabled: !!projectId,
+    refetchInterval: 5000
+  });
+}
+
+export function useJobsPage(projectId: string | undefined, q: JobListQuery) {
+  return useQuery({
+    queryKey: ["jobs-page", projectId ?? "", q.rootDomain ?? "", q.status ?? "", q.q ?? "", String(q.page ?? 1), String(q.pageSize ?? 50), q.sortBy ?? "", q.sortDir ?? ""],
+    queryFn: () => endpoints.getJobsPage(requiredProjectId(projectId), q),
     enabled: !!projectId,
     refetchInterval: 5000
   });
@@ -74,10 +95,28 @@ export function usePorts(projectId?: string, rootDomain?: string) {
   });
 }
 
+export function usePortsPage(projectId: string | undefined, q: PortListQuery) {
+  return useQuery({
+    queryKey: ["ports-page", projectId ?? "", q.rootDomain ?? "", q.q ?? "", String(q.page ?? 1), String(q.pageSize ?? 50), q.sortBy ?? "", q.sortDir ?? ""],
+    queryFn: () => endpoints.getPortsPage(requiredProjectId(projectId), q),
+    enabled: !!projectId,
+    refetchInterval: 20000
+  });
+}
+
 export function useVulns(projectId?: string, rootDomain?: string) {
   return useQuery({
     queryKey: ["vulns", projectId ?? "", rootDomain ?? ""],
     queryFn: () => endpoints.getVulns(requiredProjectId(projectId), rootDomain),
+    enabled: !!projectId,
+    refetchInterval: 20000
+  });
+}
+
+export function useVulnsPage(projectId: string | undefined, q: VulnListQuery) {
+  return useQuery({
+    queryKey: ["vulns-page", projectId ?? "", q.rootDomain ?? "", q.severity ?? "", q.status ?? "", q.q ?? "", String(q.page ?? 1), String(q.pageSize ?? 50), q.sortBy ?? "", q.sortDir ?? ""],
+    queryFn: () => endpoints.getVulnsPage(requiredProjectId(projectId), q),
     enabled: !!projectId,
     refetchInterval: 20000
   });
@@ -199,6 +238,55 @@ export function useScreenshots(rootDomain: string, projectId?: string) {
     queryFn: () => endpoints.getScreenshots(rootDomain, projectId),
     enabled: !!rootDomain,
     refetchInterval: 30000
+  });
+}
+
+/* ── Asset Detail ── */
+
+export function useAssetDetail(projectId?: string, params?: { id?: number; domain?: string }) {
+  return useQuery({
+    queryKey: ["asset-detail", projectId ?? "", params?.id ?? "", params?.domain ?? ""],
+    queryFn: () => endpoints.getAssetDetail(projectId!, params ?? {}),
+    enabled: !!projectId && !!(params?.id || params?.domain)
+  });
+}
+
+/* ── Global Search ── */
+
+export function useGlobalSearch(projectId?: string, q?: string, limit?: number) {
+  const trimmed = (q ?? "").trim();
+  return useQuery({
+    queryKey: ["global-search", projectId ?? "", trimmed, limit ?? 20],
+    queryFn: () => endpoints.globalSearch(projectId!, trimmed, limit),
+    enabled: !!projectId && trimmed.length >= 2,
+    staleTime: 5000
+  });
+}
+
+/* ── Bulk Operations ── */
+
+export function useBulkDeleteAssets() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BulkDeleteAssetsRequest) => endpoints.bulkDeleteAssets(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["assets"] });
+      await qc.invalidateQueries({ queryKey: ["assets-page"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+    }
+  });
+}
+
+export function useBulkVulnStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BulkVulnStatusRequest) => endpoints.bulkVulnStatus(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["vulns"] });
+      await qc.invalidateQueries({ queryKey: ["vulns-page"] });
+      await qc.invalidateQueries({ queryKey: ["vuln-events"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+    }
   });
 }
 

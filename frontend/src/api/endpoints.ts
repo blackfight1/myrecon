@@ -1,11 +1,15 @@
 import { apiDelete, apiGet, apiPost, apiPut } from "./client";
 import type {
   Asset,
+  AssetDetail,
   DashboardSummary,
+  GlobalSearchResult,
   JobOverview,
+  PagedJobs,
   MonitorChange,
   MonitorRun,
   MonitorTarget,
+  PagedPorts,
   PortRecord,
   ProjectRecord,
   RelationEdge,
@@ -15,7 +19,8 @@ import type {
   TrendPoint,
   VulnEvent,
   VulnerabilityRecord,
-  PagedAssets
+  PagedAssets,
+  PagedVulns
 } from "../types/models";
 
 export interface NewScanJobRequest {
@@ -50,6 +55,19 @@ export interface ProjectUpsertRequest {
   archived?: boolean;
 }
 
+export interface BulkDeleteAssetsRequest {
+  projectId: string;
+  ids: number[];
+}
+
+export interface BulkVulnStatusRequest {
+  projectId: string;
+  ids: number[];
+  status: string;
+  reason?: string;
+  actor?: string;
+}
+
 export interface PatchVulnStatusRequest {
   vulnId: number;
   projectId: string;
@@ -75,6 +93,36 @@ export interface AssetListQuery {
   sortDir?: "asc" | "desc";
 }
 
+export interface PortListQuery {
+  rootDomain?: string;
+  q?: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: "created_at" | "updated_at" | "last_seen" | "domain" | "ip" | "port" | "service";
+  sortDir?: "asc" | "desc";
+}
+
+export interface VulnListQuery {
+  rootDomain?: string;
+  severity?: string;
+  status?: string;
+  q?: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: "created_at" | "updated_at" | "last_seen" | "severity" | "status" | "domain" | "template_id";
+  sortDir?: "asc" | "desc";
+}
+
+export interface JobListQuery {
+  rootDomain?: string;
+  status?: string;
+  q?: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: "started_at" | "finished_at" | "duration_sec" | "status" | "root_domain";
+  sortDir?: "asc" | "desc";
+}
+
 function withQuery(path: string, query: Record<string, string | undefined>): string {
   const params = new URLSearchParams();
   Object.entries(query).forEach(([k, v]) => {
@@ -95,6 +143,20 @@ export const endpoints = {
     apiGet<DashboardResponse>(withQuery("/dashboard/summary", { project_id: projectId, root_domain: rootDomain })),
   getJobs: (projectId: string, rootDomain?: string) =>
     apiGet<JobOverview[]>(withQuery("/jobs", { project_id: projectId, root_domain: rootDomain })),
+  getJobsPage: (projectId: string, q: JobListQuery) =>
+    apiGet<PagedJobs>(
+      withQuery("/jobs", {
+        project_id: projectId,
+        root_domain: q.rootDomain,
+        status: q.status,
+        q: q.q,
+        page: q.page ? String(q.page) : undefined,
+        page_size: q.pageSize ? String(q.pageSize) : undefined,
+        sort_by: q.sortBy,
+        sort_dir: q.sortDir,
+        paged: "1"
+      })
+    ),
   createJob: (body: NewScanJobRequest) => apiPost<NewScanJobRequest, JobOverview>("/jobs", body),
   getAssets: (projectId: string, rootDomain?: string) =>
     apiGet<Asset[]>(withQuery("/assets", { project_id: projectId, root_domain: rootDomain })),
@@ -114,8 +176,36 @@ export const endpoints = {
     ),
   getPorts: (projectId: string, rootDomain?: string) =>
     apiGet<PortRecord[]>(withQuery("/ports", { project_id: projectId, root_domain: rootDomain })),
+  getPortsPage: (projectId: string, q: PortListQuery) =>
+    apiGet<PagedPorts>(
+      withQuery("/ports", {
+        project_id: projectId,
+        root_domain: q.rootDomain,
+        q: q.q,
+        page: q.page ? String(q.page) : undefined,
+        page_size: q.pageSize ? String(q.pageSize) : undefined,
+        sort_by: q.sortBy,
+        sort_dir: q.sortDir,
+        paged: "1"
+      })
+    ),
   getVulns: (projectId: string, rootDomain?: string) =>
     apiGet<VulnerabilityRecord[]>(withQuery("/vulns", { project_id: projectId, root_domain: rootDomain })),
+  getVulnsPage: (projectId: string, q: VulnListQuery) =>
+    apiGet<PagedVulns>(
+      withQuery("/vulns", {
+        project_id: projectId,
+        root_domain: q.rootDomain,
+        severity: q.severity,
+        status: q.status,
+        q: q.q,
+        page: q.page ? String(q.page) : undefined,
+        page_size: q.pageSize ? String(q.pageSize) : undefined,
+        sort_by: q.sortBy,
+        sort_dir: q.sortDir,
+        paged: "1"
+      })
+    ),
   patchVulnStatus: (body: PatchVulnStatusRequest) =>
     apiPost<PatchVulnStatusRequest, { status: string; vulnId: number; from: string; to: string }>("/vulns/status", body),
   getVulnEvents: (projectId: string, vulnId?: string) =>
@@ -148,6 +238,20 @@ export const endpoints = {
     apiGet<ScreenshotItem[]>(
       withQuery(`/screenshots/${encodeURIComponent(rootDomain)}`, { project_id: projectId })
     ),
+
+  // Asset Detail
+  getAssetDetail: (projectId: string, params: { id?: number; domain?: string }) =>
+    apiGet<AssetDetail>(withQuery("/assets/detail", { project_id: projectId, id: params.id ? String(params.id) : undefined, domain: params.domain })),
+
+  // Global Search
+  globalSearch: (projectId: string, q: string, limit?: number) =>
+    apiGet<GlobalSearchResult>(withQuery("/search", { project_id: projectId, q, limit: limit ? String(limit) : undefined })),
+
+  // Bulk Operations
+  bulkDeleteAssets: (body: BulkDeleteAssetsRequest) =>
+    apiPost<BulkDeleteAssetsRequest, { status: string; deleted: number }>("/bulk/assets/delete", body),
+  bulkVulnStatus: (body: BulkVulnStatusRequest) =>
+    apiPost<BulkVulnStatusRequest, { status: string; updated: number }>("/vulns/bulk-status", body),
 
   // Settings
   getSettings: () => apiGet<SystemSettings>("/settings"),

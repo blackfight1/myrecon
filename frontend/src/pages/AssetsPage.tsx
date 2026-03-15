@@ -1,17 +1,36 @@
 ﻿import { createColumnHelper } from "@tanstack/react-table";
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useAssetsPage } from "../hooks/queries";
+import { useAssetsPage, useBulkDeleteAssets } from "../hooks/queries";
 import { formatDate, joinList } from "../lib/format";
 import { matchesProjectDomain } from "../lib/projectScope";
 import type { Asset } from "../types/models";
 
 const col = createColumnHelper<Asset>();
 
+function DomainLink({ asset }: { asset: Asset }) {
+  const navigate = useNavigate();
+  return (
+    <button
+      onClick={() => navigate(`/assets/${asset.id}`)}
+      style={{
+        background: "none", border: "none", color: "#60a5fa", cursor: "pointer",
+        textDecoration: "underline", padding: 0, font: "inherit", textAlign: "left"
+      }}
+    >
+      {asset.domain}
+    </button>
+  );
+}
+
 const columns = [
-  col.accessor("domain", { header: "域名" }),
+  col.accessor("domain", {
+    header: "域名",
+    cell: (c) => <DomainLink asset={c.row.original} />
+  }),
   col.accessor("url", { header: "URL", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
   col.accessor("ip", { header: "IP", cell: (c) => c.getValue() ? <span className="cell-mono">{c.getValue()}</span> : <span className="cell-muted">—</span> }),
   col.accessor("statusCode", { header: "状态码", cell: (c) => { const v = c.getValue(); if (!v) return <span className="cell-muted">—</span>; const cls = v >= 200 && v < 300 ? "badge badge-success" : v >= 400 ? "badge badge-danger" : "badge badge-warning"; return <span className={cls}>{v}</span>; } }),
@@ -31,6 +50,8 @@ export function AssetsPage() {
   const rootDomains = activeProject?.rootDomains ?? [];
 
   const [search, setSearch] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const bulkDelete = useBulkDeleteAssets();
   const [liveOnly, setLiveOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -59,6 +80,34 @@ export function AssetsPage() {
   const liveCount = useMemo(() => scoped.filter((a) => a.statusCode != null && a.statusCode > 0).length, [scoped]);
   const total = assetsQ.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  // clear selection on page/filter change
+  useEffect(() => { setSelectedIds(new Set()); }, [page, search, liveOnly, sortBy, sortDir]);
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    if (selectedIds.size === scoped.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(scoped.map((a) => a.id)));
+    }
+  };
+  const handleBulkDelete = async () => {
+    if (!projectId || selectedIds.size === 0) return;
+    if (!confirm(`确认删除选中的 ${selectedIds.size} 条资产？此操作不可恢复。`)) return;
+    try {
+      await bulkDelete.mutateAsync({ projectId, ids: Array.from(selectedIds) });
+      setSelectedIds(new Set());
+    } catch (e) {
+      alert("批量删除失败: " + (e instanceof Error ? e.message : String(e)));
+    }
+  };
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -113,6 +162,11 @@ export function AssetsPage() {
         <header className="panel-header">
           <h2>资产清单</h2>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {selectedIds.size > 0 && (
+              <button className="btn btn-sm" style={{ background: "#dc2626", color: "#fff" }} onClick={handleBulkDelete} disabled={bulkDelete.isPending}>
+                {bulkDelete.isPending ? "删除中..." : `批量删除 (${selectedIds.size})`}
+              </button>
+            )}
             <button className="btn btn-sm" onClick={() => setPage(1)} disabled={page <= 1}>« 首页</button>
             <button className="btn btn-sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>‹ 上一页</button>
             <span className="panel-meta">{scoped.length} 条记录</span>
@@ -123,7 +177,43 @@ export function AssetsPage() {
         {!projectId && <div className="empty-state">未选择项目，无法加载资产数据。</div>}
         {assetsQ.isLoading && <div className="empty-state">正在加载资产数据...</div>}
         {assetsQ.error && <div className="empty-state">加载资产失败。</div>}
-        {!assetsQ.isLoading && !assetsQ.error && projectId && <DataTable data={scoped} columns={columns} pageSize={1000} />}
+        {!assetsQ.isLoading && !assetsQ.error && projectId && (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 36 }}>
+                    <input type="checkbox" checked={scoped.length > 0 && selectedIds.size === scoped.length} onChange={toggleAll} />
+                  </th>
+                  <th>域名</th>
+                  <th>URL</th>
+                  <th>IP</th>
+                  <th>状态码</th>
+                  <th>标题</th>
+                  <th>技术栈</th>
+                  <th>最后发现</th>
+                </tr>
+              </thead>
+              <tbody>
+                {scoped.map((a) => (
+                  <tr key={a.id} style={{ background: selectedIds.has(a.id) ? "rgba(96,165,250,0.08)" : undefined }}>
+                    <td><input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelect(a.id)} /></td>
+                    <td><DomainLink asset={a} /></td>
+                    <td>{a.url || <span className="cell-muted">—</span>}</td>
+                    <td>{a.ip ? <span className="cell-mono">{a.ip}</span> : <span className="cell-muted">—</span>}</td>
+                    <td>{a.statusCode ? <span className={a.statusCode >= 200 && a.statusCode < 300 ? "badge badge-success" : a.statusCode >= 400 ? "badge badge-danger" : "badge badge-warning"}>{a.statusCode}</span> : <span className="cell-muted">—</span>}</td>
+                    <td>{a.title || <span className="cell-muted">—</span>}</td>
+                    <td>{joinList(a.technologies, " · ") || <span className="cell-muted">—</span>}</td>
+                    <td className="cell-muted">{formatDate(a.lastSeen)}</td>
+                  </tr>
+                ))}
+                {scoped.length === 0 && (
+                  <tr><td colSpan={8} style={{ textAlign: "center", padding: 32, color: "#888" }}>暂无数据</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </article>
     </section>
   );

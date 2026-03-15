@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTheme } from "../../context/ThemeContext";
 import { useWorkspace } from "../../context/WorkspaceContext";
+import { GlobalSearch } from "../ui/GlobalSearch";
 
 export function AppShell() {
   const { projects, activeProject, setActiveProject, loading } = useWorkspace();
@@ -80,6 +81,9 @@ export function AppShell() {
                 ))}
               </select>
             </div>
+          </div>
+          <div className="topbar-center" style={{ flex: 1, display: "flex", justifyContent: "center", padding: "0 16px" }}>
+            <GlobalSearch />
           </div>
           <div className="topbar-right">
             <button className="topbar-btn topbar-btn-neon" onClick={() => navigate("/quick-scan")}>

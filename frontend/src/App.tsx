@@ -9,6 +9,7 @@ import { PortsPage } from "./pages/PortsPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { QuickScanPage } from "./pages/QuickScanPage";
 import { ScreenshotsPage } from "./pages/ScreenshotsPage";
+import { AssetDetailPage } from "./pages/AssetDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="quick-scan" element={<QuickScanPage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="assets" element={<AssetsPage />} />
+        <Route path="assets/:id" element={<AssetDetailPage />} />
         <Route path="ports" element={<PortsPage />} />
         <Route path="findings" element={<FindingsPage />} />
         <Route path="screenshots" element={<ScreenshotsPage />} />

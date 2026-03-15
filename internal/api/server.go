@@ -34,6 +34,9 @@ type Server struct {
 	mux           *http.ServeMux
 	screenshotDir string
 
+	corsAllowAll bool
+	corsOrigins  map[string]bool
+
 	settingsMu sync.RWMutex
 	settings   runtimeSettings
 
@@ -138,6 +141,27 @@ type pagedAssetsResponse struct {
 	Page     int             `json:"page"`
 	PageSize int             `json:"pageSize"`
 	Total    int64           `json:"total"`
+}
+
+type pagedPortsResponse struct {
+	Items    []portResponse `json:"items"`
+	Page     int            `json:"page"`
+	PageSize int            `json:"pageSize"`
+	Total    int64          `json:"total"`
+}
+
+type pagedVulnsResponse struct {
+	Items    []vulnerabilityResponse `json:"items"`
+	Page     int                     `json:"page"`
+	PageSize int                     `json:"pageSize"`
+	Total    int64                   `json:"total"`
+}
+
+type pagedJobsResponse struct {
+	Items    []jobOverviewResponse `json:"items"`
+	Page     int                   `json:"page"`
+	PageSize int                   `json:"pageSize"`
+	Total    int64                 `json:"total"`
 }
 
 type portResponse struct {
@@ -362,11 +386,14 @@ func NewServer(database *db.Database, screenshotDir string) *Server {
 		screenshotDir = "screenshots"
 	}
 	ensureCommonToolPaths()
+	corsAllowAll, corsOrigins := parseCORSOrigins()
 
 	s := &Server{
 		db:            database,
 		mux:           http.NewServeMux(),
 		screenshotDir: screenshotDir,
+		corsAllowAll:  corsAllowAll,
+		corsOrigins:   corsOrigins,
 		settings:      loadRuntimeSettings(screenshotDir),
 		scanCancels:   make(map[string]context.CancelFunc),
 	}
@@ -392,11 +419,28 @@ func (s *Server) Start(addr string) error {
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		allowed := origin == ""
+		if s.corsAllowAll {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			allowed = true
+		} else if origin != "" && s.corsOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			allowed = true
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, X-Actor")
 		if r.Method == http.MethodOptions {
+			if !allowed {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if origin != "" && !allowed {
+			writeError(w, http.StatusForbidden, "origin not allowed")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -408,9 +452,11 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/dashboard/summary", s.handleDashboard)
 	s.mux.HandleFunc("/api/jobs", s.handleJobs)
 	s.mux.HandleFunc("/api/jobs/cancel", s.handleCancelJob)
+	s.mux.HandleFunc("/api/assets/detail", s.handleAssetDetail)
 	s.mux.HandleFunc("/api/assets", s.handleAssets)
 	s.mux.HandleFunc("/api/ports", s.handlePorts)
 	s.mux.HandleFunc("/api/vulns", s.handleVulns)
+	s.mux.HandleFunc("/api/vulns/bulk-status", s.handleBulkVulnStatus)
 	s.mux.HandleFunc("/api/vulns/status", s.handlePatchVulnStatus)
 	s.mux.HandleFunc("/api/vulns/events", s.handleVulnEvents)
 	s.mux.HandleFunc("/api/graph/relations", s.handleRelations)
@@ -420,6 +466,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/screenshots/domains", s.handleScreenshotDomains)
 	s.mux.HandleFunc("/api/screenshots/file/", s.handleScreenshotFile)
 	s.mux.HandleFunc("/api/screenshots/", s.handleScreenshots)
+	s.mux.HandleFunc("/api/search", s.handleGlobalSearch)
+	s.mux.HandleFunc("/api/bulk/assets/delete", s.handleBulkDeleteAssets)
 	s.mux.HandleFunc("/api/settings", s.handleSettings)
 	s.mux.HandleFunc("/api/settings/test-notify", s.handleTestNotify)
 }
@@ -1099,14 +1147,64 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "project_id is required")
 		return
 	}
+	paged := isTruthy(r.URL.Query().Get("paged"))
+	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 
-	var ports []db.Port
-	query := s.db.DB.Where("project_id = ?", projectID).Order("created_at desc").Limit(maxListRows)
+	base := s.db.DB.Model(&db.Port{}).Where("project_id = ?", projectID)
 
 	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
 		pattern := "%." + rd
-		query = query.Where("domain = ? OR domain LIKE ?", rd, pattern)
+		base = base.Where("domain = ? OR domain LIKE ?", rd, pattern)
 	}
+	if search != "" {
+		pattern := "%" + search + "%"
+		base = base.Where(
+			"LOWER(domain) LIKE ? OR LOWER(ip) LIKE ? OR LOWER(service) LIKE ? OR LOWER(version) LIKE ?",
+			pattern, pattern, pattern, pattern,
+		)
+	}
+
+	var ports []db.Port
+	query := base.Order(resolvePortOrder(r.URL.Query().Get("sort_by"), r.URL.Query().Get("sort_dir")))
+	if paged {
+		page := parseBoundedInt(r.URL.Query().Get("page"), 1, 1, 100000)
+		pageSize := parseBoundedInt(r.URL.Query().Get("page_size"), 50, 10, 200)
+		var total int64
+		if err := base.Count(&total).Error; err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		offset := (page - 1) * pageSize
+		query = query.Offset(offset).Limit(pageSize)
+		if err := query.Find(&ports).Error; err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		resp := make([]portResponse, 0, len(ports))
+		for _, p := range ports {
+			resp = append(resp, portResponse{
+				ID:        int(p.ID),
+				AssetID:   int(p.AssetID),
+				Domain:    p.Domain,
+				IP:        p.IP,
+				Port:      p.Port,
+				Protocol:  p.Protocol,
+				Service:   p.Service,
+				Version:   p.Version,
+				Banner:    p.Banner,
+				LastSeen:  timeToISO(p.LastSeen),
+				UpdatedAt: timeToISO(p.UpdatedAt),
+			})
+		}
+		writeJSON(w, http.StatusOK, pagedPortsResponse{
+			Items:    resp,
+			Page:     page,
+			PageSize: pageSize,
+			Total:    total,
+		})
+		return
+	}
+	query = query.Limit(maxListRows)
 
 	if err := query.Find(&ports).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -1143,20 +1241,76 @@ func (s *Server) handleVulns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "project_id is required")
 		return
 	}
+	paged := isTruthy(r.URL.Query().Get("paged"))
+	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	status := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
 
-	var vulns []db.Vulnerability
-	query := s.db.DB.Where("project_id = ?", projectID).Order("created_at desc").Limit(maxListRows)
+	base := s.db.DB.Model(&db.Vulnerability{}).Where("project_id = ?", projectID)
 
 	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
 		pattern := "%." + rd
-		query = query.Where(
+		base = base.Where(
 			"root_domain = ? OR domain = ? OR domain LIKE ? OR host = ? OR host LIKE ?",
 			rd, rd, pattern, rd, pattern,
 		)
 	}
 	if sev := strings.TrimSpace(r.URL.Query().Get("severity")); sev != "" {
-		query = query.Where("severity = ?", strings.ToLower(sev))
+		base = base.Where("severity = ?", strings.ToLower(sev))
 	}
+	if status != "" {
+		base = base.Where("status = ?", status)
+	}
+	if search != "" {
+		pattern := "%" + search + "%"
+		base = base.Where(
+			"LOWER(root_domain) LIKE ? OR LOWER(domain) LIKE ? OR LOWER(host) LIKE ? OR LOWER(template_id) LIKE ? OR LOWER(cve) LIKE ? OR LOWER(url) LIKE ? OR LOWER(fingerprint) LIKE ? OR LOWER(assignee) LIKE ?",
+			pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern,
+		)
+	}
+
+	var vulns []db.Vulnerability
+	query := base.Order(resolveVulnOrder(r.URL.Query().Get("sort_by"), r.URL.Query().Get("sort_dir")))
+	if paged {
+		page := parseBoundedInt(r.URL.Query().Get("page"), 1, 1, 100000)
+		pageSize := parseBoundedInt(r.URL.Query().Get("page_size"), 50, 10, 200)
+		var total int64
+		if err := base.Count(&total).Error; err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		offset := (page - 1) * pageSize
+		query = query.Offset(offset).Limit(pageSize)
+		if err := query.Find(&vulns).Error; err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		resp := make([]vulnerabilityResponse, 0, len(vulns))
+		for _, v := range vulns {
+			matchedAt := strings.TrimSpace(v.MatchedAt)
+			if matchedAt == "" {
+				matchedAt = timeToISO(v.CreatedAt)
+			}
+			resp = append(resp, vulnerabilityResponse{
+				ID: int(v.ID), RootDomain: v.RootDomain, Domain: v.Domain, Host: v.Host,
+				URL: v.URL, IP: v.IP, TemplateID: v.TemplateID, TemplateName: v.TemplateName,
+				Severity: v.Severity, CVE: v.CVE, MatcherName: v.MatcherName,
+				Description: v.Description, Reference: v.Reference, MatchedAt: matchedAt,
+				Fingerprint: v.Fingerprint, Status: v.Status, Assignee: v.Assignee,
+				TicketRef: v.TicketRef, DueAt: timePtrToISO(v.DueAt),
+				FixedAt: timePtrToISO(v.FixedAt), VerifiedAt: timePtrToISO(v.VerifiedAt),
+				ReopenCount: v.ReopenCount, LastTransitionAt: timePtrToISO(v.LastTransitionAt),
+				LastSeen: timeToISO(v.LastSeen),
+			})
+		}
+		writeJSON(w, http.StatusOK, pagedVulnsResponse{
+			Items:    resp,
+			Page:     page,
+			PageSize: pageSize,
+			Total:    total,
+		})
+		return
+	}
+	query = query.Limit(maxListRows)
 
 	if err := query.Find(&vulns).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -1206,9 +1360,20 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rootDomainFilter := normalizeRootDomain(r.URL.Query().Get("root_domain"))
+	statusFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	paged := isTruthy(r.URL.Query().Get("paged"))
+	page := parseBoundedInt(r.URL.Query().Get("page"), 1, 1, 100000)
+	pageSize := parseBoundedInt(r.URL.Query().Get("page_size"), 50, 10, 200)
+	scanLimit := 300
+	taskLimit := 200
+	if paged {
+		scanLimit = 5000
+		taskLimit = 5000
+	}
 
 	// Fetch scan jobs from DB
-	scanJobs, err := s.db.ListScanJobs(projectFilter, rootDomainFilter, 300)
+	scanJobs, err := s.db.ListScanJobs(projectFilter, rootDomainFilter, scanLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1243,7 +1408,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 
 	// Also include monitor tasks/runs
 	var tasks []db.MonitorTask
-	taskQuery := s.db.DB.Where("project_id = ?", projectFilter).Order("created_at desc").Limit(200)
+	taskQuery := s.db.DB.Where("project_id = ?", projectFilter).Order("created_at desc").Limit(taskLimit)
 	if rootDomainFilter != "" {
 		taskQuery = taskQuery.Where("root_domain = ?", rootDomainFilter)
 	}
@@ -1269,9 +1434,43 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	sort.SliceStable(jobs, func(i, j int) bool {
-		return parseTimeBestEffort(jobs[i].StartedAt).After(parseTimeBestEffort(jobs[j].StartedAt))
-	})
+	if statusFilter != "" && statusFilter != "all" {
+		filtered := make([]jobOverviewResponse, 0, len(jobs))
+		for _, job := range jobs {
+			if matchJobStatusFilter(job, statusFilter) {
+				filtered = append(filtered, job)
+			}
+		}
+		jobs = filtered
+	}
+	if search != "" {
+		filtered := make([]jobOverviewResponse, 0, len(jobs))
+		for _, job := range jobs {
+			if matchJobSearch(job, search) {
+				filtered = append(filtered, job)
+			}
+		}
+		jobs = filtered
+	}
+	sortJobs(jobs, r.URL.Query().Get("sort_by"), r.URL.Query().Get("sort_dir"))
+	if paged {
+		total := len(jobs)
+		start := (page - 1) * pageSize
+		if start > total {
+			start = total
+		}
+		end := start + pageSize
+		if end > total {
+			end = total
+		}
+		writeJSON(w, http.StatusOK, pagedJobsResponse{
+			Items:    jobs[start:end],
+			Page:     page,
+			PageSize: pageSize,
+			Total:    int64(total),
+		})
+		return
+	}
 	if len(jobs) > 500 {
 		jobs = jobs[:500]
 	}
@@ -2455,6 +2654,31 @@ func parseBoundedInt(raw string, defaultValue, minValue, maxValue int) int {
 	return v
 }
 
+func parseCORSOrigins() (bool, map[string]bool) {
+	raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_ORIGINS"))
+	if raw == "" {
+		return false, map[string]bool{
+			"http://localhost:5173": true,
+			"http://127.0.0.1:5173": true,
+		}
+	}
+	if raw == "*" {
+		return true, nil
+	}
+	origins := map[string]bool{}
+	for _, item := range strings.Split(raw, ",") {
+		origin := strings.TrimSpace(item)
+		if origin == "" {
+			continue
+		}
+		origins[origin] = true
+	}
+	if len(origins) == 0 {
+		return true, nil
+	}
+	return false, origins
+}
+
 func isTruthy(raw string) bool {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "1", "true", "yes", "on":
@@ -2482,6 +2706,127 @@ func resolveAssetOrder(sortByRaw, sortDirRaw string) string {
 		column = "created_at"
 	}
 	return fmt.Sprintf("%s %s", column, sortDir)
+}
+
+func resolvePortOrder(sortByRaw, sortDirRaw string) string {
+	sortBy := strings.ToLower(strings.TrimSpace(sortByRaw))
+	sortDir := strings.ToLower(strings.TrimSpace(sortDirRaw))
+	if sortDir != "asc" {
+		sortDir = "desc"
+	}
+	allowed := map[string]string{
+		"created_at": "created_at",
+		"updated_at": "updated_at",
+		"last_seen":  "last_seen",
+		"domain":     "domain",
+		"ip":         "ip",
+		"port":       "port",
+		"service":    "service",
+	}
+	column, ok := allowed[sortBy]
+	if !ok {
+		column = "created_at"
+	}
+	return fmt.Sprintf("%s %s", column, sortDir)
+}
+
+func resolveVulnOrder(sortByRaw, sortDirRaw string) string {
+	sortBy := strings.ToLower(strings.TrimSpace(sortByRaw))
+	sortDir := strings.ToLower(strings.TrimSpace(sortDirRaw))
+	if sortDir != "asc" {
+		sortDir = "desc"
+	}
+	allowed := map[string]string{
+		"created_at":  "created_at",
+		"updated_at":  "updated_at",
+		"last_seen":   "last_seen",
+		"severity":    "severity",
+		"status":      "status",
+		"domain":      "domain",
+		"template_id": "template_id",
+	}
+	column, ok := allowed[sortBy]
+	if !ok {
+		column = "created_at"
+	}
+	return fmt.Sprintf("%s %s", column, sortDir)
+}
+
+func sortJobs(jobs []jobOverviewResponse, sortByRaw, sortDirRaw string) {
+	sortBy := strings.ToLower(strings.TrimSpace(sortByRaw))
+	sortDir := strings.ToLower(strings.TrimSpace(sortDirRaw))
+	asc := sortDir == "asc"
+	if sortBy == "" {
+		sortBy = "started_at"
+	}
+	sort.SliceStable(jobs, func(i, j int) bool {
+		a := jobs[i]
+		b := jobs[j]
+		var less bool
+		switch sortBy {
+		case "root_domain":
+			less = strings.Compare(strings.ToLower(a.RootDomain), strings.ToLower(b.RootDomain)) < 0
+		case "status":
+			less = strings.Compare(strings.ToLower(a.Status), strings.ToLower(b.Status)) < 0
+		case "duration_sec":
+			less = a.DurationSec < b.DurationSec
+		case "finished_at":
+			at := parseTimeBestEffort(a.FinishedAt)
+			bt := parseTimeBestEffort(b.FinishedAt)
+			less = at.Before(bt)
+			if at.Equal(bt) {
+				less = strings.Compare(strings.ToLower(a.ID), strings.ToLower(b.ID)) < 0
+			}
+		default:
+			at := parseTimeBestEffort(a.StartedAt)
+			bt := parseTimeBestEffort(b.StartedAt)
+			less = at.Before(bt)
+			if at.Equal(bt) {
+				less = strings.Compare(strings.ToLower(a.ID), strings.ToLower(b.ID)) < 0
+			}
+		}
+		if !asc {
+			return !less
+		}
+		return less
+	})
+}
+
+func matchJobStatusFilter(job jobOverviewResponse, filter string) bool {
+	s := strings.ToLower(strings.TrimSpace(job.Status))
+	switch filter {
+	case "running":
+		return strings.Contains(s, "running") || strings.Contains(s, "pending")
+	case "success":
+		return strings.Contains(s, "success") || strings.Contains(s, "ok") || strings.Contains(s, "done")
+	case "failed":
+		return strings.Contains(s, "failed") || strings.Contains(s, "error") || strings.Contains(s, "fail")
+	case "pending":
+		return strings.Contains(s, "pending")
+	case "canceled":
+		return strings.Contains(s, "canceled")
+	default:
+		return true
+	}
+}
+
+func matchJobSearch(job jobOverviewResponse, q string) bool {
+	lq := strings.ToLower(strings.TrimSpace(q))
+	if lq == "" {
+		return true
+	}
+	if strings.Contains(strings.ToLower(job.ID), lq) ||
+		strings.Contains(strings.ToLower(job.RootDomain), lq) ||
+		strings.Contains(strings.ToLower(job.Status), lq) ||
+		strings.Contains(strings.ToLower(job.ErrorMessage), lq) {
+		return true
+	}
+	for _, mod := range job.Modules {
+		if strings.Contains(strings.ToLower(mod), lq) {
+			return true
+		}
+	}
+	return false
 }
 
 func keysOfMap(m map[string]interface{}) []string {
@@ -2575,6 +2920,251 @@ func (s *Server) saveSimpleEdge(projectID, rootDomain, srcType, srcID, dstType, 
 		LastSeen:   now,
 	}
 	_ = s.db.DB.Create(&edge).Error
+}
+
+// ──────────────────────────────────────────
+// Asset Detail
+// ──────────────────────────────────────────
+
+type assetDetailResponse struct {
+	Asset  assetResponse           `json:"asset"`
+	Ports  []portResponse          `json:"ports"`
+	Vulns  []vulnerabilityResponse `json:"vulns"`
+	Events []vulnEventResponse     `json:"events"`
+}
+
+func (s *Server) handleAssetDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	idStr := strings.TrimSpace(r.URL.Query().Get("id"))
+	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
+
+	var asset db.Asset
+	if idStr != "" {
+		id, _ := strconv.Atoi(idStr)
+		if err := s.db.DB.Where("id = ? AND project_id = ?", id, projectID).First(&asset).Error; err != nil {
+			writeError(w, http.StatusNotFound, "asset not found")
+			return
+		}
+	} else if domain != "" {
+		if err := s.db.DB.Where("domain = ? AND project_id = ?", strings.ToLower(domain), projectID).First(&asset).Error; err != nil {
+			writeError(w, http.StatusNotFound, "asset not found")
+			return
+		}
+	} else {
+		writeError(w, http.StatusBadRequest, "id or domain is required")
+		return
+	}
+
+	ar := assetResponse{
+		ID: int(asset.ID), Domain: asset.Domain, URL: asset.URL, IP: asset.IP,
+		StatusCode: asset.StatusCode, Title: asset.Title,
+		Technologies: decodeJSONBStrings(asset.Technologies),
+		CreatedAt:    timeToISO(asset.CreatedAt), UpdatedAt: timeToISO(asset.UpdatedAt),
+		LastSeen: timeToISO(asset.LastSeen),
+	}
+
+	var ports []db.Port
+	s.db.DB.Where("asset_id = ? AND project_id = ?", asset.ID, projectID).Order("port asc").Limit(500).Find(&ports)
+	if len(ports) == 0 {
+		s.db.DB.Where("project_id = ? AND (domain = ? OR ip = ?)", projectID, asset.Domain, asset.IP).Order("port asc").Limit(500).Find(&ports)
+	}
+	pr := make([]portResponse, 0, len(ports))
+	for _, p := range ports {
+		pr = append(pr, portResponse{
+			ID: int(p.ID), AssetID: int(p.AssetID), Domain: p.Domain, IP: p.IP,
+			Port: p.Port, Protocol: p.Protocol, Service: p.Service, Version: p.Version,
+			Banner: p.Banner, LastSeen: timeToISO(p.LastSeen), UpdatedAt: timeToISO(p.UpdatedAt),
+		})
+	}
+
+	var vulns []db.Vulnerability
+	s.db.DB.Where("project_id = ? AND (domain = ? OR host = ? OR ip = ?)", projectID, asset.Domain, asset.Domain, asset.IP).Order("created_at desc").Limit(200).Find(&vulns)
+	vr := make([]vulnerabilityResponse, 0, len(vulns))
+	for _, v := range vulns {
+		matchedAt := strings.TrimSpace(v.MatchedAt)
+		if matchedAt == "" {
+			matchedAt = timeToISO(v.CreatedAt)
+		}
+		vr = append(vr, vulnerabilityResponse{
+			ID: int(v.ID), RootDomain: v.RootDomain, Domain: v.Domain, Host: v.Host,
+			URL: v.URL, IP: v.IP, TemplateID: v.TemplateID, TemplateName: v.TemplateName,
+			Severity: v.Severity, CVE: v.CVE, Description: v.Description,
+			MatchedAt: matchedAt, Fingerprint: v.Fingerprint, Status: v.Status,
+			LastSeen: timeToISO(v.LastSeen),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, assetDetailResponse{Asset: ar, Ports: pr, Vulns: vr})
+}
+
+// ──────────────────────────────────────────
+// Bulk Operations
+// ──────────────────────────────────────────
+
+func (s *Server) handleBulkDeleteAssets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		ProjectID string `json:"projectId"`
+		IDs       []int  `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if body.ProjectID == "" || len(body.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "projectId and ids are required")
+		return
+	}
+	if len(body.IDs) > 500 {
+		writeError(w, http.StatusBadRequest, "max 500 IDs per request")
+		return
+	}
+	result := s.db.DB.Where("id IN ? AND project_id = ?", body.IDs, body.ProjectID).Delete(&db.Asset{})
+	if result.Error != nil {
+		writeError(w, http.StatusInternalServerError, result.Error.Error())
+		return
+	}
+	s.writeAudit(body.ProjectID, actorFromRequest(r), "bulk_delete_assets", "asset", "", map[string]interface{}{
+		"count": result.RowsAffected, "ids": body.IDs,
+	}, r)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "deleted": result.RowsAffected})
+}
+
+func (s *Server) handleBulkVulnStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		ProjectID string `json:"projectId"`
+		IDs       []int  `json:"ids"`
+		Status    string `json:"status"`
+		Reason    string `json:"reason"`
+		Actor     string `json:"actor"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	status := strings.ToLower(strings.TrimSpace(body.Status))
+	valid := map[string]bool{
+		"open": true, "triaged": true, "confirmed": true, "accepted_risk": true,
+		"fixed": true, "false_positive": true, "duplicate": true,
+	}
+	if body.ProjectID == "" || len(body.IDs) == 0 || !valid[status] {
+		writeError(w, http.StatusBadRequest, "projectId, ids and valid status are required")
+		return
+	}
+	if len(body.IDs) > 500 {
+		writeError(w, http.StatusBadRequest, "max 500 IDs per request")
+		return
+	}
+	now := time.Now()
+	updates := map[string]interface{}{
+		"status":             status,
+		"last_transition_at": &now,
+	}
+	if status == "fixed" {
+		updates["fixed_at"] = &now
+	}
+	result := s.db.DB.Model(&db.Vulnerability{}).Where("id IN ? AND project_id = ?", body.IDs, body.ProjectID).Updates(updates)
+	if result.Error != nil {
+		writeError(w, http.StatusInternalServerError, result.Error.Error())
+		return
+	}
+	actor := defaultActor(body.Actor)
+	for _, vid := range body.IDs {
+		event := db.VulnEvent{
+			ProjectID: body.ProjectID, VulnID: uint(vid), Action: "bulk_status_change",
+			ToStatus: status, Actor: actor, Reason: strings.TrimSpace(body.Reason),
+		}
+		_ = s.db.DB.Create(&event).Error
+	}
+	s.writeAudit(body.ProjectID, actor, "bulk_vuln_status", "vulnerability", "", map[string]interface{}{
+		"count": result.RowsAffected, "toStatus": status,
+	}, r)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "updated": result.RowsAffected})
+}
+
+// ──────────────────────────────────────────
+// Global Search
+// ──────────────────────────────────────────
+
+type globalSearchResponse struct {
+	Assets []assetResponse         `json:"assets"`
+	Ports  []portResponse          `json:"ports"`
+	Vulns  []vulnerabilityResponse `json:"vulns"`
+}
+
+func (s *Server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	if projectID == "" || q == "" || len(q) < 2 {
+		writeError(w, http.StatusBadRequest, "project_id and q (min 2 chars) are required")
+		return
+	}
+	limit := parseBoundedInt(r.URL.Query().Get("limit"), 20, 5, 50)
+	pattern := "%" + q + "%"
+	resp := globalSearchResponse{}
+
+	var assets []db.Asset
+	s.db.DB.Where("project_id = ? AND (LOWER(domain) LIKE ? OR LOWER(url) LIKE ? OR LOWER(ip) LIKE ? OR LOWER(title) LIKE ?)",
+		projectID, pattern, pattern, pattern, pattern).Order("last_seen desc").Limit(limit).Find(&assets)
+	resp.Assets = make([]assetResponse, 0, len(assets))
+	for _, a := range assets {
+		resp.Assets = append(resp.Assets, assetResponse{
+			ID: int(a.ID), Domain: a.Domain, URL: a.URL, IP: a.IP,
+			StatusCode: a.StatusCode, Title: a.Title,
+			Technologies: decodeJSONBStrings(a.Technologies),
+			LastSeen:     timeToISO(a.LastSeen),
+		})
+	}
+
+	var ports []db.Port
+	s.db.DB.Where("project_id = ? AND (LOWER(domain) LIKE ? OR LOWER(ip) LIKE ? OR LOWER(service) LIKE ? OR CAST(port AS TEXT) LIKE ?)",
+		projectID, pattern, pattern, pattern, pattern).Order("last_seen desc").Limit(limit).Find(&ports)
+	resp.Ports = make([]portResponse, 0, len(ports))
+	for _, p := range ports {
+		resp.Ports = append(resp.Ports, portResponse{
+			ID: int(p.ID), Domain: p.Domain, IP: p.IP, Port: p.Port,
+			Protocol: p.Protocol, Service: p.Service, Version: p.Version,
+			LastSeen: timeToISO(p.LastSeen),
+		})
+	}
+
+	var vulns []db.Vulnerability
+	s.db.DB.Where("project_id = ? AND (LOWER(domain) LIKE ? OR LOWER(host) LIKE ? OR LOWER(template_id) LIKE ? OR LOWER(cve) LIKE ? OR LOWER(url) LIKE ?)",
+		projectID, pattern, pattern, pattern, pattern, pattern).Order("last_seen desc").Limit(limit).Find(&vulns)
+	resp.Vulns = make([]vulnerabilityResponse, 0, len(vulns))
+	for _, v := range vulns {
+		matchedAt := strings.TrimSpace(v.MatchedAt)
+		if matchedAt == "" {
+			matchedAt = timeToISO(v.CreatedAt)
+		}
+		resp.Vulns = append(resp.Vulns, vulnerabilityResponse{
+			ID: int(v.ID), Domain: v.Domain, Host: v.Host, URL: v.URL,
+			TemplateID: v.TemplateID, TemplateName: v.TemplateName,
+			Severity: v.Severity, CVE: v.CVE, Status: v.Status,
+			MatchedAt: matchedAt, LastSeen: timeToISO(v.LastSeen),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) isDomainInProjectScope(projectID, domain string) (bool, error) {
