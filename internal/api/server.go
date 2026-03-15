@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -23,10 +24,16 @@ import (
 )
 
 const (
-	defaultMonitorIntervalSec = 6 * 3600
-	maxListRows               = 5000
-	schedulerPollInterval     = 15 * time.Second
+	defaultMonitorIntervalSec  = 6 * 3600
+	maxListRows                = 5000
+	schedulerPollInterval      = 15 * time.Second
+	scanWorkerPollInterval     = 3 * time.Second
+	scanJobStaleAfter          = 6 * time.Hour
+	monitorEventStatusOpen     = "open"
+	monitorEventStatusResolved = "resolved"
 )
+
+var errScanCanceled = errors.New("scan canceled")
 
 // Server is the HTTP API server.
 type Server struct {
@@ -245,6 +252,30 @@ type monitorChangeResponse struct {
 	CreatedAt  string `json:"createdAt,omitempty"`
 }
 
+type monitorEventResponse struct {
+	ID              int    `json:"id"`
+	ProjectID       string `json:"projectId,omitempty"`
+	RootDomain      string `json:"rootDomain"`
+	EventKey        string `json:"eventKey"`
+	EventType       string `json:"eventType"`
+	Status          string `json:"status"`
+	Domain          string `json:"domain,omitempty"`
+	URL             string `json:"url,omitempty"`
+	IP              string `json:"ip,omitempty"`
+	Port            int    `json:"port,omitempty"`
+	Protocol        string `json:"protocol,omitempty"`
+	Service         string `json:"service,omitempty"`
+	Version         string `json:"version,omitempty"`
+	Title           string `json:"title,omitempty"`
+	StatusCode      int    `json:"statusCode,omitempty"`
+	FirstSeenAt     string `json:"firstSeenAt,omitempty"`
+	LastSeenAt      string `json:"lastSeenAt,omitempty"`
+	LastChangedAt   string `json:"lastChangedAt,omitempty"`
+	ResolvedAt      string `json:"resolvedAt,omitempty"`
+	OccurrenceCount int    `json:"occurrenceCount"`
+	LastRunID       int    `json:"lastRunId,omitempty"`
+}
+
 type screenshotDomainResponse struct {
 	ProjectID       string `json:"projectId,omitempty"`
 	RootDomain      string `json:"rootDomain"`
@@ -401,20 +432,29 @@ func NewServer(database *db.Database, screenshotDir string) *Server {
 	return s
 }
 
-// Start starts the HTTP server and the monitor scheduler.
+// Start starts the HTTP API server.
 func (s *Server) Start(addr string) error {
-	// Recover stale monitor tasks from previous crash
+	log.Printf("[API] server starting on %s", addr)
+	return http.ListenAndServe(addr, s.corsMiddleware(s.mux))
+}
+
+// RunWorkers starts background workers for monitor tasks and scan jobs.
+func (s *Server) RunWorkers() error {
 	if recovered, err := s.db.RecoverStaleRunningTasks(2 * time.Hour); err != nil {
-		log.Printf("[Scheduler] failed to recover stale tasks: %v", err)
+		log.Printf("[Worker] failed to recover stale monitor tasks: %v", err)
 	} else if recovered > 0 {
-		log.Printf("[Scheduler] recovered %d stale running tasks", recovered)
+		log.Printf("[Worker] recovered %d stale monitor tasks", recovered)
+	}
+	if recovered, err := s.db.RecoverStaleRunningScanJobs(scanJobStaleAfter); err != nil {
+		log.Printf("[Worker] failed to recover stale scan jobs: %v", err)
+	} else if recovered > 0 {
+		log.Printf("[Worker] recovered %d stale scan jobs", recovered)
 	}
 
-	// Start monitor scheduler in background
 	go s.runMonitorScheduler()
-
-	log.Printf("[API] server starting on %s (monitor scheduler enabled)", addr)
-	return http.ListenAndServe(addr, s.corsMiddleware(s.mux))
+	go s.runScanWorker()
+	log.Printf("[Worker] execution workers started (monitor poll=%v, scan poll=%v)", schedulerPollInterval, scanWorkerPollInterval)
+	select {}
 }
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
@@ -463,6 +503,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/monitor/targets", s.handleMonitorTargets)
 	s.mux.HandleFunc("/api/monitor/runs", s.handleMonitorRuns)
 	s.mux.HandleFunc("/api/monitor/changes", s.handleMonitorChanges)
+	s.mux.HandleFunc("/api/monitor/events", s.handleMonitorEvents)
 	s.mux.HandleFunc("/api/screenshots/domains", s.handleScreenshotDomains)
 	s.mux.HandleFunc("/api/screenshots/file/", s.handleScreenshotFile)
 	s.mux.HandleFunc("/api/screenshots/", s.handleScreenshots)
@@ -784,8 +825,40 @@ func (s *Server) handleRelations(w http.ResponseWriter, r *http.Request) {
 }
 
 // ──────────────────────────────────────────
-// Monitor Scheduler — runs inside web server
+// Monitor Scheduler — runs in worker process
 // ──────────────────────────────────────────
+
+func (s *Server) runScanWorker() {
+	log.Printf("[Worker] scan worker started (poll=%v)", scanWorkerPollInterval)
+	ticker := time.NewTicker(scanWorkerPollInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		job, err := s.db.ClaimPendingScanJob()
+		if err != nil {
+			log.Printf("[Worker] claim pending scan job failed: %v", err)
+			continue
+		}
+		if job == nil {
+			continue
+		}
+		s.executeClaimedScanJob(job)
+	}
+}
+
+func (s *Server) executeClaimedScanJob(job *db.ScanJob) {
+	if job == nil {
+		return
+	}
+	modules := sanitizeModules(strings.Split(job.Modules, ","))
+	enableNuclei := job.EnableNuclei || containsAnyModule(modules, "nuclei")
+	activeSubs := job.ActiveSubs || containsAnyModule(modules, "dnsx_bruteforce", "dictgen")
+	dictSize := job.DictSize
+	dnsResolvers := strings.TrimSpace(job.DNSResolvers)
+	dryRun := job.DryRun
+	log.Printf("[Worker] claimed scan job %s project=%s root=%s modules=%v", job.JobID, job.ProjectID, job.RootDomain, modules)
+	s.runScanAsync(job.ProjectID, job.JobID, job.RootDomain, modules, enableNuclei, activeSubs, dictSize, dnsResolvers, dryRun)
+}
 
 func (s *Server) runMonitorScheduler() {
 	log.Printf("[Scheduler] monitor scheduler started (poll=%v)", schedulerPollInterval)
@@ -891,11 +964,75 @@ func (s *Server) detectChanges(projectID, rootDomain string, runID uint, target 
 		return 0, 0, 0, 0, 0
 	}
 
-	// Detect new live subdomains (created in last interval)
-	recentAssets, _ := s.db.GetRecentAssets(target.LastRunAt.Add(-1 * time.Minute))
-	for _, a := range recentAssets {
-		if a.ProjectID == projectID && a.URL != "" && matchesRootDomain(a.Domain, rootDomain) {
-			newLive++
+	currentLiveAssets, err := s.db.GetLiveAssetsByRootDomain(projectID, rootDomain)
+	if err != nil {
+		log.Printf("[Monitor] get live assets failed project=%s root=%s: %v", projectID, rootDomain, err)
+		currentLiveAssets = nil
+	}
+	currentPorts, err := s.db.GetPortsByRootDomain(projectID, rootDomain)
+	if err != nil {
+		log.Printf("[Monitor] get ports failed project=%s root=%s: %v", projectID, rootDomain, err)
+		currentPorts = nil
+	}
+
+	newLive, webChanged, _ = s.syncLiveMonitorEvents(projectID, rootDomain, runID, currentLiveAssets)
+	portOpened, portClosed, svcChanged = s.syncPortMonitorEvents(projectID, rootDomain, runID, currentPorts)
+
+	return newLive, webChanged, portOpened, portClosed, svcChanged
+}
+
+func (s *Server) syncLiveMonitorEvents(projectID, rootDomain string, runID uint, assets []db.Asset) (opened, webChanged, resolved int) {
+	now := time.Now()
+	seen := map[string]db.Asset{}
+	for _, a := range assets {
+		if strings.TrimSpace(a.URL) == "" {
+			continue
+		}
+		key := buildMonitorLiveEventKey(a.Domain)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; !exists {
+			seen[key] = a
+		}
+	}
+
+	var existing []db.MonitorEvent
+	if err := s.db.DB.
+		Where("project_id = ? AND root_domain = ? AND event_type = ?", projectID, rootDomain, "new_live").
+		Find(&existing).Error; err != nil {
+		log.Printf("[Monitor] query live events failed project=%s root=%s: %v", projectID, rootDomain, err)
+		return 0, 0, 0
+	}
+	existingByKey := make(map[string]db.MonitorEvent, len(existing))
+	for _, e := range existing {
+		existingByKey[e.EventKey] = e
+	}
+
+	for key, a := range seen {
+		e, exists := existingByKey[key]
+		if !exists {
+			event := db.MonitorEvent{
+				ProjectID:       projectID,
+				RootDomain:      rootDomain,
+				EventKey:        key,
+				EventType:       "new_live",
+				Status:          monitorEventStatusOpen,
+				Domain:          a.Domain,
+				URL:             a.URL,
+				Title:           a.Title,
+				StatusCode:      a.StatusCode,
+				FirstSeenAt:     now,
+				LastSeenAt:      now,
+				LastChangedAt:   now,
+				OccurrenceCount: 1,
+				LastRunID:       runID,
+			}
+			if err := s.db.DB.Create(&event).Error; err != nil {
+				log.Printf("[Monitor] create live event failed key=%s: %v", key, err)
+				continue
+			}
+			opened++
 			_ = s.db.SaveAssetChange(&db.AssetChange{
 				ProjectID:  projectID,
 				RunID:      runID,
@@ -906,18 +1043,135 @@ func (s *Server) detectChanges(projectID, rootDomain string, runID uint, target 
 				StatusCode: a.StatusCode,
 				Title:      a.Title,
 			})
+			continue
+		}
+
+		updates := map[string]interface{}{
+			"domain":           a.Domain,
+			"url":              a.URL,
+			"title":            a.Title,
+			"status_code":      a.StatusCode,
+			"last_seen_at":     now,
+			"occurrence_count": e.OccurrenceCount + 1,
+			"last_run_id":      runID,
+		}
+
+		if strings.EqualFold(strings.TrimSpace(e.Status), monitorEventStatusResolved) {
+			updates["status"] = monitorEventStatusOpen
+			updates["resolved_at"] = nil
+			updates["last_changed_at"] = now
+			opened++
+			_ = s.db.SaveAssetChange(&db.AssetChange{
+				ProjectID:  projectID,
+				RunID:      runID,
+				RootDomain: rootDomain,
+				ChangeType: "new_live",
+				Domain:     a.Domain,
+				URL:        a.URL,
+				StatusCode: a.StatusCode,
+				Title:      a.Title,
+			})
+		} else if e.StatusCode != a.StatusCode || strings.TrimSpace(e.Title) != strings.TrimSpace(a.Title) {
+			updates["last_changed_at"] = now
+			webChanged++
+			_ = s.db.SaveAssetChange(&db.AssetChange{
+				ProjectID:  projectID,
+				RunID:      runID,
+				RootDomain: rootDomain,
+				ChangeType: "web_changed",
+				Domain:     a.Domain,
+				URL:        a.URL,
+				StatusCode: a.StatusCode,
+				Title:      a.Title,
+			})
+		}
+
+		if err := s.db.DB.Model(&db.MonitorEvent{}).Where("id = ?", e.ID).Updates(updates).Error; err != nil {
+			log.Printf("[Monitor] update live event failed id=%d: %v", e.ID, err)
+		}
+		delete(existingByKey, key)
+	}
+
+	for _, e := range existingByKey {
+		if strings.EqualFold(strings.TrimSpace(e.Status), monitorEventStatusResolved) {
+			continue
+		}
+		if err := s.db.DB.Model(&db.MonitorEvent{}).Where("id = ?", e.ID).Updates(map[string]interface{}{
+			"status":          monitorEventStatusResolved,
+			"resolved_at":     now,
+			"last_changed_at": now,
+			"last_run_id":     runID,
+		}).Error; err != nil {
+			log.Printf("[Monitor] resolve live event failed id=%d: %v", e.ID, err)
+			continue
+		}
+		resolved++
+		_ = s.db.SaveAssetChange(&db.AssetChange{
+			ProjectID:  projectID,
+			RunID:      runID,
+			RootDomain: rootDomain,
+			ChangeType: "live_resolved",
+			Domain:     e.Domain,
+			URL:        e.URL,
+			StatusCode: e.StatusCode,
+			Title:      e.Title,
+		})
+	}
+
+	return opened, webChanged, resolved
+}
+
+func (s *Server) syncPortMonitorEvents(projectID, rootDomain string, runID uint, ports []db.Port) (opened, closed, serviceChanged int) {
+	now := time.Now()
+	seen := map[string]db.Port{}
+	for _, p := range ports {
+		key := buildMonitorPortEventKey(p.Domain, p.IP, p.Port, p.Protocol)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; !exists {
+			seen[key] = p
 		}
 	}
 
-	// Detect new ports
-	var since time.Time
-	if target.LastRunAt != nil {
-		since = target.LastRunAt.Add(-1 * time.Minute)
+	var existing []db.MonitorEvent
+	if err := s.db.DB.
+		Where("project_id = ? AND root_domain = ? AND event_type = ?", projectID, rootDomain, "port_opened").
+		Find(&existing).Error; err != nil {
+		log.Printf("[Monitor] query port events failed project=%s root=%s: %v", projectID, rootDomain, err)
+		return 0, 0, 0
 	}
-	recentPorts, _ := s.db.GetRecentPorts(since)
-	for _, p := range recentPorts {
-		if p.ProjectID == projectID && matchesRootDomain(p.Domain, rootDomain) {
-			portOpened++
+	existingByKey := make(map[string]db.MonitorEvent, len(existing))
+	for _, e := range existing {
+		existingByKey[e.EventKey] = e
+	}
+
+	for key, p := range seen {
+		e, exists := existingByKey[key]
+		if !exists {
+			event := db.MonitorEvent{
+				ProjectID:       projectID,
+				RootDomain:      rootDomain,
+				EventKey:        key,
+				EventType:       "port_opened",
+				Status:          monitorEventStatusOpen,
+				Domain:          p.Domain,
+				IP:              p.IP,
+				Port:            p.Port,
+				Protocol:        p.Protocol,
+				Service:         p.Service,
+				Version:         p.Version,
+				FirstSeenAt:     now,
+				LastSeenAt:      now,
+				LastChangedAt:   now,
+				OccurrenceCount: 1,
+				LastRunID:       runID,
+			}
+			if err := s.db.DB.Create(&event).Error; err != nil {
+				log.Printf("[Monitor] create port event failed key=%s: %v", key, err)
+				continue
+			}
+			opened++
 			_ = s.db.SavePortChange(&db.PortChange{
 				ProjectID:  projectID,
 				RunID:      runID,
@@ -928,11 +1182,116 @@ func (s *Server) detectChanges(projectID, rootDomain string, runID uint, target 
 				Port:       p.Port,
 				Protocol:   p.Protocol,
 				Service:    p.Service,
+				Version:    p.Version,
+			})
+			continue
+		}
+
+		updates := map[string]interface{}{
+			"domain":           p.Domain,
+			"ip":               p.IP,
+			"port":             p.Port,
+			"protocol":         p.Protocol,
+			"service":          p.Service,
+			"version":          p.Version,
+			"last_seen_at":     now,
+			"occurrence_count": e.OccurrenceCount + 1,
+			"last_run_id":      runID,
+		}
+
+		if strings.EqualFold(strings.TrimSpace(e.Status), monitorEventStatusResolved) {
+			updates["status"] = monitorEventStatusOpen
+			updates["resolved_at"] = nil
+			updates["last_changed_at"] = now
+			opened++
+			_ = s.db.SavePortChange(&db.PortChange{
+				ProjectID:  projectID,
+				RunID:      runID,
+				RootDomain: rootDomain,
+				ChangeType: "opened",
+				Domain:     p.Domain,
+				IP:         p.IP,
+				Port:       p.Port,
+				Protocol:   p.Protocol,
+				Service:    p.Service,
+				Version:    p.Version,
+			})
+		} else if strings.TrimSpace(e.Service) != strings.TrimSpace(p.Service) || strings.TrimSpace(e.Version) != strings.TrimSpace(p.Version) {
+			updates["last_changed_at"] = now
+			serviceChanged++
+			_ = s.db.SavePortChange(&db.PortChange{
+				ProjectID:  projectID,
+				RunID:      runID,
+				RootDomain: rootDomain,
+				ChangeType: "service_changed",
+				Domain:     p.Domain,
+				IP:         p.IP,
+				Port:       p.Port,
+				Protocol:   p.Protocol,
+				Service:    p.Service,
+				Version:    p.Version,
 			})
 		}
+
+		if err := s.db.DB.Model(&db.MonitorEvent{}).Where("id = ?", e.ID).Updates(updates).Error; err != nil {
+			log.Printf("[Monitor] update port event failed id=%d: %v", e.ID, err)
+		}
+		delete(existingByKey, key)
 	}
 
-	return newLive, webChanged, portOpened, portClosed, svcChanged
+	for _, e := range existingByKey {
+		if strings.EqualFold(strings.TrimSpace(e.Status), monitorEventStatusResolved) {
+			continue
+		}
+		if err := s.db.DB.Model(&db.MonitorEvent{}).Where("id = ?", e.ID).Updates(map[string]interface{}{
+			"status":          monitorEventStatusResolved,
+			"resolved_at":     now,
+			"last_changed_at": now,
+			"last_run_id":     runID,
+		}).Error; err != nil {
+			log.Printf("[Monitor] resolve port event failed id=%d: %v", e.ID, err)
+			continue
+		}
+		closed++
+		_ = s.db.SavePortChange(&db.PortChange{
+			ProjectID:  projectID,
+			RunID:      runID,
+			RootDomain: rootDomain,
+			ChangeType: "closed",
+			Domain:     e.Domain,
+			IP:         e.IP,
+			Port:       e.Port,
+			Protocol:   e.Protocol,
+			Service:    e.Service,
+			Version:    e.Version,
+		})
+	}
+
+	return opened, closed, serviceChanged
+}
+
+func buildMonitorLiveEventKey(domain string) string {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		return ""
+	}
+	return "new_live|domain=" + domain
+}
+
+func buildMonitorPortEventKey(domain, ip string, port int, protocol string) string {
+	ip = strings.TrimSpace(ip)
+	if ip == "" || port <= 0 {
+		return ""
+	}
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		domain = ip
+	}
+	protocol = strings.ToLower(strings.TrimSpace(protocol))
+	if protocol == "" {
+		protocol = "tcp"
+	}
+	return fmt.Sprintf("port_opened|domain=%s|ip=%s|port=%d|proto=%s", domain, ip, port, protocol)
 }
 
 // ──────────────────────────────────────────
@@ -1599,20 +1958,21 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	// Persist scan job to DB
 	scanJob := db.ScanJob{
-		JobID:      jobID,
-		ProjectID:  projectID,
-		RootDomain: rootDomain,
-		Mode:       mode,
-		Modules:    strings.Join(modules, ","),
-		Status:     "pending",
+		JobID:        jobID,
+		ProjectID:    projectID,
+		RootDomain:   rootDomain,
+		Mode:         mode,
+		Modules:      strings.Join(modules, ","),
+		Status:       "pending",
+		EnableNuclei: req.EnableNuclei,
+		ActiveSubs:   req.ActiveSubs,
+		DictSize:     req.DictSize,
+		DNSResolvers: strings.TrimSpace(req.DNSResolvers),
+		DryRun:       req.DryRun,
 	}
 	if err := s.db.CreateScanJob(&scanJob); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create scan job: "+err.Error())
 		return
-	}
-
-	if !req.DryRun {
-		go s.runScanAsync(projectID, jobID, rootDomain, modules, req.EnableNuclei, req.ActiveSubs, req.DictSize, req.DNSResolvers)
 	}
 
 	writeJSON(w, http.StatusOK, jobOverviewResponse{
@@ -1657,7 +2017,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // runScanAsync executes the scan pipeline in a background goroutine.
-func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []string, enableNuclei, activeSubs bool, dictSize int, dnsResolvers string) {
+func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []string, enableNuclei, activeSubs bool, dictSize int, dnsResolvers string, dryRun bool) {
 	startTime := time.Now()
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1683,7 +2043,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 		StartedAt: &nowStart,
 	}).Error
 
-	log.Printf("[Scan] Job %s started for %s, modules=%v", jobID, rootDomain, modules)
+	log.Printf("[Scan] Job %s started for %s, modules=%v dryRun=%v", jobID, rootDomain, modules, dryRun)
 
 	// Frontend may send stage modules (subs/ports/httpx/...) or concrete tool
 	// modules (subfinder/findomain/bbot/naabu/nmap/...); normalize behavior here.
@@ -1713,12 +2073,9 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 
 	domains := []string{rootDomain}
 
-	// Check for cancellation
-	select {
-	case <-ctx.Done():
-		s.finishScan(projectID, rootDomain, jobID, startTime, nil, fmt.Errorf("canceled"))
+	if err := s.checkScanCanceled(ctx, jobID); err != nil {
+		s.finishScan(projectID, rootDomain, jobID, startTime, nil, err, dryRun)
 		return
-	default:
 	}
 
 	if hasSubs {
@@ -1726,7 +2083,11 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 		allResults = append(allResults, subResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("subdomain collection failed: %v", err)
-			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr)
+			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr, dryRun)
+			return
+		}
+		if err := s.checkScanCanceled(ctx, jobID); err != nil {
+			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun)
 			return
 		}
 
@@ -1738,6 +2099,10 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 			} else {
 				subdomains = mergeUnique(subdomains, activeSubdomains)
 			}
+			if err := s.checkScanCanceled(ctx, jobID); err != nil {
+				s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun)
+				return
+			}
 		}
 
 		if hasPorts || hasHttpx {
@@ -1746,6 +2111,10 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 			if err != nil {
 				scanErr = fmt.Errorf("network stage failed: %v", err)
 			}
+			if err := s.checkScanCanceled(ctx, jobID); err != nil {
+				s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun)
+				return
+			}
 		}
 	} else if hasPorts || hasHttpx {
 		networkResults, err := s.runNetworkPipeline(domains, hasHttpx, hasPorts, hasNuclei, hasWitness, screenshotDir)
@@ -1753,18 +2122,44 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 		if err != nil {
 			scanErr = fmt.Errorf("network stage failed: %v", err)
 		}
+		if err := s.checkScanCanceled(ctx, jobID); err != nil {
+			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun)
+			return
+		}
 	}
 
-	s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr)
+	s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr, dryRun)
 }
 
-func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.Time, results []engine.Result, scanErr error) {
+func (s *Server) checkScanCanceled(ctx context.Context, jobID string) error {
+	select {
+	case <-ctx.Done():
+		return errScanCanceled
+	default:
+	}
+	job, err := s.db.GetScanJob(jobID)
+	if err != nil {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(job.Status), "canceled") {
+		return errScanCanceled
+	}
+	return nil
+}
+
+func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.Time, results []engine.Result, scanErr error, dryRun bool) {
 	duration := int(time.Since(startTime).Seconds())
-	dbErr := s.saveResultsToDB(projectID, rootDomain, jobID, results)
+	var dbErr error
+	if !dryRun {
+		dbErr = s.saveResultsToDB(projectID, rootDomain, jobID, results)
+	}
 
 	finalStatus := "success"
 	errMsg := ""
-	if scanErr != nil {
+	if errors.Is(scanErr, errScanCanceled) {
+		finalStatus = "canceled"
+		errMsg = errScanCanceled.Error()
+	} else if scanErr != nil {
 		finalStatus = "failed"
 		errMsg = scanErr.Error()
 	} else if dbErr != nil {
@@ -1792,10 +2187,10 @@ func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.
 			"finished_at":  &now,
 		}).Error
 
-	log.Printf("[Scan] Job %s finished: status=%s duration=%ds subs=%d ports=%d vulns=%d",
-		jobID, finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"])
+	log.Printf("[Scan] Job %s finished: status=%s duration=%ds subs=%d ports=%d vulns=%d dryRun=%v",
+		jobID, finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"], dryRun)
 	s.writeAudit(projectID, "system", "finish_scan", "job", jobID, map[string]interface{}{
-		"status": finalStatus, "durationSec": duration, "subdomains": counts["subdomains"], "ports": counts["ports"], "vulns": counts["vulnerabilities"],
+		"status": finalStatus, "durationSec": duration, "subdomains": counts["subdomains"], "ports": counts["ports"], "vulns": counts["vulnerabilities"], "dryRun": dryRun,
 	}, nil)
 }
 
@@ -2205,6 +2600,75 @@ func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) handleMonitorEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
+
+	statusFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	eventTypeFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("event_type")))
+	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	limit := parseBoundedInt(r.URL.Query().Get("limit"), 200, 1, 1000)
+
+	query := s.db.DB.Model(&db.MonitorEvent{}).Where("project_id = ?", projectID)
+	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
+		query = query.Where("root_domain = ?", rd)
+	}
+	if statusFilter != "" && statusFilter != "all" {
+		query = query.Where("status = ?", statusFilter)
+	}
+	if eventTypeFilter != "" && eventTypeFilter != "all" {
+		query = query.Where("event_type = ?", eventTypeFilter)
+	}
+	if search != "" {
+		pattern := "%" + search + "%"
+		query = query.Where(
+			"LOWER(event_type) LIKE ? OR LOWER(status) LIKE ? OR LOWER(domain) LIKE ? OR LOWER(ip) LIKE ? OR CAST(port AS TEXT) LIKE ? OR LOWER(title) LIKE ?",
+			pattern, pattern, pattern, pattern, pattern, pattern,
+		)
+	}
+
+	var events []db.MonitorEvent
+	if err := query.Order("last_changed_at desc, id desc").Limit(limit).Find(&events).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	resp := make([]monitorEventResponse, 0, len(events))
+	for _, e := range events {
+		resp = append(resp, monitorEventResponse{
+			ID:              int(e.ID),
+			ProjectID:       e.ProjectID,
+			RootDomain:      e.RootDomain,
+			EventKey:        e.EventKey,
+			EventType:       e.EventType,
+			Status:          normalizeMonitorEventStatus(e.Status),
+			Domain:          e.Domain,
+			URL:             e.URL,
+			IP:              e.IP,
+			Port:            e.Port,
+			Protocol:        e.Protocol,
+			Service:         e.Service,
+			Version:         e.Version,
+			Title:           e.Title,
+			StatusCode:      e.StatusCode,
+			FirstSeenAt:     timeToISO(e.FirstSeenAt),
+			LastSeenAt:      timeToISO(e.LastSeenAt),
+			LastChangedAt:   timeToISO(e.LastChangedAt),
+			ResolvedAt:      timePtrToISO(e.ResolvedAt),
+			OccurrenceCount: e.OccurrenceCount,
+			LastRunID:       int(e.LastRunID),
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // ──────────────────────────────────────────
 // Screenshots
 // ──────────────────────────────────────────
@@ -2555,6 +3019,16 @@ func normalizeHealthStatus(raw string) string {
 		return "canceled"
 	default:
 		return s
+	}
+}
+
+func normalizeMonitorEventStatus(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	switch s {
+	case "open", "resolved", "ack", "ignored":
+		return s
+	default:
+		return monitorEventStatusOpen
 	}
 }
 

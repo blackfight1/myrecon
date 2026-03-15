@@ -7,6 +7,7 @@ import type {
   JobOverview,
   PagedJobs,
   MonitorChange,
+  MonitorEvent,
   MonitorRun,
   MonitorTarget,
   PagedPorts,
@@ -230,6 +231,16 @@ export const endpoints = {
     apiGet<MonitorRun[]>(withQuery("/monitor/runs", { project_id: projectId, root_domain: rootDomain })),
   getMonitorChanges: (projectId?: string, rootDomain?: string) =>
     apiGet<MonitorChange[]>(withQuery("/monitor/changes", { project_id: projectId, root_domain: rootDomain })),
+  getMonitorEvents: (projectId?: string, rootDomain?: string, status?: string, eventType?: string, q?: string) =>
+    apiGet<MonitorEvent[]>(
+      withQuery("/monitor/events", {
+        project_id: projectId,
+        root_domain: rootDomain,
+        status,
+        event_type: eventType,
+        q
+      })
+    ),
 
   // Screenshots
   getScreenshotDomains: (projectId: string) =>

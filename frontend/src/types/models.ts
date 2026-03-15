@@ -160,6 +160,30 @@ export interface MonitorChange {
   createdAt?: string;
 }
 
+export interface MonitorEvent {
+  id: number;
+  projectId?: string;
+  rootDomain: string;
+  eventKey: string;
+  eventType: string;
+  status: "open" | "resolved" | "ack" | "ignored";
+  domain?: string;
+  url?: string;
+  ip?: string;
+  port?: number;
+  protocol?: string;
+  service?: string;
+  version?: string;
+  title?: string;
+  statusCode?: number;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+  lastChangedAt?: string;
+  resolvedAt?: string;
+  occurrenceCount: number;
+  lastRunId?: number;
+}
+
 export interface ProjectRecord {
   id: string;
   name: string;

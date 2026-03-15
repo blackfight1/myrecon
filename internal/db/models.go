@@ -205,6 +205,38 @@ func (PortChange) TableName() string {
 	return "port_changes"
 }
 
+// MonitorEvent stores lifecycle of monitor findings.
+type MonitorEvent struct {
+	ID              uint           `gorm:"primarykey" json:"id"`
+	ProjectID       string         `gorm:"index:idx_monitor_event_project_key,unique,priority:1;index;not null;default:'default'" json:"project_id"`
+	RootDomain      string         `gorm:"index;not null" json:"root_domain"`
+	EventKey        string         `gorm:"type:text;index:idx_monitor_event_project_key,unique,priority:2;not null" json:"event_key"`
+	EventType       string         `gorm:"index;not null" json:"event_type"` // new_live / port_opened / ...
+	Status          string         `gorm:"index;not null;default:open" json:"status"`
+	Domain          string         `gorm:"index" json:"domain"`
+	URL             string         `gorm:"type:text" json:"url"`
+	IP              string         `gorm:"index" json:"ip"`
+	Port            int            `gorm:"index" json:"port"`
+	Protocol        string         `json:"protocol"`
+	Service         string         `json:"service"`
+	Version         string         `json:"version"`
+	Title           string         `gorm:"type:text" json:"title"`
+	StatusCode      int            `json:"status_code"`
+	FirstSeenAt     time.Time      `json:"first_seen_at"`
+	LastSeenAt      time.Time      `json:"last_seen_at"`
+	LastChangedAt   time.Time      `json:"last_changed_at"`
+	ResolvedAt      *time.Time     `json:"resolved_at"`
+	OccurrenceCount int            `json:"occurrence_count"`
+	LastRunID       uint           `gorm:"index" json:"last_run_id"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (MonitorEvent) TableName() string {
+	return "monitor_events"
+}
+
 // MonitorTarget stores monitor target baseline state.
 type MonitorTarget struct {
 	ID           uint           `gorm:"primarykey" json:"id"`
@@ -233,6 +265,11 @@ type ScanJob struct {
 	Mode         string         `gorm:"not null" json:"mode"`         // scan or monitor
 	Modules      string         `gorm:"type:text" json:"modules"`     // comma-separated
 	Status       string         `gorm:"index;not null" json:"status"` // pending/running/success/failed/canceled
+	EnableNuclei bool           `json:"enable_nuclei"`
+	ActiveSubs   bool           `json:"active_subs"`
+	DictSize     int            `json:"dict_size"`
+	DNSResolvers string         `gorm:"type:text" json:"dns_resolvers"`
+	DryRun       bool           `json:"dry_run"`
 	ErrorMessage string         `gorm:"type:text" json:"error_message"`
 	DurationSec  int            `json:"duration_sec"`
 	SubdomainCnt int            `json:"subdomain_cnt"`

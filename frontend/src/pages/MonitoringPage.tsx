@@ -4,10 +4,10 @@ import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useMonitorChanges, useMonitorRuns, useMonitorTargets, useCreateMonitorTarget, useStopMonitorTarget, useDeleteMonitorTarget } from "../hooks/queries";
+import { useMonitorEvents, useMonitorRuns, useMonitorTargets, useCreateMonitorTarget, useStopMonitorTarget, useDeleteMonitorTarget } from "../hooks/queries";
 import { formatDate } from "../lib/format";
 import { matchesProjectDomain } from "../lib/projectScope";
-import type { MonitorChange, MonitorRun } from "../types/models";
+import type { MonitorEvent, MonitorRun } from "../types/models";
 
 /* ---------- 监控运行记录表 ---------- */
 const rCol = createColumnHelper<MonitorRun>();
@@ -26,17 +26,21 @@ const runColumns = [
 ];
 
 /* ---------- 变更事件表 ---------- */
-const cCol = createColumnHelper<MonitorChange>();
-const changeColumns = [
-  cCol.accessor("runId", { header: "运行 ID" }),
-  cCol.accessor("rootDomain", { header: "根域名" }),
-  cCol.accessor("changeType", { header: "类型", cell: (c) => <span className="badge badge-info">{c.getValue()}</span> }),
-  cCol.accessor("domain", { header: "域名", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
-  cCol.accessor("ip", { header: "IP", cell: (c) => c.getValue() ? <span className="cell-mono">{c.getValue()}</span> : <span className="cell-muted">—</span> }),
-  cCol.accessor("port", { header: "端口", cell: (c) => c.getValue() ?? <span className="cell-muted">—</span> }),
-  cCol.accessor("statusCode", { header: "状态码", cell: (c) => c.getValue() ?? <span className="cell-muted">—</span> }),
-  cCol.accessor("title", { header: "标题", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
-  cCol.accessor("createdAt", { header: "时间", cell: (c) => formatDate(c.getValue()) })
+const eCol = createColumnHelper<MonitorEvent>();
+const eventColumns = [
+  eCol.accessor("id", { header: "事件 ID" }),
+  eCol.accessor("rootDomain", { header: "根域名" }),
+  eCol.accessor("eventType", { header: "类型", cell: (c) => <span className="badge badge-info">{c.getValue()}</span> }),
+  eCol.accessor("status", { header: "状态", cell: (c) => <StatusBadge status={c.getValue()} /> }),
+  eCol.accessor("domain", { header: "域名", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  eCol.accessor("ip", { header: "IP", cell: (c) => c.getValue() ? <span className="cell-mono">{c.getValue()}</span> : <span className="cell-muted">—</span> }),
+  eCol.accessor("port", { header: "端口", cell: (c) => c.getValue() ?? <span className="cell-muted">—</span> }),
+  eCol.accessor("service", { header: "服务", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  eCol.accessor("statusCode", { header: "状态码", cell: (c) => c.getValue() ?? <span className="cell-muted">—</span> }),
+  eCol.accessor("occurrenceCount", { header: "出现次数" }),
+  eCol.accessor("firstSeenAt", { header: "首次出现", cell: (c) => formatDate(c.getValue()) }),
+  eCol.accessor("lastSeenAt", { header: "最后出现", cell: (c) => formatDate(c.getValue()) }),
+  eCol.accessor("lastChangedAt", { header: "最后变更", cell: (c) => formatDate(c.getValue()) })
 ];
 
 export function MonitoringPage() {
@@ -46,7 +50,7 @@ export function MonitoringPage() {
 
   const targetsQ = useMonitorTargets(projectId);
   const runsQ = useMonitorRuns(projectId);
-  const changesQ = useMonitorChanges(projectId);
+  const eventsQ = useMonitorEvents(projectId);
   const createMonitor = useCreateMonitorTarget();
   const stopMonitor = useStopMonitorTarget();
   const deleteMonitor = useDeleteMonitorTarget();
@@ -86,9 +90,9 @@ export function MonitoringPage() {
 
   const targets = useMemo(() => (targetsQ.data ?? []).filter((t) => matchesProjectDomain(t.rootDomain, rootDomains)), [targetsQ.data, rootDomains]);
   const runs = useMemo(() => (runsQ.data ?? []).filter((r) => matchesProjectDomain(r.rootDomain, rootDomains)), [runsQ.data, rootDomains]);
-  const changes = useMemo(() => (changesQ.data ?? []).filter((c) => matchesProjectDomain(c.rootDomain, rootDomains)), [changesQ.data, rootDomains]);
+  const events = useMemo(() => (eventsQ.data ?? []).filter((e) => matchesProjectDomain(e.rootDomain, rootDomains)), [eventsQ.data, rootDomains]);
 
-  const loading = targetsQ.isLoading || runsQ.isLoading || changesQ.isLoading;
+  const loading = targetsQ.isLoading || runsQ.isLoading || eventsQ.isLoading;
 
   return (
     <section className="page">
@@ -180,10 +184,10 @@ export function MonitoringPage() {
 
       <article className="panel">
         <header className="panel-header">
-          <h2>变更事件</h2>
-          <span className="panel-meta">{changes.length} 个事件</span>
+          <h2>事件生命周期</h2>
+          <span className="panel-meta">{events.length} 个事件</span>
         </header>
-        <DataTable data={changes} columns={changeColumns} />
+        <DataTable data={events} columns={eventColumns} />
       </article>
     </section>
   );

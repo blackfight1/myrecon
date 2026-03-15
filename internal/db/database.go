@@ -35,7 +35,7 @@ func NewDatabase(dsn string) (*Database, error) {
 	if err := database.AutoMigrate(
 		&Project{}, &ProjectScope{},
 		&Asset{}, &Port{}, &Vulnerability{}, &VulnEvent{},
-		&MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorTarget{}, &MonitorTask{},
+		&MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorEvent{}, &MonitorTarget{}, &MonitorTask{},
 		&ScanJob{}, &ScanStage{}, &ScanArtifact{}, &AssetEdge{}, &AuditLog{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %v", err)
@@ -56,6 +56,7 @@ func ensureProjectScopedSchema(database *gorm.DB) error {
 			"UPDATE monitor_targets SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE monitor_tasks SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE monitor_runs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE monitor_events SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE scan_jobs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE scan_stages SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE scan_artifacts SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
@@ -91,6 +92,7 @@ func ensureProjectScopedSchema(database *gorm.DB) error {
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_project_domain ON assets (project_id, domain)",
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_project_fingerprint ON vulnerabilities (project_id, fingerprint)",
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_target_project_root ON monitor_targets (project_id, root_domain)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_event_project_key ON monitor_events (project_id, event_key)",
 		}
 		for _, stmt := range createStatements {
 			if err := tx.Exec(stmt).Error; err != nil {
@@ -662,6 +664,9 @@ func (d *Database) DeleteMonitorDataByRootDomain(projectID, rootDomain string) e
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&AssetChange{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorEvent{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorRun{}).Error; err != nil {
 			return err
 		}
@@ -1019,6 +1024,9 @@ func (d *Database) DeleteAllDataByRootDomain(projectID, rootDomain string) error
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&AssetChange{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorEvent{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorRun{}).Error; err != nil {
 			return err
 		}
@@ -1087,6 +1095,63 @@ func (d *Database) CancelScanJob(jobID string) error {
 			"status":      "canceled",
 			"finished_at": now,
 		}).Error
+}
+
+// ClaimPendingScanJob atomically claims one pending scan job.
+func (d *Database) ClaimPendingScanJob() (*ScanJob, error) {
+	var claimed *ScanJob
+	err := d.DB.Transaction(func(tx *gorm.DB) error {
+		var job ScanJob
+		now := time.Now()
+		result := tx.Model(&ScanJob{}).
+			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("mode = ? AND status = ?", "scan", "pending").
+			Order("created_at asc").
+			First(&job)
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil
+		}
+		if result.Error != nil {
+			return result.Error
+		}
+
+		if err := tx.Model(&ScanJob{}).
+			Where("id = ? AND status = ?", job.ID, "pending").
+			Updates(map[string]interface{}{
+				"status":     "running",
+				"started_at": now,
+			}).Error; err != nil {
+			return err
+		}
+		job.Status = "running"
+		job.StartedAt = &now
+		claimed = &job
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
+// RecoverStaleRunningScanJobs marks stale running scan jobs as failed.
+func (d *Database) RecoverStaleRunningScanJobs(staleAfter time.Duration) (int, error) {
+	if staleAfter <= 0 {
+		staleAfter = 6 * time.Hour
+	}
+	now := time.Now()
+	cutoff := now.Add(-staleAfter)
+	result := d.DB.Model(&ScanJob{}).
+		Where("mode = ? AND status = ? AND started_at IS NOT NULL AND started_at <= ?", "scan", "running", cutoff).
+		Updates(map[string]interface{}{
+			"status":        "failed",
+			"finished_at":   now,
+			"error_message": "stale running scan job recovered by worker",
+		})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return int(result.RowsAffected), nil
 }
 
 func getStringValue(data map[string]interface{}, key string) string {

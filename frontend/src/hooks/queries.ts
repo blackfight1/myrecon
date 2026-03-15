@@ -167,6 +167,7 @@ export function useDeleteMonitorTarget() {
       await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
       await qc.invalidateQueries({ queryKey: ["monitor-runs"] });
       await qc.invalidateQueries({ queryKey: ["monitor-changes"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-events"] });
       await qc.invalidateQueries({ queryKey: ["jobs"] });
       await qc.invalidateQueries({ queryKey: ["jobs-page"] });
     }
@@ -186,6 +187,15 @@ export function useMonitorChanges(projectId?: string, rootDomain?: string) {
   return useQuery({
     queryKey: ["monitor-changes", projectId ?? "", rootDomain ?? ""],
     queryFn: () => endpoints.getMonitorChanges(projectId, rootDomain),
+    enabled: !!projectId,
+    refetchInterval: 10000
+  });
+}
+
+export function useMonitorEvents(projectId?: string, rootDomain?: string, status?: string, eventType?: string, q?: string) {
+  return useQuery({
+    queryKey: ["monitor-events", projectId ?? "", rootDomain ?? "", status ?? "", eventType ?? "", q ?? ""],
+    queryFn: () => endpoints.getMonitorEvents(projectId, rootDomain, status, eventType, q),
     enabled: !!projectId,
     refetchInterval: 10000
   });

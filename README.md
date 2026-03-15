@@ -1,119 +1,171 @@
-﻿# Hunter - 资产侦查与漏洞发现引擎
+﻿# Hunter / MyRecon
 
-Hunter 是一个模块化的后端工具，面向 bug bounty 侦查流程，支持：
+轻量化资产侦查与漏洞发现平台，面向日常资产盘点、持续监控和漏洞候选收集。
 
-- 子域名收集（多工具并行）
-- 存活探测与端口扫描
-- Web 截图
-- Nuclei 漏洞扫描（排除常见噪声模板）
-- PostgreSQL 持久化
+当前版本已经采用 **API 进程与 Worker 执行进程分离** 的模式：
 
-## 功能概览
+- API (`-mode web`)：只负责接收请求、查询数据、写入任务队列
+- Worker (`-mode worker`)：只负责消费任务并执行扫描
 
-- `subs`：子域名收集（`subfinder` / `findomain` / `bbot` / `shosubgo`）
-- `subs-active`：可选主动扩展（`dictgen` + `dnsx`）
-- `ports`：`httpx` + `naabu` + `nmap`
-- `witness`：`gowitness` 截图
-- `nuclei`：可选漏洞扫描（默认排除 `ssl,dns` 协议模板及指定噪声模板 ID）
-- `notify`：可选钉钉通知（recon 开始/结束）
-- `monitor`：定时监控单个域名，跟踪新存活子域/Web变化/端口变化
+> 如果只启动 API 不启动 Worker，`scan_jobs` 会一直停在 `pending`，这是预期行为。
 
-## 项目结构
+## 核心能力
+
+- 子域名收集：`subfinder` / `findomain` / `bbot` / `shosubgo`
+- 可选主动扩展：`dictgen + dnsx`
+- Web 存活探测：`httpx`
+- 端口与服务识别：`naabu + nmap`
+- Web 截图：`gowitness`
+- 漏洞候选：`nuclei`
+- 资产、端口、漏洞、任务、监控结果统一落地 PostgreSQL
+- 前端控制台（React + Vite）
+
+## 架构说明
+
+```text
+Frontend (Vite/Nginx)
+        |
+        v
+API Server (go run . -mode web)
+        |
+        +--> PostgreSQL (assets/ports/vulns/jobs/...)
+        |
+        +--> scan_jobs / monitor_tasks (任务队列)
+                              |
+                              v
+                     Worker (go run . -mode worker)
+                              |
+                              v
+             调用外部扫描工具并回写 PostgreSQL
+```
+
+## 目录结构
 
 ```text
 myrecon/
 ├── main.go
+├── monitor.go
 ├── internal/
+│   ├── api/
+│   ├── db/
 │   ├── engine/
-│   │   └── scanner.go
-│   ├── plugins/
-│   │   ├── plugins.go           # 兼容导出层（对外 API 不变）
-│   │   ├── subdomain/           # 子域名收集
-│   │   │   ├── subfinder.go
-│   │   │   ├── findomain.go
-│   │   │   ├── bbot.go
-│   │   │   └── shosubgo.go
-│   │   ├── web/                 # Web 存活/截图
-│   │   │   ├── httpx.go
-│   │   │   └── gowitness.go
-│   │   ├── port/                # 端口扫描
-│   │   │   ├── naabu.go
-│   │   │   └── nmap.go
-│   │   ├── vuln/                # 漏洞扫描
-│   │   │   └── nuclei.go
-│   │   ├── notify/              # 通知
-│   │   │   └── dingtalk_notify.go
-│   │   └── common/
-│   │       └── utils.go
-│   └── db/
-│       ├── models.go
-│       └── database.go
+│   └── plugins/
+├── frontend/
 ├── docker-compose.yml
 └── README.md
 ```
 
-## 环境准备
+## 环境要求
 
-### 1) 基础依赖
+- Go `1.21+`
+- PostgreSQL `15+`（推荐直接用 `docker-compose.yml`）
+- Node.js `20+`（仅前端开发需要）
+- Docker / Docker Compose（可选，但推荐）
 
-- Go 1.21+
-- Docker / Docker Compose
-- PostgreSQL（可通过 docker-compose 启动）
+## 安装第三方扫描工具
 
-### 2) 安装扫描工具
+以下工具由后端在运行时直接调用（`PATH` 中必须可见）。
+
+### 1) 子域名收集工具
 
 ```bash
-# 子域名收集
+# subfinder
 go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
-# findomain 建议从 release 下载预编译二进制，或使用 cargo 安装
-cargo install findomain
-# 推荐使用 pipx 安装 bbot（或按官方文档其他方式安装）
-pipx install bbot
-go install -v github.com/incogbyte/shosubgo@latest
-# 主动爆破（可选）
-go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
 
-# 存活探测
+# findomain（常见方式：cargo）
+cargo install findomain
+# 或使用官方 release 二进制
+
+# bbot（推荐 pipx）
+pipx install bbot
+
+# shosubgo
+go install -v github.com/incogbyte/shosubgo@latest
+```
+
+### 2) 主动子域名扩展（可选）
+
+```bash
+# dnsx
+go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+```
+
+### 3) Web / 端口 / 漏洞 / 截图工具
+
+```bash
+# httpx
 go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 
-# 端口扫描
+# naabu
 go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
-# nmap 需要系统安装
 
-# 截图
+# nmap（系统包管理器安装）
+# Ubuntu/Debian: sudo apt-get install -y nmap
+# macOS: brew install nmap
+
+# gowitness
 go install github.com/sensepost/gowitness@latest
 
-# 漏洞扫描
+# nuclei
 go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 nuclei -update-templates
 ```
 
-### 3) 环境变量
+### 4) 安装自检
+
+Linux/macOS:
 
 ```bash
-# Shodan 子域名插件需要
-export SHODAN_API_KEY=your_key
-
-# 钉钉通知（开启 -notify 时需要）
-export DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxxx
-
-# 如果机器人开启“加签”，还需要配置
-export DINGTALK_SECRET=SECxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+for t in subfinder findomain bbot shosubgo dnsx httpx naabu nmap gowitness nuclei; do
+  command -v "$t" >/dev/null 2>&1 && echo "[OK] $t" || echo "[MISS] $t"
+done
 ```
 
-Windows PowerShell:
+PowerShell:
+
+```powershell
+$tools = "subfinder","findomain","bbot","shosubgo","dnsx","httpx","naabu","nmap","gowitness","nuclei"
+foreach ($t in $tools) {
+  if (Get-Command $t -ErrorAction SilentlyContinue) { "[OK] $t" } else { "[MISS] $t" }
+}
+```
+
+## 环境变量
+
+```bash
+# shosubgo 依赖（使用 Shodan 数据时必需）
+SHODAN_API_KEY=your_key
+
+# DingTalk 通知（开启 -notify 时）
+DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxxx
+DINGTALK_SECRET=SECxxxxxxxxxxxxxxxx
+
+# CORS（可选）
+# 默认仅允许 http://localhost:5173 和 http://127.0.0.1:5173
+# 允许所有跨域（开发临时用，不推荐生产）：
+CORS_ALLOWED_ORIGINS=*
+# 指定多个来源：
+# CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+```
+
+PowerShell 示例：
 
 ```powershell
 $env:SHODAN_API_KEY="your_key"
+$env:DINGTALK_WEBHOOK="https://oapi.dingtalk.com/robot/send?access_token=xxxx"
+$env:DINGTALK_SECRET="SECxxxx"
+$env:CORS_ALLOWED_ORIGINS="http://localhost:5173"
 ```
 
-## 启动数据库
+## 启动方式（推荐）
+
+### 1) 启动 PostgreSQL
 
 ```bash
-docker-compose up -d
+docker compose up -d postgres
 ```
 
-默认连接：
+默认连接（与当前代码一致）：
 
 - host: `localhost`
 - port: `5432`
@@ -121,279 +173,156 @@ docker-compose up -d
 - user: `hunter`
 - password: `hunter123`
 
-## 使用方法
-
-### 完整扫描（推荐）
+### 2) 启动 API（Web）
 
 ```bash
-go run main.go -mode scan -d example.com
+go run . -mode web -web-addr 0.0.0.0:8080
 ```
 
-### 完整扫描 + Nuclei
+### 3) 启动 Worker（任务执行）
 
 ```bash
-go run main.go -mode scan -d example.com -nuclei
+go run . -mode worker
 ```
 
-### 完整扫描 + 主动子域名爆破（小字典）
+## 前端启动
+
+### 本地开发
 
 ```bash
-go run main.go -mode scan -d example.com -active-subs -dict-size 1500
+cd frontend
+npm install
+npm run dev
 ```
 
-### 完整扫描 + 钉钉通知
+默认会代理 `/api` 到 `http://127.0.0.1:8080`。
+
+若 API 不在该地址，可指定：
 
 ```bash
-go run main.go -mode scan -d example.com -notify
+cd frontend
+VITE_API_TARGET=http://127.0.0.1:8080 npm run dev
 ```
 
-### 监控模式（第一阶段）
+### Docker 启动前端
 
 ```bash
-go run main.go -mode monitor -d example.com -monitor-interval 6h -notify
+docker compose up -d frontend
 ```
 
-### 监控管理
+注意：`frontend/nginx.conf` 当前会把 `/api` 代理到 `http://host.docker.internal:8080`，
+因此 API 需要运行在宿主机 `8080` 端口。
+
+## CLI 快速用法
+
+### 扫描模式
 
 ```bash
-# 列出当前监控域名
+# 完整扫描
+go run . -mode scan -d example.com
+
+# 完整扫描 + nuclei
+go run . -mode scan -d example.com -nuclei
+
+# 完整扫描 + 主动子域名扩展
+go run . -mode scan -d example.com -active-subs -dict-size 1500
+
+# 仅子域名
+go run . -mode scan -m subs -d example.com
+
+# 仅端口链（输入子域名列表）
+go run . -mode scan -m ports -i subdomains.txt -nuclei
+
+# 仅截图（输入 URL 列表）
+go run . -mode scan -m witness -i urls.txt
+```
+
+### 监控模式
+
+```bash
+# 开启监控
+go run . -mode monitor -d example.com -monitor-interval 6h
+
+# 列出监控目标
 go run . -mode monitor -monitor-list
 
-# 停止某个域名监控
+# 停止监控
 go run . -mode monitor -monitor-stop example.com
 
-# 删除某个域名的监控数据（仅监控相关表）
+# 删除监控数据
 go run . -mode monitor -monitor-delete example.com
 ```
 
 ### Scan 数据管理
 
 ```bash
-# 列出 scan 数据中的所有域名
+# 列出 scan 资产域名
 go run . -mode scan -scan-list-domains
 
-# 删除某个域名的所有数据（资产/端口/漏洞/监控相关）
+# 删除某根域名的全部数据
 go run . -mode scan -scan-delete-domain example.com
 ```
 
-说明：监控模式会循环执行 `subs+ports`，并检测：
-
-- 新存活子域（含标题、状态码、技术栈）
-- Web 指纹变化（状态码/标题/技术栈）
-- 端口新增/关闭/服务版本变化
-
-监控基线策略：
-
-- 第一次监控运行仅建立基线（`baseline_done=true`），只发送开始/结束通知
-- 从第二次运行开始，才发送变化通知
-
-监控调度策略：
-
-- 监控改为任务化调度（`monitor_tasks`），不再按单域名 sleep 循环
-- worker 周期轮询到期任务并执行
-- 失败自动重试并退避（30s -> 120s -> 600s）
-- 超过最大重试后标记失败，并在下个监控周期重新创建任务
-
-### 批量扫描
-
-```bash
-go run main.go -dL domains.txt -nuclei
-```
-
-### 仅运行指定模块
-
-```bash
-# 仅子域名收集
-go run main.go -m subs -d example.com
-
-# 仅端口链（输入是子域名列表）
-go run main.go -m ports -i subdomains.txt -nuclei
-
-# 仅截图（输入是 URL 列表）
-go run main.go -m witness -i urls.txt
-```
-
-### 管道输入
-
-```bash
-cat subdomains.txt | go run main.go -m ports -nuclei
-cat urls.txt | go run main.go -m witness
-```
-
-## 命令行参数
+## 常用参数
 
 | 参数 | 说明 |
 |---|---|
-| `-mode` | 运行模式：`scan` 或 `monitor`（默认 `scan`） |
-| `-d` | 单个目标域名 |
-| `-dL` | 域名列表文件 |
-| `-i` | 输入文件（ports/witness 模块） |
-| `-m` | 模块选择：`subs,ports,witness` |
-| `--dry-run` | 只运行，不写数据库 |
-| `-screenshot-dir` | 截图目录（默认 `screenshots`） |
-| `-nuclei` | 启用 Nuclei 漏洞扫描 |
-| `-active-subs` | 启用被动后主动子域名爆破（dictgen + dnsx） |
-| `-dict-size` | 主动爆破字典大小上限（默认 `1500`） |
-| `-dns-resolvers` | dnsx resolvers 文件路径（可选） |
-| `-notify` | 启用钉钉开始/结束通知（读取 `DINGTALK_WEBHOOK`） |
-| `-monitor-interval` | 监控间隔（默认 `6h`） |
-| `-monitor-list` | 列出当前监控域名 |
-| `-monitor-stop` | 停止某个域名监控 |
-| `-monitor-delete` | 删除某个域名监控数据（监控表） |
-| `-scan-list-domains` | 列出 scan 数据中的所有域名 |
-| `-scan-delete-domain` | 删除某个域名的所有数据 |
-| `-report` | 启动 gowitness 报告服务 |
-| `-report-host` | 报告服务监听地址 |
-| `-report-port` | 报告服务端口 |
-| `-list-screenshots` | 列出已有截图域名 |
+| `-mode` | `scan` / `monitor` / `web` / `worker` |
+| `-web-addr` | API 监听地址（仅 `web` 模式） |
+| `-project` | 项目 ID（CLI 扫描/监控隔离） |
+| `-d` | 单个根域名 |
+| `-dL` | 根域名文件 |
+| `-i` | 输入文件（ports/witness） |
+| `-m` | 模块：`subs,ports,witness` |
+| `-dry-run` | 只执行不入库 |
+| `-nuclei` | 启用 nuclei |
+| `-active-subs` | 启用主动子域名扩展 |
+| `-dict-size` | 主动扩展字典大小上限 |
+| `-dns-resolvers` | dnsx resolvers 文件 |
+| `-notify` | 启用钉钉开始/结束通知 |
+| `-monitor-interval` | 监控周期 |
 
-## 扫描流程
+## 关键 API（前端主要使用）
 
-```text
-输入目标(-d/-dL/-i)
-      |
-      v
-模块选择(subs/ports/witness)
-      |
-      v
-[subs] 子域名收集(并行多工具) -> 去重
-      |
-      +--> [可选] dictgen 生成小字典 -> dnsx 主动爆破
-      |
-      v
-[ports] httpx存活 + naabu->nmap
-      |
-      +--> [可选] nuclei (CVE优先)
-      |
-      +--> [可选] gowitness 截图
-      |
-      v
-写入 PostgreSQL + 输出统计摘要
-```
+- `GET /api/projects`
+- `GET /api/dashboard/summary`
+- `GET/POST /api/jobs`
+- `POST /api/jobs/cancel`
+- `GET /api/assets`
+- `GET /api/ports`
+- `GET /api/vulns`
+- `GET /api/monitor/targets`
+- `GET /api/monitor/runs`
+- `GET /api/monitor/changes`
+- `GET /api/screenshots/domains`
+- `GET /api/screenshots/:rootDomain`
 
-## 数据库表
+## 故障排查
 
-自动迁移会创建以下表：
+### 1) 作业一直 `pending`
 
-- `assets`：资产信息（域名、URL、状态码、标题、技术栈等）
-- `ports`：端口与服务信息
-- `vulnerabilities`：Nuclei 漏洞结果（模板、严重度、CVE、匹配目标、指纹等）
-- `monitor_runs`：每次监控运行记录（状态、耗时、变化统计）
-- `asset_changes`：子域/Web变化明细
-- `port_changes`：端口变化明细
-- `monitor_targets`：监控目标状态（是否已完成基线）
-- `monitor_tasks`：监控调度任务（pending/running/success/failed/canceled）
+- 检查是否已启动 `go run . -mode worker`。
 
-## 常用查询
+### 2) 前端报 CORS 403
 
-```sql
--- 资产
-SELECT domain, url, status_code, title, last_seen FROM assets ORDER BY updated_at DESC LIMIT 50;
+- 检查 `CORS_ALLOWED_ORIGINS` 是否包含你的前端地址。
+- 开发期可临时设置 `CORS_ALLOWED_ORIGINS=*`。
 
--- 端口
-SELECT domain, ip, port, service, version, last_seen FROM ports ORDER BY updated_at DESC LIMIT 50;
+### 3) 扫描时报某工具 not found in PATH
 
--- 漏洞
-SELECT domain, template_id, severity, cve, matched_at, last_seen
-FROM vulnerabilities
-ORDER BY updated_at DESC
-LIMIT 50;
-```
+- 说明对应二进制未安装或 PATH 未生效。
+- 重新安装后重启终端/进程。
 
-## 数据删除与清理
+### 4) `shosubgo` 报错 `SHODAN_API_KEY` 未设置
 
-```bash
-# 进入 PostgreSQL
-docker compose exec postgres psql -U hunter -d hunter
-```
+- 设置 `SHODAN_API_KEY` 后再执行包含 shosubgo 的扫描。
 
-### 1) 清空所有扫描数据（保留表结构）
+### 5) 前端 Docker 能开但无数据
 
-```sql
-TRUNCATE TABLE
-  vulnerabilities,
-  port_changes,
-  asset_changes,
-  monitor_runs,
-  monitor_tasks,
-  monitor_targets,
-  ports,
-  assets
-RESTART IDENTITY CASCADE;
-```
+- `frontend` 容器默认代理到宿主机 `8080`，确认 API 正在该端口运行。
 
-### 2) 按根域名删除数据（示例：example.com）
+## 合规与安全
 
-```sql
--- 先删变化与漏洞，再删端口和资产
-DELETE FROM vulnerabilities
-WHERE domain = 'example.com' OR domain LIKE '%.example.com';
+- 仅对授权范围内目标执行扫描。
+- 漏洞结果是候选项，提交前请人工复现。
 
-DELETE FROM port_changes
-WHERE root_domain = 'example.com';
-
-DELETE FROM asset_changes
-WHERE root_domain = 'example.com';
-
-DELETE FROM monitor_runs
-WHERE root_domain = 'example.com';
-
-DELETE FROM monitor_tasks
-WHERE root_domain = 'example.com';
-
-DELETE FROM monitor_targets
-WHERE root_domain = 'example.com';
-
-DELETE FROM ports
-WHERE domain = 'example.com' OR domain LIKE '%.example.com';
-
-DELETE FROM assets
-WHERE domain = 'example.com' OR domain LIKE '%.example.com';
-```
-
-### 3) 仅重置监控状态（保留资产数据）
-
-```sql
-DELETE FROM port_changes WHERE root_domain = 'example.com';
-DELETE FROM asset_changes WHERE root_domain = 'example.com';
-DELETE FROM monitor_runs WHERE root_domain = 'example.com';
-DELETE FROM monitor_tasks WHERE root_domain = 'example.com';
-DELETE FROM monitor_targets WHERE root_domain = 'example.com';
-```
-
-## 截图查看
-
-```bash
-# 列出可查看域名
-go run main.go -list-screenshots
-
-# 启动指定域名的截图服务
-go run main.go -report example.com
-
-# 自定义地址端口
-go run main.go -report example.com -report-host 0.0.0.0 -report-port 8080
-```
-
-## 注意事项
-
-- 仅对授权范围目标执行扫描。
-- `shosubgo` 依赖 `SHODAN_API_KEY`。
-- `nuclei` 结果属于候选，建议人工复现后再提交报告。
-- 首次运行 `nuclei` 前建议执行 `nuclei -update-templates`。
-- 钉钉机器人如开启加签，必须同时配置 `DINGTALK_SECRET`。
-
-## 终端输出说明
-
-- `scan` 模式启动时会打印：输入数量、执行模块、运行模式（normal/dry-run）
-- 扫描过程中会打印阶段提示：`[阶段]` 和入库提示：`[入库]`
-- 扫描结束后会统一打印：总耗时、子域/Web/端口/漏洞/截图统计
-- 若插件返回运行状态，会打印每个插件的 success/fail/timeout/duration
-
-## 后续维护约定
-
-后续如果功能或参数有变更，请同步更新本 README，至少包含：
-
-- 新增/变更参数
-- 流程图或执行顺序变化
-- 数据库表结构变化
-- 最小可运行示例命令

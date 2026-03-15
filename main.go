@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	runMode := flag.String("mode", "scan", "Run mode: scan, monitor, or web")
+	runMode := flag.String("mode", "scan", "Run mode: scan, monitor, web, or worker")
 	webAddr := flag.String("web-addr", "0.0.0.0:8080", "API server listen address (web mode)")
 	projectID := flag.String("project", "default", "Project ID for CLI scan/monitor operations")
 	domain := flag.String("d", "", "Single target root domain")
@@ -60,6 +60,18 @@ func main() {
 		}
 		srv := api.NewServer(database, *screenshotDir)
 		log.Fatal(srv.Start(*webAddr))
+		return
+	}
+
+	// ── Worker Mode ──
+	if mode == "worker" {
+		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
+		database, err := db.NewDatabase(dsn)
+		if err != nil {
+			log.Fatalf("database connection failed: %v", err)
+		}
+		srv := api.NewServer(database, *screenshotDir)
+		log.Fatal(srv.RunWorkers())
 		return
 	}
 
@@ -379,6 +391,8 @@ func printUsage() {
 	fmt.Println("Hunter - Recon Backend")
 	fmt.Println()
 	fmt.Println("Usage:")
+	fmt.Println("  API server:         go run . -mode web -web-addr 0.0.0.0:8080")
+	fmt.Println("  Worker:             go run . -mode worker")
 	fmt.Println("  Scan:              go run . -mode scan -d example.com")
 	fmt.Println("  Monitor:           go run . -mode monitor -d example.com -monitor-interval 6h")
 	fmt.Println("  Batch scan:        go run . -mode scan -dL domains.txt")
