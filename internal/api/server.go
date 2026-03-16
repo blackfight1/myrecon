@@ -128,6 +128,7 @@ type createJobRequest struct {
 	DictSize     int      `json:"dictSize"`
 	DNSResolvers string   `json:"dnsResolvers"`
 	DryRun       bool     `json:"dryRun"`
+	Notify       *bool    `json:"notify"`
 }
 
 type assetResponse struct {
@@ -857,8 +858,9 @@ func (s *Server) executeClaimedScanJob(job *db.ScanJob) {
 	dictSize := job.DictSize
 	dnsResolvers := strings.TrimSpace(job.DNSResolvers)
 	dryRun := job.DryRun
+	notify := job.Notify
 	log.Printf("[Worker] claimed scan job %s project=%s root=%s modules=%v", job.JobID, job.ProjectID, job.RootDomain, modules)
-	s.runScanAsync(job.ProjectID, job.JobID, job.RootDomain, modules, enableNuclei, activeSubs, dictSize, dnsResolvers, dryRun)
+	s.runScanAsync(job.ProjectID, job.JobID, job.RootDomain, modules, enableNuclei, activeSubs, dictSize, dnsResolvers, dryRun, notify)
 }
 
 func (s *Server) runMonitorScheduler() {
@@ -1764,7 +1766,7 @@ SELECT
 	COALESCE(sj.port_cnt, 0) AS port_cnt,
 	COALESCE(sj.vuln_cnt, 0) AS vuln_cnt
 FROM scan_jobs sj
-WHERE sj.project_id = ?
+WHERE sj.project_id = ? AND sj.deleted_at IS NULL
 UNION ALL
 SELECT
 	('task-' || mt.id::text) AS id,
@@ -1785,7 +1787,7 @@ SELECT
 	0 AS port_cnt,
 	0 AS vuln_cnt
 FROM monitor_tasks mt
-WHERE mt.project_id = ?
+WHERE mt.project_id = ? AND mt.deleted_at IS NULL
 `
 	whereParts := make([]string, 0, 4)
 	args := []interface{}{projectFilter, projectFilter}
@@ -1923,6 +1925,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "mode must be scan or monitor")
 		return
 	}
+	notify := true
+	if req.Notify != nil {
+		notify = *req.Notify
+	}
 
 	modules := sanitizeModules(req.Modules)
 	if len(modules) == 0 {
@@ -1976,6 +1982,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		DictSize:     req.DictSize,
 		DNSResolvers: strings.TrimSpace(req.DNSResolvers),
 		DryRun:       req.DryRun,
+		Notify:       notify,
 	}
 	if err := s.db.CreateScanJob(&scanJob); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create scan job: "+err.Error())
@@ -1987,7 +1994,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		Status: "pending", StartedAt: now.Format(time.RFC3339),
 	})
 	s.writeAudit(projectID, actorFromRequest(r), "create_scan", "job", jobID, map[string]interface{}{
-		"domain": rootDomain, "modules": modules, "dryRun": req.DryRun,
+		"domain": rootDomain, "modules": modules, "dryRun": req.DryRun, "notify": notify,
 	}, r)
 }
 
@@ -2084,7 +2091,7 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // runScanAsync executes the scan pipeline in a background goroutine.
-func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []string, enableNuclei, activeSubs bool, dictSize int, dnsResolvers string, dryRun bool) {
+func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []string, enableNuclei, activeSubs bool, dictSize int, dnsResolvers string, dryRun, notify bool) {
 	startTime := time.Now()
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -2141,7 +2148,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	domains := []string{rootDomain}
 
 	if err := s.checkScanCanceled(ctx, jobID); err != nil {
-		s.finishScan(projectID, rootDomain, jobID, startTime, nil, err, dryRun)
+		s.finishScan(projectID, rootDomain, jobID, startTime, nil, err, dryRun, notify)
 		return
 	}
 
@@ -2150,11 +2157,11 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 		allResults = append(allResults, subResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("subdomain collection failed: %v", err)
-			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr, dryRun)
+			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr, dryRun, notify)
 			return
 		}
 		if err := s.checkScanCanceled(ctx, jobID); err != nil {
-			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun)
+			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 			return
 		}
 
@@ -2167,7 +2174,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 				subdomains = mergeUnique(subdomains, activeSubdomains)
 			}
 			if err := s.checkScanCanceled(ctx, jobID); err != nil {
-				s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun)
+				s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 				return
 			}
 		}
@@ -2179,7 +2186,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 				scanErr = fmt.Errorf("network stage failed: %v", err)
 			}
 			if err := s.checkScanCanceled(ctx, jobID); err != nil {
-				s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun)
+				s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 				return
 			}
 		}
@@ -2190,12 +2197,12 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 			scanErr = fmt.Errorf("network stage failed: %v", err)
 		}
 		if err := s.checkScanCanceled(ctx, jobID); err != nil {
-			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun)
+			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 			return
 		}
 	}
 
-	s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr, dryRun)
+	s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr, dryRun, notify)
 }
 
 func (s *Server) checkScanCanceled(ctx context.Context, jobID string) error {
@@ -2214,7 +2221,7 @@ func (s *Server) checkScanCanceled(ctx context.Context, jobID string) error {
 	return nil
 }
 
-func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.Time, results []engine.Result, scanErr error, dryRun bool) {
+func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.Time, results []engine.Result, scanErr error, dryRun, notify bool) {
 	duration := int(time.Since(startTime).Seconds())
 	var dbErr error
 	if !dryRun {
@@ -2259,6 +2266,23 @@ func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.
 	s.writeAudit(projectID, "system", "finish_scan", "job", jobID, map[string]interface{}{
 		"status": finalStatus, "durationSec": duration, "subdomains": counts["subdomains"], "ports": counts["ports"], "vulns": counts["vulnerabilities"], "dryRun": dryRun,
 	}, nil)
+
+	if !notify || dryRun {
+		return
+	}
+	s.settingsMu.RLock()
+	notifyEnabled := s.settings.Notifications.Enabled
+	s.settingsMu.RUnlock()
+	if !notifyEnabled {
+		return
+	}
+	notifier := plugins.NewDingTalkNotifierFromEnv(true)
+	if !notifier.Enabled() {
+		return
+	}
+	if err := notifier.SendReconEnd(finalStatus == "success", time.Duration(duration)*time.Second, counts, errMsg); err != nil {
+		log.Printf("[Notify] scan finish notification failed for job %s: %v", jobID, err)
+	}
 }
 
 // ──────────────────────────────────────────

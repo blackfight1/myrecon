@@ -270,6 +270,7 @@ type ScanJob struct {
 	DictSize     int            `json:"dict_size"`
 	DNSResolvers string         `gorm:"type:text" json:"dns_resolvers"`
 	DryRun       bool           `json:"dry_run"`
+	Notify       bool           `gorm:"default:true" json:"notify"`
 	ErrorMessage string         `gorm:"type:text" json:"error_message"`
 	DurationSec  int            `json:"duration_sec"`
 	SubdomainCnt int            `json:"subdomain_cnt"`

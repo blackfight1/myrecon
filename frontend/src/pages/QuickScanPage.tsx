@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { useCreateJob } from "../hooks/queries";
 import { useWorkspace } from "../context/WorkspaceContext";
+import { useCreateJob } from "../hooks/queries";
 import { errorMessage } from "../lib/errors";
 import { matchesProjectDomain, normalizeRootDomain } from "../lib/projectScope";
 
@@ -12,6 +12,7 @@ export function QuickScanPage() {
   const [scanDomain, setScanDomain] = useState(activeProject?.rootDomains?.[0] ?? "");
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
+  const [enableNotify, setEnableNotify] = useState(true);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const previewModules = useMemo(
@@ -49,6 +50,7 @@ export function QuickScanPage() {
         activeSubs: false,
         dictSize: 1500,
         dryRun: false,
+        notify: enableNotify
       });
       setScanDomain(domain);
       setFeedback({ ok: true, text: `任务已提交：${job.id}` });
@@ -61,7 +63,7 @@ export function QuickScanPage() {
     <section className="page">
       <div className="page-header">
         <h1 className="page-title">快速扫描</h1>
-        <p className="page-desc">固定流程：子域名发现 + Web 探测 + 端口扫描，可选截图与漏洞扫描。</p>
+        <p className="page-desc">固定流程：子域发现 + Web 探测 + 端口扫描，可选截图与漏洞扫描。</p>
       </div>
 
       {feedback && (
@@ -73,7 +75,7 @@ export function QuickScanPage() {
       <article className="panel">
         <header className="panel-header">
           <h2>扫描参数</h2>
-          <span className="panel-meta">Project: {activeProject?.name ?? "未选择项目"}</span>
+          <span className="panel-meta">项目: {activeProject?.name ?? "未选择项目"}</span>
         </header>
 
         <div className="panel-body">
@@ -97,23 +99,26 @@ export function QuickScanPage() {
 
           <label className="form-label" style={{ marginTop: 16 }}>基础流程（固定）</label>
           <div className="module-grid">
-            <span className="module-chip active">Passive Subs</span>
-            <span className="module-chip active">Web Probe</span>
-            <span className="module-chip active">Port Scan</span>
+            <span className="module-chip active">子域发现</span>
+            <span className="module-chip active">Web 探测</span>
+            <span className="module-chip active">端口扫描</span>
           </div>
 
           <label className="form-label" style={{ marginTop: 16 }}>可选阶段</label>
           <div className="module-grid">
             <button className={`module-chip ${enableWitness ? "active" : ""}`} onClick={() => setEnableWitness((v) => !v)}>
-              Screenshot {enableWitness ? "ON" : "OFF"}
+              截图 {enableWitness ? "ON" : "OFF"}
             </button>
             <button className={`module-chip ${enableNuclei ? "active" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
-              Vulnerability {enableNuclei ? "ON" : "OFF"}
+              漏洞扫描 {enableNuclei ? "ON" : "OFF"}
+            </button>
+            <button className={`module-chip ${enableNotify ? "active" : ""}`} onClick={() => setEnableNotify((v) => !v)}>
+              通知 {enableNotify ? "ON" : "OFF"}
             </button>
           </div>
 
           <div className="panel-meta" style={{ marginTop: 12 }}>
-            执行流程：{previewModules.join(" -> ")}
+            执行流程：{previewModules.join(" -> ")} | 通知：{enableNotify ? "开启" : "关闭"}
           </div>
 
           <div style={{ marginTop: 20 }}>

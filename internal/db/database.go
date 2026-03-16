@@ -774,7 +774,7 @@ func (d *Database) ClaimDueMonitorTask() (*MonitorTask, error) {
 		now := time.Now()
 		result := tx.Model(&MonitorTask{}).
 			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Joins("JOIN monitor_targets mt ON mt.root_domain = monitor_tasks.root_domain AND mt.project_id = monitor_tasks.project_id").
+			Joins("JOIN monitor_targets mt ON mt.root_domain = monitor_tasks.root_domain AND mt.project_id = monitor_tasks.project_id AND mt.deleted_at IS NULL").
 			Where("monitor_tasks.status = ? AND monitor_tasks.run_at <= ? AND mt.enabled = ?", "pending", now, true).
 			Order("monitor_tasks.run_at asc").
 			First(&task)
@@ -895,7 +895,7 @@ func (d *Database) RecoverStaleRunningTasks(staleAfter time.Duration) (int, erro
 
 	var staleTasks []MonitorTask
 	if err := d.DB.
-		Joins("JOIN monitor_targets mt ON mt.root_domain = monitor_tasks.root_domain AND mt.project_id = monitor_tasks.project_id").
+		Joins("JOIN monitor_targets mt ON mt.root_domain = monitor_tasks.root_domain AND mt.project_id = monitor_tasks.project_id AND mt.deleted_at IS NULL").
 		Where("monitor_tasks.status = ? AND monitor_tasks.started_at IS NOT NULL AND monitor_tasks.started_at <= ? AND mt.enabled = ?", "running", cutoff, true).
 		Find(&staleTasks).Error; err != nil {
 		return 0, err

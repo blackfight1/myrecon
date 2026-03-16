@@ -34,6 +34,7 @@ export interface NewScanJobRequest {
   dictSize?: number;
   dnsResolvers?: string;
   dryRun?: boolean;
+  notify?: boolean;
 }
 
 export interface CancelJobRequest {

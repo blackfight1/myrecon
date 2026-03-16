@@ -1,5 +1,6 @@
 import { createColumnHelper, type SortingState } from "@tanstack/react-table";
 import { useCallback, useMemo, useState, type ChangeEvent } from "react";
+import type { JobListQuery } from "../api/endpoints";
 import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { StatusBadge } from "../components/ui/StatusBadge";
@@ -7,16 +8,9 @@ import { useWorkspace } from "../context/WorkspaceContext";
 import { useCancelJob, useCreateJob, useDeleteJob, useJobsPage } from "../hooks/queries";
 import { errorMessage } from "../lib/errors";
 import { formatDate } from "../lib/format";
-import type { JobListQuery } from "../api/endpoints";
 import type { JobOverview } from "../types/models";
 
 const col = createColumnHelper<JobOverview>();
-
-function isRunning(status: string): boolean {
-  const s = status.toLowerCase();
-  return s.includes("running") || s.includes("pending");
-}
-
 const QUICK_BASELINE_MODULES = ["subs", "httpx", "ports"];
 
 const SORT_KEY_MAP: Record<string, JobListQuery["sortBy"]> = {
@@ -26,6 +20,11 @@ const SORT_KEY_MAP: Record<string, JobListQuery["sortBy"]> = {
   status: "status",
   rootDomain: "root_domain"
 };
+
+function isRunning(status: string): boolean {
+  const s = status.toLowerCase();
+  return s.includes("running") || s.includes("pending");
+}
 
 export function JobsPage() {
   const { activeProject } = useWorkspace();
@@ -42,6 +41,7 @@ export function JobsPage() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
+  const [enableNotify, setEnableNotify] = useState(true);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const sortBy = sorting.length > 0 ? SORT_KEY_MAP[sorting[0].id] ?? "started_at" : "started_at";
@@ -166,7 +166,8 @@ export function JobsPage() {
           enableNuclei,
           activeSubs: false,
           dictSize: 1500,
-          dryRun: false
+          dryRun: false,
+          notify: enableNotify
         });
         success.push(`${rd} (${job.id})`);
       } catch (err) {
@@ -211,10 +212,13 @@ export function JobsPage() {
           <button className={`btn btn-sm${enableNuclei ? " btn-primary" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
             漏洞扫描 {enableNuclei ? "开启" : "关闭"}
           </button>
+          <button className={`btn btn-sm${enableNotify ? " btn-primary" : ""}`} onClick={() => setEnableNotify((v) => !v)}>
+            通知 {enableNotify ? "开启" : "关闭"}
+          </button>
           <button className="btn btn-sm" onClick={() => { void launchScan(); }} disabled={rootDomains.length === 0 || createJob.isPending}>
             {createJob.isPending ? "提交中..." : "启动快速扫描"}
           </button>
-          <span className="filter-summary">执行链路: {previewModules.join(" -> ")}</span>
+          <span className="filter-summary">执行链路: {previewModules.join(" -> ")} | 通知: {enableNotify ? "开" : "关"}</span>
         </div>
       </article>
 
