@@ -226,6 +226,28 @@ export function useMonitorEvents(projectId?: string, rootDomain?: string, status
   });
 }
 
+export function usePatchMonitorEventStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { projectId: string; eventId: number; status: string }) =>
+      endpoints.patchMonitorEventStatus(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["monitor-events"] });
+    }
+  });
+}
+
+export function useBulkMonitorEventStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { projectId: string; eventIds: number[]; status: string }) =>
+      endpoints.bulkMonitorEventStatus(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["monitor-events"] });
+    }
+  });
+}
+
 /* ── Vuln Status Management ── */
 
 export function usePatchVulnStatus() {

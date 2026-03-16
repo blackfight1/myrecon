@@ -520,6 +520,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/monitor/runs", s.handleMonitorRuns)
 	s.mux.HandleFunc("/api/monitor/changes", s.handleMonitorChanges)
 	s.mux.HandleFunc("/api/monitor/events", s.handleMonitorEvents)
+	s.mux.HandleFunc("/api/monitor/events/status", s.handleMonitorEventStatus)
+	s.mux.HandleFunc("/api/monitor/events/bulk-status", s.handleBulkMonitorEventStatus)
 	s.mux.HandleFunc("/api/screenshots/domains", s.handleScreenshotDomains)
 	s.mux.HandleFunc("/api/screenshots/file/", s.handleScreenshotFile)
 	s.mux.HandleFunc("/api/screenshots/", s.handleScreenshots)
@@ -2978,6 +2980,96 @@ func (s *Server) handleMonitorEvents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleMonitorEventStatus updates status of a single monitor event (ack/ignored/open/resolved).
+func (s *Server) handleMonitorEventStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		ProjectID string `json:"projectId"`
+		EventID   int    `json:"eventId"`
+		Status    string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	status := normalizeMonitorEventStatus(body.Status)
+	if body.ProjectID == "" || body.EventID <= 0 {
+		writeError(w, http.StatusBadRequest, "projectId and eventId are required")
+		return
+	}
+	valid := map[string]bool{"open": true, "resolved": true, "ack": true, "ignored": true}
+	if !valid[status] {
+		writeError(w, http.StatusBadRequest, "invalid status; must be open/resolved/ack/ignored")
+		return
+	}
+	updates := map[string]interface{}{
+		"status":          status,
+		"last_changed_at": time.Now(),
+	}
+	if status == "resolved" {
+		now := time.Now()
+		updates["resolved_at"] = &now
+	}
+	result := s.db.DB.Model(&db.MonitorEvent{}).Where("id = ? AND project_id = ?", body.EventID, body.ProjectID).Updates(updates)
+	if result.Error != nil {
+		writeError(w, http.StatusInternalServerError, result.Error.Error())
+		return
+	}
+	if result.RowsAffected == 0 {
+		writeError(w, http.StatusNotFound, "event not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "eventId": body.EventID, "newStatus": status})
+}
+
+// handleBulkMonitorEventStatus updates status of multiple monitor events at once.
+func (s *Server) handleBulkMonitorEventStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		ProjectID string `json:"projectId"`
+		EventIDs  []int  `json:"eventIds"`
+		Status    string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	status := normalizeMonitorEventStatus(body.Status)
+	if body.ProjectID == "" || len(body.EventIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "projectId and eventIds are required")
+		return
+	}
+	valid := map[string]bool{"open": true, "resolved": true, "ack": true, "ignored": true}
+	if !valid[status] {
+		writeError(w, http.StatusBadRequest, "invalid status; must be open/resolved/ack/ignored")
+		return
+	}
+	if len(body.EventIDs) > 500 {
+		writeError(w, http.StatusBadRequest, "max 500 IDs per request")
+		return
+	}
+	updates := map[string]interface{}{
+		"status":          status,
+		"last_changed_at": time.Now(),
+	}
+	if status == "resolved" {
+		now := time.Now()
+		updates["resolved_at"] = &now
+	}
+	result := s.db.DB.Model(&db.MonitorEvent{}).Where("id IN ? AND project_id = ?", body.EventIDs, body.ProjectID).Updates(updates)
+	if result.Error != nil {
+		writeError(w, http.StatusInternalServerError, result.Error.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "updated": result.RowsAffected, "newStatus": status})
 }
 
 // ──────────────────────────────────────────

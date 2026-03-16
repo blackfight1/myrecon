@@ -272,6 +272,10 @@ export const endpoints = {
         q
       })
     ),
+  patchMonitorEventStatus: (body: { projectId: string; eventId: number; status: string }) =>
+    apiPost<{ projectId: string; eventId: number; status: string }, { status: string; eventId: number; newStatus: string }>("/monitor/events/status", body),
+  bulkMonitorEventStatus: (body: { projectId: string; eventIds: number[]; status: string }) =>
+    apiPost<{ projectId: string; eventIds: number[]; status: string }, { status: string; updated: number; newStatus: string }>("/monitor/events/bulk-status", body),
 
   // Screenshots
   getScreenshotDomains: (projectId: string) =>
