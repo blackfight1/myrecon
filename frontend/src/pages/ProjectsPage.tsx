@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useWorkspace } from "../context/WorkspaceContext";
+import { errorMessage } from "../lib/errors";
 import { formatDate } from "../lib/format";
 import type { ProjectRecord } from "../types/models";
 
@@ -18,7 +19,11 @@ export function ProjectsPage() {
   const [editDomains, setEditDomains] = useState("");
   const [editTags, setEditTags] = useState("");
 
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+
   const startEdit = (p: ProjectRecord) => {
+    setFeedback(null);
     setEditingId(p.id);
     setEditName(p.name);
     setEditDesc(p.description ?? "");
@@ -27,31 +32,67 @@ export function ProjectsPage() {
   };
 
   const saveEdit = async () => {
-    if (!editingId || !editName.trim() || !editDomains.trim()) return;
-    await updateProject(editingId, {
-      name: editName.trim(),
-      description: editDesc.trim() || undefined,
-      rootDomainsRaw: editDomains.trim(),
-      tagsRaw: editTags.trim() || undefined
-    });
-    setEditingId(null);
+    if (!editingId || !editName.trim() || !editDomains.trim() || busy) return;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await updateProject(editingId, {
+        name: editName.trim(),
+        description: editDesc.trim() || undefined,
+        rootDomainsRaw: editDomains.trim(),
+        tagsRaw: editTags.trim() || undefined
+      });
+      setEditingId(null);
+      setFeedback({ ok: true, text: "项目已更新" });
+    } catch (err) {
+      setFeedback({ ok: false, text: `更新失败：${errorMessage(err)}` });
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const cancelEdit = () => setEditingId(null);
+  const cancelEdit = () => {
+    setEditingId(null);
+    setFeedback(null);
+  };
 
   const handleCreate = async () => {
-    if (!name.trim() || !rootDomainsRaw.trim()) return;
-    await createProject({
-      name: name.trim(),
-      description: description.trim() || undefined,
-      rootDomainsRaw: rootDomainsRaw.trim(),
-      tagsRaw: tagsRaw.trim() || undefined
-    });
-    setName("");
-    setDescription("");
-    setRootDomainsRaw("");
-    setTagsRaw("");
-    setShowForm(false);
+    if (!name.trim() || !rootDomainsRaw.trim() || busy) return;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await createProject({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        rootDomainsRaw: rootDomainsRaw.trim(),
+        tagsRaw: tagsRaw.trim() || undefined
+      });
+      setName("");
+      setDescription("");
+      setRootDomainsRaw("");
+      setTagsRaw("");
+      setShowForm(false);
+      setFeedback({ ok: true, text: "项目创建成功" });
+    } catch (err) {
+      setFeedback({ ok: false, text: `创建失败：${errorMessage(err)}` });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async (p: ProjectRecord) => {
+    if (busy) return;
+    if (!confirm(`确定要归档项目 "${p.name}" 吗？归档后项目将不再显示。`)) return;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await deleteProject(p.id);
+      setFeedback({ ok: true, text: "项目已归档" });
+    } catch (err) {
+      setFeedback({ ok: false, text: `归档失败：${errorMessage(err)}` });
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -63,10 +104,16 @@ export function ProjectsPage() {
 
       {loading && <div className="empty-state">正在加载项目...</div>}
 
+      {feedback && (
+        <div className="empty-state" style={{ color: feedback.ok ? "#16a34a" : "#dc2626", marginBottom: 12 }}>
+          {feedback.text}
+        </div>
+      )}
+
       <article className="panel">
         <header className="panel-header">
           <h2>项目列表</h2>
-          <button className="btn btn-sm" onClick={() => setShowForm((v) => !v)}>
+          <button className="btn btn-sm" onClick={() => setShowForm((v) => !v)} disabled={busy}>
             {showForm ? "取消" : "+ 新建项目"}
           </button>
         </header>
@@ -76,26 +123,26 @@ export function ProjectsPage() {
             <div className="form-row form-row-2">
               <div className="form-group">
                 <label className="form-label">项目名称</label>
-                <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：XX公司" />
+                <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：Acme Corp" />
               </div>
               <div className="form-group">
                 <label className="form-label">描述（可选）</label>
-                <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="项目描述信息" />
+                <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="项目说明" />
               </div>
             </div>
             <div className="form-group">
-              <label className="form-label">根域名（逗号或换行分隔）</label>
+              <label className="form-label">根域名（支持逗号/中文逗号/分号/换行）</label>
               <textarea className="form-input form-textarea" value={rootDomainsRaw} onChange={(e) => setRootDomainsRaw(e.target.value)} placeholder="example.com, example.org" rows={3} />
             </div>
             <div className="form-group">
-              <label className="form-label">标签（逗号分隔，可选）</label>
-              <input className="form-input" value={tagsRaw} onChange={(e) => setTagsRaw(e.target.value)} placeholder="漏洞赏金, 客户项目" />
+              <label className="form-label">标签（可选）</label>
+              <input className="form-input" value={tagsRaw} onChange={(e) => setTagsRaw(e.target.value)} placeholder="内网, 客户项目" />
             </div>
             <div className="form-actions">
-              <button className="btn" onClick={() => { void handleCreate(); }} disabled={!name.trim() || !rootDomainsRaw.trim()}>
-                创建项目
+              <button className="btn" onClick={() => { void handleCreate(); }} disabled={busy || !name.trim() || !rootDomainsRaw.trim()}>
+                {busy ? "创建中..." : "创建项目"}
               </button>
-              <button className="btn btn-ghost" onClick={() => setShowForm(false)}>
+              <button className="btn btn-ghost" onClick={() => setShowForm(false)} disabled={busy}>
                 取消
               </button>
             </div>
@@ -125,16 +172,16 @@ export function ProjectsPage() {
                       <input className="form-input" value={editDesc} onChange={(e) => setEditDesc(e.target.value)} />
                     </div>
                     <div className="form-group">
-                      <label className="form-label">根域名（逗号分隔）</label>
+                      <label className="form-label">根域名（支持逗号/中文逗号/分号/换行）</label>
                       <textarea className="form-input form-textarea" value={editDomains} onChange={(e) => setEditDomains(e.target.value)} rows={2} />
                     </div>
                     <div className="form-group">
-                      <label className="form-label">标签（逗号分隔）</label>
+                      <label className="form-label">标签（可选）</label>
                       <input className="form-input" value={editTags} onChange={(e) => setEditTags(e.target.value)} />
                     </div>
                     <div className="form-actions">
-                      <button className="btn btn-primary btn-sm" onClick={() => { void saveEdit(); }} disabled={!editName.trim() || !editDomains.trim()}>保存</button>
-                      <button className="btn btn-sm" onClick={cancelEdit}>取消</button>
+                      <button className="btn btn-primary btn-sm" onClick={() => { void saveEdit(); }} disabled={busy || !editName.trim() || !editDomains.trim()}>保存</button>
+                      <button className="btn btn-sm" onClick={cancelEdit} disabled={busy}>取消</button>
                     </div>
                   </div>
                 ) : (
@@ -142,15 +189,16 @@ export function ProjectsPage() {
                     <div className="project-card-header">
                       <h3 className="project-card-title">{p.name}</h3>
                       <div className="project-card-actions">
-                        <button className="btn btn-sm" onClick={() => startEdit(p)}>编辑</button>
+                        <button className="btn btn-sm" onClick={() => startEdit(p)} disabled={busy}>编辑</button>
                         <button
                           className={`btn btn-sm${isActive ? " btn-active" : ""}`}
                           onClick={() => setActiveProject(p.id)}
+                          disabled={busy}
                         >
-                          {isActive ? "✓ 已激活" : "设为活跃"}
+                          {isActive ? "已激活" : "设为活跃"}
                         </button>
                         {projects.length > 1 && (
-                          <button className="btn btn-sm btn-danger" onClick={() => { if (confirm(`确定要归档项目"${p.name}"吗？归档后项目将不再显示。`)) void deleteProject(p.id); }}>归档</button>
+                          <button className="btn btn-sm btn-danger" onClick={() => { void handleDelete(p); }} disabled={busy}>归档</button>
                         )}
                       </div>
                     </div>

@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from "react";
+import { WORKSPACE_ACTIVE_PROJECT_KEY } from "../../context/WorkspaceContext";
 
 interface Props {
   children: ReactNode;
@@ -33,6 +34,7 @@ export class AppErrorBoundary extends Component<Props, State> {
 
   private handleReset = () => {
     try {
+      window.localStorage.removeItem(WORKSPACE_ACTIVE_PROJECT_KEY);
       window.localStorage.removeItem("myrecon.workspace.v1");
     } catch {
       // Ignore storage exceptions.

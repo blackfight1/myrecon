@@ -1,9 +1,11 @@
 import { useState } from "react";
 import type { SystemSettings } from "../types/models";
 import { useSettings, useTestNotification, useUpdateSettings } from "../hooks/queries";
+import { errorMessage } from "../lib/errors";
 
 export function SettingsPage() {
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const [editScanner, setEditScanner] = useState(false);
   const [screenshotDir, setScreenshotDir] = useState("");
   const [dnsResolvers, setDnsResolvers] = useState("");
@@ -25,20 +27,26 @@ export function SettingsPage() {
     setActiveSubs(settings.scanner.defaultActiveSubs);
     setNuclei(settings.scanner.defaultNuclei);
     setEditScanner(true);
+    setFeedback(null);
   };
 
   const saveScanner = () => {
     const payload: Partial<SystemSettings> = {
       scanner: {
-        screenshotDir,
-        dnsResolvers,
+        screenshotDir: screenshotDir.trim(),
+        dnsResolvers: dnsResolvers.trim(),
         defaultDictSize: dictSize,
         defaultActiveSubs: activeSubs,
         defaultNuclei: nuclei
       }
     };
+    setFeedback(null);
     updateMutation.mutate(payload, {
-      onSuccess: () => setEditScanner(false)
+      onSuccess: () => {
+        setEditScanner(false);
+        setFeedback({ ok: true, text: "扫描器配置已保存" });
+      },
+      onError: (err) => setFeedback({ ok: false, text: `保存失败：${errorMessage(err)}` })
     });
   };
 
@@ -55,11 +63,17 @@ export function SettingsPage() {
         <p className="page-desc">数据库连接状态、通知配置状态（环境变量）和扫描默认参数。</p>
       </div>
 
+      {feedback && (
+        <div className="empty-state" style={{ color: feedback.ok ? "#16a34a" : "#dc2626", marginBottom: 12 }}>
+          {feedback.text}
+        </div>
+      )}
+
       {settingsQuery.isLoading ? (
         <div className="empty-state">正在加载设置...</div>
       ) : !settings ? (
         <div className="empty-state">
-          <div className="empty-icon">⚠</div>
+          <div className="empty-icon">⚿</div>
           加载设置失败，请检查后端连接。
         </div>
       ) : (
@@ -121,7 +135,7 @@ export function SettingsPage() {
                     setTestResult(null);
                     testNotifyMutation.mutate(undefined, {
                       onSuccess: (data) => setTestResult({ ok: data.success, msg: data.message }),
-                      onError: (err: Error) => setTestResult({ ok: false, msg: err.message })
+                      onError: (err) => setTestResult({ ok: false, msg: errorMessage(err) })
                     });
                   }}
                   disabled={testNotifyMutation.isPending || !settings.notifications.enabled}
@@ -177,7 +191,7 @@ export function SettingsPage() {
                       min={100}
                       max={5000}
                       value={dictSize}
-                      onChange={(e) => setDictSize(Number(e.target.value))}
+                      onChange={(e) => setDictSize(Number(e.target.value) || 100)}
                     />
                   </div>
                   <div className="form-group" style={{ display: "flex", gap: 16 }}>
@@ -200,9 +214,9 @@ export function SettingsPage() {
                   </div>
                   <div className="form-actions">
                     <button className="btn btn-primary" onClick={saveScanner} disabled={updateMutation.isPending}>
-                      保存
+                      {updateMutation.isPending ? "保存中..." : "保存"}
                     </button>
-                    <button className="btn btn-sm" onClick={() => setEditScanner(false)}>
+                    <button className="btn btn-sm" onClick={() => setEditScanner(false)} disabled={updateMutation.isPending}>
                       取消
                     </button>
                   </div>

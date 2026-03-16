@@ -9,6 +9,21 @@ export class ApiError extends Error {
   }
 }
 
+async function parseApiErrorMessage(response: Response): Promise<string> {
+  const raw = await response.text();
+  if (!raw) return `Request failed (${response.status})`;
+
+  try {
+    const parsed = JSON.parse(raw) as { error?: string; message?: string };
+    const msg = (parsed.error ?? parsed.message ?? "").trim();
+    if (msg) return msg;
+  } catch {
+    // Fall back to plain text.
+  }
+
+  return raw;
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "GET",
@@ -16,8 +31,7 @@ export async function apiGet<T>(path: string): Promise<T> {
   });
 
   if (!response.ok) {
-    const raw = await response.text();
-    throw new ApiError(raw || `Request failed (${response.status})`, response.status);
+    throw new ApiError(await parseApiErrorMessage(response), response.status);
   }
 
   return (await response.json()) as T;
@@ -34,8 +48,7 @@ export async function apiPost<TReq extends object, TResp>(path: string, body: TR
   });
 
   if (!response.ok) {
-    const raw = await response.text();
-    throw new ApiError(raw || `Request failed (${response.status})`, response.status);
+    throw new ApiError(await parseApiErrorMessage(response), response.status);
   }
 
   return (await response.json()) as TResp;
@@ -52,8 +65,7 @@ export async function apiPut<TReq extends object, TResp>(path: string, body: TRe
   });
 
   if (!response.ok) {
-    const raw = await response.text();
-    throw new ApiError(raw || `Request failed (${response.status})`, response.status);
+    throw new ApiError(await parseApiErrorMessage(response), response.status);
   }
 
   return (await response.json()) as TResp;
@@ -66,8 +78,7 @@ export async function apiDelete<T>(path: string): Promise<T> {
   });
 
   if (!response.ok) {
-    const raw = await response.text();
-    throw new ApiError(raw || `Request failed (${response.status})`, response.status);
+    throw new ApiError(await parseApiErrorMessage(response), response.status);
   }
 
   return (await response.json()) as T;

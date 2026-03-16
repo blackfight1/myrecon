@@ -1,15 +1,15 @@
-﻿import { createColumnHelper } from "@tanstack/react-table";
+import { createColumnHelper } from "@tanstack/react-table";
 import { useMemo, useState } from "react";
 import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useWorkspace } from "../context/WorkspaceContext";
 import { useMonitorEvents, useMonitorRuns, useMonitorTargets, useCreateMonitorTarget, useStopMonitorTarget, useDeleteMonitorTarget } from "../hooks/queries";
+import { errorMessage } from "../lib/errors";
 import { formatDate } from "../lib/format";
-import { matchesProjectDomain } from "../lib/projectScope";
+import { matchesProjectDomain, normalizeRootDomain } from "../lib/projectScope";
 import type { MonitorEvent, MonitorRun } from "../types/models";
 
-/* ---------- 监控运行记录表 ---------- */
 const rCol = createColumnHelper<MonitorRun>();
 const runColumns = [
   rCol.accessor("id", { header: "ID" }),
@@ -25,7 +25,6 @@ const runColumns = [
   rCol.accessor("errorMessage", { header: "错误信息", cell: (c) => c.getValue() || <span className="cell-muted">—</span> })
 ];
 
-/* ---------- 变更事件表 ---------- */
 const eCol = createColumnHelper<MonitorEvent>();
 const eventColumns = [
   eCol.accessor("id", { header: "事件 ID" }),
@@ -58,34 +57,64 @@ export function MonitoringPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newDomain, setNewDomain] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const handleAddMonitor = async () => {
-    const domain = newDomain.trim();
+    const domain = normalizeRootDomain(newDomain);
     if (!domain || !projectId) return;
+
+    if (!matchesProjectDomain(domain, rootDomains)) {
+      setFeedback({ ok: false, text: "目标域名不在当前项目范围内，请先在项目中补充根域名。" });
+      return;
+    }
+
     setSubmitting(true);
+    setFeedback(null);
     try {
       await createMonitor.mutateAsync({ projectId, domain });
       setShowAddModal(false);
       setNewDomain("");
-    } catch (e) { console.error(e); }
-    finally { setSubmitting(false); }
+      setFeedback({ ok: true, text: `监控已添加：${domain}` });
+    } catch (err) {
+      setFeedback({ ok: false, text: `添加失败：${errorMessage(err)}` });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleStop = async (domain: string) => {
     if (!projectId) return;
     if (!confirm(`确定要停止监控 ${domain} 吗？`)) return;
-    try { await stopMonitor.mutateAsync({ projectId, domain }); } catch (e) { console.error(e); }
+    setFeedback(null);
+    try {
+      await stopMonitor.mutateAsync({ projectId, domain });
+      setFeedback({ ok: true, text: `已停止监控：${domain}` });
+    } catch (err) {
+      setFeedback({ ok: false, text: `停止失败：${errorMessage(err)}` });
+    }
   };
 
   const handleReEnable = async (domain: string) => {
     if (!projectId) return;
-    try { await createMonitor.mutateAsync({ projectId, domain }); } catch (e) { console.error(e); }
+    setFeedback(null);
+    try {
+      await createMonitor.mutateAsync({ projectId, domain });
+      setFeedback({ ok: true, text: `已重新启用：${domain}` });
+    } catch (err) {
+      setFeedback({ ok: false, text: `启用失败：${errorMessage(err)}` });
+    }
   };
 
   const handleDelete = async (domain: string) => {
     if (!projectId) return;
     if (!confirm(`确定要删除 ${domain} 的所有监控数据吗？此操作不可恢复。`)) return;
-    try { await deleteMonitor.mutateAsync({ projectId, domain }); } catch (e) { console.error(e); }
+    setFeedback(null);
+    try {
+      await deleteMonitor.mutateAsync({ projectId, domain });
+      setFeedback({ ok: true, text: `已删除监控数据：${domain}` });
+    } catch (err) {
+      setFeedback({ ok: false, text: `删除失败：${errorMessage(err)}` });
+    }
   };
 
   const targets = useMemo(() => (targetsQ.data ?? []).filter((t) => matchesProjectDomain(t.rootDomain, rootDomains)), [targetsQ.data, rootDomains]);
@@ -98,10 +127,16 @@ export function MonitoringPage() {
     <section className="page">
       <div className="page-header">
         <h1 className="page-title">变更监控</h1>
-        <p className="page-desc">漂移检测系统 — 追踪新主机、端口变更、服务变化和 Web 内容变动。</p>
+        <p className="page-desc">漂移检测系统，追踪新主机、端口变更、服务变化和 Web 内容变动。</p>
       </div>
 
       <ProjectScopeBanner title="监控范围" hint="目标、运行记录和变更事件按项目根域名过滤。" />
+
+      {feedback && (
+        <div className="empty-state" style={{ color: feedback.ok ? "#16a34a" : "#dc2626", marginBottom: 12 }}>
+          {feedback.text}
+        </div>
+      )}
 
       {loading && <div className="empty-state">正在加载监控数据...</div>}
 
@@ -110,7 +145,7 @@ export function MonitoringPage() {
           <h2>监控目标</h2>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <span className="panel-meta">{targets.length} 个目标</span>
-            <button className="btn btn-primary btn-sm" onClick={() => { setNewDomain(rootDomains[0] ?? ""); setShowAddModal(true); }}>+ 添加监控</button>
+            <button className="btn btn-primary btn-sm" onClick={() => { setNewDomain(rootDomains[0] ?? ""); setShowAddModal(true); }} disabled={!projectId}>+ 添加监控</button>
           </div>
         </header>
         {targets.length > 0 ? (
@@ -137,11 +172,11 @@ export function MonitoringPage() {
                     <td>
                       <div style={{ display: "flex", gap: 6 }}>
                         {t.enabled ? (
-                          <button className="btn btn-sm btn-warning" onClick={() => handleStop(t.rootDomain)}>停止</button>
+                          <button className="btn btn-sm btn-warning" onClick={() => { void handleStop(t.rootDomain); }} disabled={stopMonitor.isPending}>停止</button>
                         ) : (
-                          <button className="btn btn-sm btn-primary" onClick={() => handleReEnable(t.rootDomain)} disabled={createMonitor.isPending}>重新启用</button>
+                          <button className="btn btn-sm btn-primary" onClick={() => { void handleReEnable(t.rootDomain); }} disabled={createMonitor.isPending}>重新启用</button>
                         )}
-                        <button className="btn btn-sm btn-danger" onClick={() => handleDelete(t.rootDomain)}>删除</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => { void handleDelete(t.rootDomain); }} disabled={deleteMonitor.isPending}>删除</button>
                       </div>
                     </td>
                   </tr>
@@ -152,23 +187,22 @@ export function MonitoringPage() {
         ) : (
           <div className="empty-state">
             <div className="empty-state-icon">◉</div>
-            <div className="empty-state-text">暂无监控目标，点击"+ 添加监控"开始</div>
+            <div className="empty-state-text">暂无监控目标，点击“+ 添加监控”开始。</div>
           </div>
         )}
       </article>
 
-      {/* 添加监控弹窗 */}
       {showAddModal && (
         <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header"><h3>添加监控目标</h3><button className="modal-close" onClick={() => setShowAddModal(false)}>✕</button></div>
             <div className="modal-body">
               <label className="form-label">目标域名</label>
-              <input className="form-input" type="text" placeholder="example.com" value={newDomain} onChange={(e) => setNewDomain(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAddMonitor()} />
+              <input className="form-input" type="text" placeholder="example.com" value={newDomain} onChange={(e) => setNewDomain(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void handleAddMonitor()} />
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowAddModal(false)}>取消</button>
-              <button className="btn btn-primary" onClick={handleAddMonitor} disabled={submitting || !newDomain.trim()}>{submitting ? "提交中..." : "确认添加"}</button>
+              <button className="btn btn-primary" onClick={() => { void handleAddMonitor(); }} disabled={submitting || !newDomain.trim()}>{submitting ? "提交中..." : "确认添加"}</button>
             </div>
           </div>
         </div>

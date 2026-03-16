@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useCreateJob } from "../hooks/queries";
 import { useWorkspace } from "../context/WorkspaceContext";
+import { errorMessage } from "../lib/errors";
+import { matchesProjectDomain, normalizeRootDomain } from "../lib/projectScope";
 
 const BASELINE_MODULES = ["subs", "httpx", "ports"];
 
@@ -10,6 +12,7 @@ export function QuickScanPage() {
   const [scanDomain, setScanDomain] = useState(activeProject?.rootDomains?.[0] ?? "");
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const previewModules = useMemo(
     () => [...BASELINE_MODULES, ...(enableWitness ? ["witness"] : []), ...(enableNuclei ? ["nuclei"] : [])],
@@ -23,23 +26,35 @@ export function QuickScanPage() {
   }, [activeProject, scanDomain]);
 
   const handleQuickScan = async () => {
-    const domain = scanDomain.trim();
+    const domain = normalizeRootDomain(scanDomain);
     if (!domain || !activeProject?.id) return;
+
+    setFeedback(null);
+    if (!matchesProjectDomain(domain, activeProject.rootDomains)) {
+      setFeedback({ ok: false, text: "目标域名不在当前项目范围内，请先在项目中添加对应根域名。" });
+      return;
+    }
 
     const modules = [...BASELINE_MODULES];
     if (enableWitness) modules.push("witness");
     if (enableNuclei) modules.push("nuclei");
 
-    await createJob.mutateAsync({
-      projectId: activeProject.id,
-      domain,
-      modules,
-      mode: "scan",
-      enableNuclei,
-      activeSubs: false,
-      dictSize: 1500,
-      dryRun: false,
-    });
+    try {
+      const job = await createJob.mutateAsync({
+        projectId: activeProject.id,
+        domain,
+        modules,
+        mode: "scan",
+        enableNuclei,
+        activeSubs: false,
+        dictSize: 1500,
+        dryRun: false,
+      });
+      setScanDomain(domain);
+      setFeedback({ ok: true, text: `任务已提交：${job.id}` });
+    } catch (err) {
+      setFeedback({ ok: false, text: `提交失败：${errorMessage(err)}` });
+    }
   };
 
   return (
@@ -48,6 +63,12 @@ export function QuickScanPage() {
         <h1 className="page-title">快速扫描</h1>
         <p className="page-desc">固定流程：子域名发现 + Web 探测 + 端口扫描，可选截图与漏洞扫描。</p>
       </div>
+
+      {feedback && (
+        <div className="empty-state" style={{ color: feedback.ok ? "#16a34a" : "#dc2626", marginBottom: 12 }}>
+          {feedback.text}
+        </div>
+      )}
 
       <article className="panel">
         <header className="panel-header">
@@ -67,6 +88,12 @@ export function QuickScanPage() {
               onKeyDown={(e) => e.key === "Enter" && !createJob.isPending && void handleQuickScan()}
             />
           </div>
+
+          {activeProject && activeProject.rootDomains.length > 0 && (
+            <div className="panel-meta" style={{ marginTop: 8 }}>
+              项目范围：{activeProject.rootDomains.join(", ")}
+            </div>
+          )}
 
           <label className="form-label" style={{ marginTop: 16 }}>基础流程（固定）</label>
           <div className="module-grid">

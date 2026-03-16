@@ -31,6 +31,8 @@ interface WorkspaceState {
 
 const WorkspaceContext = createContext<WorkspaceState | null>(null);
 
+export const WORKSPACE_ACTIVE_PROJECT_KEY = ACTIVE_PROJECT_KEY;
+
 function loadActiveProjectId(): string {
   if (typeof window === "undefined") return "";
   return window.localStorage.getItem(ACTIVE_PROJECT_KEY) ?? "";
@@ -100,7 +102,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   };
 
   const createProject: WorkspaceState["createProject"] = async (input) => {
-    await endpoints.createProject({
+    const result = await endpoints.createProject({
       name: input.name.trim(),
       description: input.description?.trim() || "",
       owner: input.owner?.trim() || "",
@@ -108,10 +110,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       tags: parseTags(input.tagsRaw)
     });
     await refresh();
-    const latest = await endpoints.getProjects();
-    const found = latest.find((p) => p.name === input.name.trim());
-    if (found) {
-      setActiveProject(found.id);
+    if (result?.id) {
+      setActiveProject(result.id);
     }
   };
 

@@ -1,12 +1,12 @@
-﻿import { createColumnHelper, type SortingState } from "@tanstack/react-table";
+import { createColumnHelper, type SortingState } from "@tanstack/react-table";
 import { useState, useCallback, useMemo } from "react";
 import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useJobsPage, useCancelJob } from "../hooks/queries";
+import { useJobsPage, useCancelJob, useCreateJob } from "../hooks/queries";
+import { errorMessage } from "../lib/errors";
 import { formatDate } from "../lib/format";
-import { endpoints } from "../api/endpoints";
 import type { JobOverview } from "../types/models";
 import type { JobListQuery } from "../api/endpoints";
 
@@ -32,6 +32,7 @@ export function JobsPage() {
   const projectId = activeProject?.id;
   const rootDomains = activeProject?.rootDomains ?? [];
   const cancelJob = useCancelJob();
+  const createJob = useCreateJob();
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -40,6 +41,7 @@ export function JobsPage() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const sortBy = sorting.length > 0 ? SORT_KEY_MAP[sorting[0].id] ?? "started_at" : "started_at";
   const sortDir = sorting.length > 0 && sorting[0].desc ? "desc" : sorting.length > 0 ? "asc" : "desc";
@@ -67,7 +69,16 @@ export function JobsPage() {
 
   const handleCancel = (jobId: string) => {
     if (!confirm("确认取消此任务？")) return;
-    cancelJob.mutate({ jobId }, { onSuccess: () => refetch() });
+    cancelJob.mutate(
+      { jobId },
+      {
+        onSuccess: () => {
+          setFeedback({ ok: true, text: `任务已取消：${jobId}` });
+          void refetch();
+        },
+        onError: (err) => setFeedback({ ok: false, text: `取消失败：${errorMessage(err)}` })
+      }
+    );
   };
 
   const columns = [
@@ -105,14 +116,22 @@ export function JobsPage() {
   );
 
   const launchScan = async () => {
-    if (!activeProject || rootDomains.length === 0) return;
+    if (!activeProject || rootDomains.length === 0) {
+      setFeedback({ ok: false, text: "当前项目没有可扫描的根域名。" });
+      return;
+    }
+
+    setFeedback(null);
     const modules = [...QUICK_BASELINE_MODULES];
     if (enableWitness) modules.push("witness");
     if (enableNuclei) modules.push("nuclei");
 
+    const success: string[] = [];
+    const failed: string[] = [];
+
     for (const rd of rootDomains) {
       try {
-        await endpoints.createJob({
+        const job = await createJob.mutateAsync({
           projectId: activeProject.id,
           domain: rd,
           mode: "scan",
@@ -122,9 +141,19 @@ export function JobsPage() {
           dictSize: 1500,
           dryRun: false
         });
-      } catch { /* ignore */ }
+        success.push(`${rd} (${job.id})`);
+      } catch (err) {
+        failed.push(`${rd}: ${errorMessage(err)}`);
+      }
     }
-    refetch();
+
+    if (failed.length === 0) {
+      setFeedback({ ok: true, text: `已提交 ${success.length} 个扫描任务` });
+    } else {
+      setFeedback({ ok: false, text: `部分提交失败：${failed.join(" | ")}` });
+    }
+
+    await refetch();
   };
 
   return (
@@ -135,6 +164,12 @@ export function JobsPage() {
       </div>
 
       <ProjectScopeBanner title="任务范围" hint="仅显示 root_domain 匹配项目范围的任务。" />
+
+      {feedback && (
+        <div className="empty-state" style={{ color: feedback.ok ? "#16a34a" : "#dc2626", marginBottom: 12 }}>
+          {feedback.text}
+        </div>
+      )}
 
       <article className="panel">
         <header className="panel-header">
@@ -149,8 +184,8 @@ export function JobsPage() {
           <button className={`btn btn-sm${enableNuclei ? " btn-primary" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
             Vulnerability {enableNuclei ? "ON" : "OFF"}
           </button>
-          <button className="btn btn-sm" onClick={launchScan} disabled={rootDomains.length === 0}>
-            启动快速扫描
+          <button className="btn btn-sm" onClick={() => { void launchScan(); }} disabled={rootDomains.length === 0 || createJob.isPending}>
+            {createJob.isPending ? "提交中..." : "启动快速扫描"}
           </button>
           <span className="filter-summary">执行: {previewModules.join(" -> ")}</span>
         </div>
@@ -170,7 +205,7 @@ export function JobsPage() {
             <option value="canceled">已取消</option>
           </select>
           <input className="form-input" value={search} onChange={handleSearchChange} placeholder="搜索 ID/域名/状态/错误信息..." />
-          <button className="btn btn-sm" onClick={() => refetch()}>刷新</button>
+          <button className="btn btn-sm" onClick={() => { void refetch(); }}>刷新</button>
           <span className="filter-summary">第 {page} 页，每页 {pageSize} 条</span>
         </div>
       </article>
