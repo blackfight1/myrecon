@@ -42,7 +42,7 @@ func NewDatabase(dsn string) (*Database, error) {
 		&Project{}, &ProjectScope{},
 		&Asset{}, &Port{}, &Vulnerability{}, &VulnEvent{},
 		&MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorEvent{}, &MonitorTarget{}, &MonitorTask{},
-		&ScanJob{}, &ScanStage{}, &ScanArtifact{}, &AssetEdge{}, &AuditLog{},
+		&ScanJob{}, &ScanStage{}, &ScanArtifact{}, &JobLog{}, &AssetEdge{}, &AuditLog{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %v", err)
 	}
@@ -66,6 +66,7 @@ func ensureProjectScopedSchema(database *gorm.DB) error {
 			"UPDATE scan_jobs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE scan_stages SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE scan_artifacts SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE job_logs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE project_scopes SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE asset_changes SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE port_changes SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
@@ -99,6 +100,7 @@ func ensureProjectScopedSchema(database *gorm.DB) error {
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_project_fingerprint ON vulnerabilities (project_id, fingerprint)",
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_target_project_root ON monitor_targets (project_id, root_domain)",
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_event_project_key ON monitor_events (project_id, event_key)",
+			"CREATE INDEX IF NOT EXISTS idx_job_logs_project_job_id ON job_logs (project_id, job_id, id)",
 		}
 		for _, stmt := range createStatements {
 			if err := tx.Exec(stmt).Error; err != nil {
@@ -1064,6 +1066,65 @@ func (d *Database) UpdateScanJob(jobID string, updates map[string]interface{}) e
 	return d.DB.Model(&ScanJob{}).Where("job_id = ?", jobID).Updates(updates).Error
 }
 
+// CreateJobLog writes one structured runtime log for a job.
+func (d *Database) CreateJobLog(projectID, jobID, level, message string) error {
+	projectID = strings.TrimSpace(projectID)
+	jobID = strings.TrimSpace(jobID)
+	level = strings.ToLower(strings.TrimSpace(level))
+	message = strings.TrimSpace(message)
+	if projectID == "" {
+		projectID = "default"
+	}
+	if jobID == "" || message == "" {
+		return nil
+	}
+	if level == "" {
+		level = "info"
+	}
+	return d.DB.Create(&JobLog{
+		ProjectID: projectID,
+		JobID:     jobID,
+		Level:     level,
+		Message:   message,
+	}).Error
+}
+
+// ListJobLogs lists job logs in ascending ID order.
+// When sinceID is 0, it returns latest <limit> lines (tail).
+func (d *Database) ListJobLogs(projectID, jobID string, sinceID uint, limit int) ([]JobLog, error) {
+	projectID = strings.TrimSpace(projectID)
+	jobID = strings.TrimSpace(jobID)
+	if projectID == "" || jobID == "" {
+		return []JobLog{}, nil
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	query := d.DB.Model(&JobLog{}).
+		Where("project_id = ? AND job_id = ?", projectID, jobID)
+
+	if sinceID > 0 {
+		var rows []JobLog
+		if err := query.Where("id > ?", sinceID).Order("id asc").Limit(limit).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		return rows, nil
+	}
+
+	var tail []JobLog
+	if err := query.Order("id desc").Limit(limit).Find(&tail).Error; err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(tail)-1; i < j; i, j = i+1, j-1 {
+		tail[i], tail[j] = tail[j], tail[i]
+	}
+	return tail, nil
+}
+
 // GetScanJob returns a scan job by job_id.
 func (d *Database) GetScanJob(jobID string) (*ScanJob, error) {
 	var job ScanJob
@@ -1127,6 +1188,9 @@ func (d *Database) DeleteScanJobHistory(projectID, jobID string) error {
 		if err := tx.Where("project_id = ? AND job_id = ?", projectID, jobID).Delete(&ScanStage{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("project_id = ? AND job_id = ?", projectID, jobID).Delete(&JobLog{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("project_id = ? AND job_id = ?", projectID, jobID).Delete(&ScanJob{}).Error; err != nil {
 			return err
 		}
@@ -1149,6 +1213,10 @@ func (d *Database) DeleteMonitorTaskHistory(projectID string, taskID uint) error
 		status := strings.ToLower(strings.TrimSpace(task.Status))
 		if status == "running" || status == "pending" {
 			return ErrMonitorTaskActive
+		}
+		jobID := fmt.Sprintf("task-%d", task.ID)
+		if err := tx.Where("project_id = ? AND job_id = ?", projectID, jobID).Delete(&JobLog{}).Error; err != nil {
+			return err
 		}
 		if err := tx.Where("project_id = ? AND id = ?", projectID, taskID).Delete(&MonitorTask{}).Error; err != nil {
 			return err

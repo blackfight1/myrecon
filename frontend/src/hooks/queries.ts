@@ -6,6 +6,7 @@ import {
   type DeleteJobRequest,
   type CreateMonitorTargetRequest,
   type AssetListQuery,
+  type JobLogsQuery,
   type JobListQuery,
   type PortListQuery,
   type VulnListQuery,
@@ -44,6 +45,17 @@ export function useJobsPage(projectId: string | undefined, q: JobListQuery) {
     queryFn: () => endpoints.getJobsPage(requiredProjectId(projectId), q),
     enabled: !!projectId,
     refetchInterval: 5000
+  });
+}
+
+export function useJobLogs(projectId: string | undefined, jobId: string | undefined, q?: JobLogsQuery) {
+  const sinceId = q?.sinceId ?? 0;
+  const limit = q?.limit ?? 200;
+  return useQuery({
+    queryKey: ["job-logs", projectId ?? "", jobId ?? ""],
+    queryFn: () => endpoints.getJobLogs(requiredProjectId(projectId), jobId ?? "", { sinceId, limit }),
+    enabled: !!projectId && !!jobId,
+    refetchInterval: 3000
   });
 }
 

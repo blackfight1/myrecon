@@ -1779,3 +1779,57 @@ button.module-chip {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
+
+/* ── Job Logs ── */
+.job-log-viewer {
+  margin-top: 12px;
+  max-height: 65vh;
+  overflow: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 12px;
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", "Menlo", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.job-log-line {
+  display: flex;
+  gap: 10px;
+  padding: 2px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.job-log-time {
+  color: #94a3b8;
+  flex: 0 0 auto;
+}
+
+.job-log-level {
+  flex: 0 0 auto;
+  font-weight: 600;
+  min-width: 56px;
+}
+
+.job-log-level-debug {
+  color: #60a5fa;
+}
+
+.job-log-level-info {
+  color: #34d399;
+}
+
+.job-log-level-warn {
+  color: #fbbf24;
+}
+
+.job-log-level-error {
+  color: #f87171;
+}
+
+.job-log-msg {
+  flex: 1 1 auto;
+}

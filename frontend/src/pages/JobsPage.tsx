@@ -1,5 +1,6 @@
-import { createColumnHelper, type SortingState } from "@tanstack/react-table";
+﻿import { createColumnHelper, type SortingState } from "@tanstack/react-table";
 import { useCallback, useMemo, useState, type ChangeEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import type { JobListQuery } from "../api/endpoints";
 import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
@@ -27,6 +28,7 @@ function isRunning(status: string): boolean {
 }
 
 export function JobsPage() {
+  const navigate = useNavigate();
   const { activeProject } = useWorkspace();
   const projectId = activeProject?.id;
   const rootDomains = activeProject?.rootDomains ?? [];
@@ -62,10 +64,22 @@ export function JobsPage() {
   const total = data?.total ?? 0;
 
   const handlePageChange = useCallback((p: number) => setPage(p + 1), []);
-  const handlePageSizeChange = useCallback((s: number) => { setPageSize(s); setPage(1); }, []);
-  const handleSortingChange = useCallback((s: SortingState) => { setSorting(s); setPage(1); }, []);
-  const handleStatusFilterChange = useCallback((e: ChangeEvent<HTMLSelectElement>) => { setStatusFilter(e.target.value); setPage(1); }, []);
-  const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => { setSearch(e.target.value); setPage(1); }, []);
+  const handlePageSizeChange = useCallback((s: number) => {
+    setPageSize(s);
+    setPage(1);
+  }, []);
+  const handleSortingChange = useCallback((s: SortingState) => {
+    setSorting(s);
+    setPage(1);
+  }, []);
+  const handleStatusFilterChange = useCallback((e: ChangeEvent<HTMLSelectElement>) => {
+    setStatusFilter(e.target.value);
+    setPage(1);
+  }, []);
+  const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    setSearch(e.target.value);
+    setPage(1);
+  }, []);
 
   const handleCancel = (jobId: string) => {
     if (!confirm("确认取消该任务吗？")) return;
@@ -96,6 +110,10 @@ export function JobsPage() {
     );
   };
 
+  const handleViewLogs = (jobId: string) => {
+    navigate(`/jobs/${encodeURIComponent(jobId)}/logs`);
+  };
+
   const columns = [
     col.accessor("id", { header: "ID", cell: (c) => <span className="cell-mono">{c.getValue()}</span> }),
     col.accessor("rootDomain", { header: "根域名" }),
@@ -103,35 +121,54 @@ export function JobsPage() {
     col.accessor("status", { header: "状态", cell: (c) => <StatusBadge status={c.getValue()} /> }),
     col.accessor("startedAt", { header: "开始时间", cell: (c) => formatDate(c.getValue()) }),
     col.accessor("finishedAt", { header: "结束时间", cell: (c) => formatDate(c.getValue()) }),
-    col.accessor("durationSec", { header: "耗时", cell: (c) => { const v = c.getValue(); return v != null ? `${v}s` : <span className="cell-muted">-</span>; } }),
-    col.accessor("errorMessage", { header: "错误信息", cell: (c) => c.getValue() ? <span style={{ color: "var(--color-danger)", fontSize: 12 }}>{c.getValue()}</span> : <span className="cell-muted">-</span> }),
+    col.accessor("durationSec", {
+      header: "耗时",
+      cell: (c) => {
+        const v = c.getValue();
+        return v != null ? `${v}s` : <span className="cell-muted">-</span>;
+      }
+    }),
+    col.accessor("errorMessage", {
+      header: "错误信息",
+      cell: (c) =>
+        c.getValue() ? (
+          <span style={{ color: "var(--color-danger)", fontSize: 12 }}>{c.getValue()}</span>
+        ) : (
+          <span className="cell-muted">-</span>
+        )
+    }),
     col.display({
       id: "actions",
       header: "操作",
       cell: (c) => {
         const j = c.row.original;
         if (!projectId) return <span className="cell-muted">-</span>;
-        if (!isRunning(j.status)) {
-          return (
-            <button
-              className="btn btn-sm btn-danger"
-              onClick={() => handleDelete(j.id)}
-              disabled={deleteJob.isPending || cancelJob.isPending}
-              style={{ fontSize: 11, padding: "2px 8px" }}
-            >
-              删除
-            </button>
-          );
-        }
+
         return (
-          <button
-            className="btn btn-sm btn-danger"
-            onClick={() => handleCancel(j.id)}
-            disabled={cancelJob.isPending || deleteJob.isPending}
-            style={{ fontSize: 11, padding: "2px 8px" }}
-          >
-            取消
-          </button>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button className="btn btn-sm" onClick={() => handleViewLogs(j.id)} style={{ fontSize: 11, padding: "2px 8px" }}>
+              日志
+            </button>
+            {isRunning(j.status) ? (
+              <button
+                className="btn btn-sm btn-danger"
+                onClick={() => handleCancel(j.id)}
+                disabled={cancelJob.isPending || deleteJob.isPending}
+                style={{ fontSize: 11, padding: "2px 8px" }}
+              >
+                取消
+              </button>
+            ) : (
+              <button
+                className="btn btn-sm btn-danger"
+                onClick={() => handleDelete(j.id)}
+                disabled={deleteJob.isPending || cancelJob.isPending}
+                style={{ fontSize: 11, padding: "2px 8px" }}
+              >
+                删除
+              </button>
+            )}
+          </div>
         );
       }
     })
@@ -191,7 +228,7 @@ export function JobsPage() {
         <p className="page-desc">流水线执行历史和快速启动控制，支持服务端分页与排序。</p>
       </div>
 
-      <ProjectScopeBanner title="任务范围" hint="仅展示当前项目范围内的任务记录。" />
+      <ProjectScopeBanner title="任务范围" hint="仅显示当前项目范围内的任务记录。" />
 
       {feedback && (
         <div className="empty-state" style={{ color: feedback.ok ? "#16a34a" : "#dc2626", marginBottom: 12 }}>
@@ -215,7 +252,9 @@ export function JobsPage() {
           <button className={`btn btn-sm${enableNotify ? " btn-primary" : ""}`} onClick={() => setEnableNotify((v) => !v)}>
             通知 {enableNotify ? "开启" : "关闭"}
           </button>
-          <button className="btn btn-sm" onClick={() => { void launchScan(); }} disabled={rootDomains.length === 0 || createJob.isPending}>
+          <button className="btn btn-sm" onClick={() => {
+            void launchScan();
+          }} disabled={rootDomains.length === 0 || createJob.isPending}>
             {createJob.isPending ? "提交中..." : "启动快速扫描"}
           </button>
           <span className="filter-summary">执行链路: {previewModules.join(" -> ")} | 通知: {enableNotify ? "开" : "关"}</span>
@@ -236,7 +275,9 @@ export function JobsPage() {
             <option value="canceled">已取消</option>
           </select>
           <input className="form-input" value={search} onChange={handleSearchChange} placeholder="搜索 ID/根域名/状态/错误信息..." />
-          <button className="btn btn-sm" onClick={() => { void refetch(); }}>刷新</button>
+          <button className="btn btn-sm" onClick={() => {
+            void refetch();
+          }}>刷新</button>
           <span className="filter-summary">第 {page} 页，每页 {pageSize} 条</span>
         </div>
       </article>

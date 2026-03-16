@@ -1,11 +1,17 @@
 package web
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"hunter/internal/engine"
 )
@@ -177,11 +183,44 @@ type ScreenshotItem struct {
 	Filename   string
 	Title      string
 	StatusCode int
+	ProbedAt   string
 }
+
+type screenshotCacheEntry struct {
+	DBModTime time.Time
+	Items     []ScreenshotItem
+}
+
+var (
+	screenshotCacheMu sync.RWMutex
+	screenshotCache   = make(map[string]screenshotCacheEntry)
+)
 
 // ListScreenshots lists screenshot image files for a given root domain.
 func ListScreenshots(baseDir, rootDomain string) ([]ScreenshotItem, error) {
-	ssDir := filepath.Join(baseDir, rootDomain, "screenshots")
+	rootDomain = strings.TrimSpace(rootDomain)
+	if rootDomain == "" {
+		return []ScreenshotItem{}, nil
+	}
+	domainDir := filepath.Join(baseDir, rootDomain)
+	ssDir := filepath.Join(domainDir, "screenshots")
+	dbPath := filepath.Join(domainDir, "gowitness.sqlite3")
+
+	var dbModTime time.Time
+	if dbInfo, err := os.Stat(dbPath); err == nil {
+		dbModTime = dbInfo.ModTime()
+		if cached, ok := getCachedScreenshots(dbPath, dbModTime); ok {
+			return cached, nil
+		}
+	}
+
+	if items, err := listScreenshotsFromGowitnessDB(dbPath, ssDir); err == nil && len(items) > 0 {
+		if !dbModTime.IsZero() {
+			setCachedScreenshots(dbPath, dbModTime, items)
+		}
+		return items, nil
+	}
+
 	entries, err := os.ReadDir(ssDir)
 	if err != nil {
 		return nil, err
@@ -199,6 +238,165 @@ func ListScreenshots(baseDir, rootDomain string) ([]ScreenshotItem, error) {
 		}
 	}
 	return items, nil
+}
+
+func getCachedScreenshots(dbPath string, dbModTime time.Time) ([]ScreenshotItem, bool) {
+	screenshotCacheMu.RLock()
+	defer screenshotCacheMu.RUnlock()
+
+	entry, ok := screenshotCache[dbPath]
+	if !ok {
+		return nil, false
+	}
+	if !entry.DBModTime.Equal(dbModTime) {
+		return nil, false
+	}
+	return cloneScreenshotItems(entry.Items), true
+}
+
+func setCachedScreenshots(dbPath string, dbModTime time.Time, items []ScreenshotItem) {
+	screenshotCacheMu.Lock()
+	defer screenshotCacheMu.Unlock()
+	screenshotCache[dbPath] = screenshotCacheEntry{
+		DBModTime: dbModTime,
+		Items:     cloneScreenshotItems(items),
+	}
+}
+
+func cloneScreenshotItems(items []ScreenshotItem) []ScreenshotItem {
+	if len(items) == 0 {
+		return []ScreenshotItem{}
+	}
+	out := make([]ScreenshotItem, len(items))
+	copy(out, items)
+	return out
+}
+
+type gowitnessReportRow struct {
+	ID           int    `json:"id"`
+	URL          string `json:"url"`
+	FinalURL     string `json:"final_url"`
+	Title        string `json:"title"`
+	ResponseCode int    `json:"response_code"`
+	FileName     string `json:"file_name"`
+	ProbedAt     string `json:"probed_at"`
+}
+
+type screenshotRankedItem struct {
+	RowID int
+	Item  ScreenshotItem
+}
+
+func listScreenshotsFromGowitnessDB(dbPath, screenshotDir string) ([]ScreenshotItem, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, err
+	}
+	if _, err := exec.LookPath("gowitness"); err != nil {
+		return nil, err
+	}
+
+	tmpFile, err := os.CreateTemp("", "gowitness_report_*.jsonl")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	cmd := exec.Command("gowitness", "report", "convert", "--from-file", dbPath, "--to-file", tmpPath, "-q")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("gowitness report convert failed: %v, output=%s", err, strings.TrimSpace(string(output)))
+	}
+
+	f, err := os.Open(tmpPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	byFile := make(map[string]screenshotRankedItem)
+	reader := bufio.NewReader(f)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		trimmed := strings.TrimSpace(string(line))
+		if trimmed != "" {
+			var row gowitnessReportRow
+			if err := json.Unmarshal([]byte(trimmed), &row); err == nil {
+				filename := filepath.Base(strings.TrimSpace(row.FileName))
+				if isImageFile(filename) {
+					filePath := filepath.Join(screenshotDir, filename)
+					if _, err := os.Stat(filePath); err == nil {
+						url := strings.TrimSpace(row.FinalURL)
+						if url == "" {
+							url = strings.TrimSpace(row.URL)
+						}
+						item := ScreenshotItem{
+							URL:        url,
+							Filename:   filename,
+							Title:      strings.TrimSpace(row.Title),
+							StatusCode: row.ResponseCode,
+							ProbedAt:   strings.TrimSpace(row.ProbedAt),
+						}
+						existing, ok := byFile[filename]
+						if !ok || row.ID >= existing.RowID {
+							byFile[filename] = screenshotRankedItem{RowID: row.ID, Item: item}
+						}
+					}
+				}
+			}
+		}
+
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+
+	items := make([]ScreenshotItem, 0, len(byFile))
+	for _, ranked := range byFile {
+		items = append(items, ranked.Item)
+	}
+
+	sort.SliceStable(items, func(i, j int) bool {
+		ti, okI := parseProbedAt(items[i].ProbedAt)
+		tj, okJ := parseProbedAt(items[j].ProbedAt)
+		switch {
+		case okI && okJ:
+			if ti.Equal(tj) {
+				return items[i].Filename < items[j].Filename
+			}
+			return ti.After(tj)
+		case okI && !okJ:
+			return true
+		case !okI && okJ:
+			return false
+		default:
+			return items[i].Filename < items[j].Filename
+		}
+	})
+
+	return items, nil
+}
+
+func parseProbedAt(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
+func isImageFile(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	return strings.HasSuffix(lower, ".png") || strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg")
 }
 
 // countFiles counts files under a directory (non-recursive).

@@ -4,6 +4,7 @@ import type {
   AssetDetail,
   DashboardSummary,
   GlobalSearchResult,
+  JobLogsPayload,
   JobOverview,
   PagedJobs,
   MonitorChange,
@@ -130,6 +131,11 @@ export interface JobListQuery {
   sortDir?: "asc" | "desc";
 }
 
+export interface JobLogsQuery {
+  sinceId?: number;
+  limit?: number;
+}
+
 function withQuery(path: string, query: Record<string, string | undefined>): string {
   const params = new URLSearchParams();
   Object.entries(query).forEach(([k, v]) => {
@@ -162,6 +168,15 @@ export const endpoints = {
         sort_by: q.sortBy,
         sort_dir: q.sortDir,
         paged: "1"
+      })
+    ),
+  getJobLogs: (projectId: string, jobId: string, q?: JobLogsQuery) =>
+    apiGet<JobLogsPayload>(
+      withQuery("/jobs/logs", {
+        project_id: projectId,
+        job_id: jobId,
+        since_id: q?.sinceId != null ? String(q.sinceId) : undefined,
+        limit: q?.limit != null ? String(q.limit) : undefined
       })
     ),
   createJob: (body: NewScanJobRequest) => apiPost<NewScanJobRequest, JobOverview>("/jobs", body),

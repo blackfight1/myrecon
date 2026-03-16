@@ -172,6 +172,19 @@ type pagedJobsResponse struct {
 	Total    int64                 `json:"total"`
 }
 
+type jobLogItemResponse struct {
+	ID        uint   `json:"id"`
+	Level     string `json:"level"`
+	Message   string `json:"message"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type jobLogsResponse struct {
+	Items     []jobLogItemResponse `json:"items"`
+	SinceID   uint                 `json:"sinceId"`
+	JobStatus string               `json:"jobStatus"`
+}
+
 type portResponse struct {
 	ID        int    `json:"id"`
 	AssetID   int    `json:"assetId,omitempty"`
@@ -494,6 +507,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/jobs", s.handleJobs)
 	s.mux.HandleFunc("/api/jobs/cancel", s.handleCancelJob)
 	s.mux.HandleFunc("/api/jobs/delete", s.handleDeleteJob)
+	s.mux.HandleFunc("/api/jobs/logs", s.handleJobLogs)
 	s.mux.HandleFunc("/api/assets/detail", s.handleAssetDetail)
 	s.mux.HandleFunc("/api/assets", s.handleAssets)
 	s.mux.HandleFunc("/api/ports", s.handlePorts)
@@ -860,6 +874,7 @@ func (s *Server) executeClaimedScanJob(job *db.ScanJob) {
 	dryRun := job.DryRun
 	notify := job.Notify
 	log.Printf("[Worker] claimed scan job %s project=%s root=%s modules=%v", job.JobID, job.ProjectID, job.RootDomain, modules)
+	s.appendJobLogf(job.ProjectID, job.JobID, "info", "Worker 已领取任务: root=%s modules=%v", job.RootDomain, modules)
 	s.runScanAsync(job.ProjectID, job.JobID, job.RootDomain, modules, enableNuclei, activeSubs, dictSize, dnsResolvers, dryRun, notify)
 }
 
@@ -882,46 +897,62 @@ func (s *Server) runMonitorScheduler() {
 }
 
 func (s *Server) executeMonitorTask(task *db.MonitorTask) {
+	if task == nil {
+		return
+	}
+	jobID := fmt.Sprintf("task-%d", task.ID)
 	rootDomain := task.RootDomain
 	log.Printf("[Scheduler] executing monitor task %d for %s", task.ID, rootDomain)
+	s.appendJobLogf(task.ProjectID, jobID, "info", "监控任务开始: root=%s attempt=%d/%d", rootDomain, task.Attempt+1, task.MaxAttempts)
 
 	// Create a monitor run record
 	run, err := s.db.CreateMonitorRun(task.ProjectID, rootDomain)
 	if err != nil {
 		log.Printf("[Scheduler] failed to create monitor run: %v", err)
+		s.appendJobLogf(task.ProjectID, jobID, "error", "创建 monitor run 失败: %v", err)
 		_ = s.db.HandleMonitorTaskFailure(task, fmt.Sprintf("create run failed: %v", err))
 		return
 	}
+	s.appendJobLogf(task.ProjectID, jobID, "debug", "monitor run 已创建: runID=%d", run.ID)
 
 	target, err := s.db.GetOrCreateMonitorTarget(task.ProjectID, rootDomain)
 	if err != nil {
 		log.Printf("[Scheduler] failed to get monitor target: %v", err)
+		s.appendJobLogf(task.ProjectID, jobID, "error", "读取监控目标失败: %v", err)
 		_ = s.db.CompleteMonitorRun(run.ID, "failed", err.Error(), 0, 0, 0, 0, 0)
 		_ = s.db.HandleMonitorTaskFailure(task, err.Error())
 		return
 	}
 
 	// Collect subdomains
+	s.appendJobLog(task.ProjectID, jobID, "info", "阶段开始: 子域收集")
 	subResults, subdomains, err := s.collectSubdomains([]string{rootDomain})
 	if err != nil {
 		errMsg := fmt.Sprintf("subdomain collection failed: %v", err)
 		log.Printf("[Scheduler] %s", errMsg)
+		s.appendJobLog(task.ProjectID, jobID, "error", errMsg)
 		_ = s.db.CompleteMonitorRun(run.ID, "failed", errMsg, 0, 0, 0, 0, 0)
 		_ = s.db.HandleMonitorTaskFailure(task, errMsg)
 		return
 	}
+	s.appendJobLogf(task.ProjectID, jobID, "info", "子域收集完成: unique=%d resultItems=%d", len(subdomains), len(subResults))
 
 	// Run network pipeline (httpx + ports)
+	s.appendJobLogf(task.ProjectID, jobID, "info", "阶段开始: 网络探测 (targets=%d)", len(subdomains))
 	networkResults, err := s.runNetworkPipeline(subdomains, true, true, false, false, s.screenshotDir)
 	if err != nil {
 		log.Printf("[Scheduler] network pipeline warning for %s: %v", rootDomain, err)
+		s.appendJobLogf(task.ProjectID, jobID, "warn", "网络探测告警: %v", err)
 	}
+	networkCounts := countResults(networkResults)
+	s.appendJobLogf(task.ProjectID, jobID, "info", "网络探测完成: web=%d ports=%d", networkCounts["web_services"], networkCounts["ports"])
 
 	allResults := append(subResults, networkResults...)
 
 	// Save results to DB
 	if dbErr := s.saveResultsToDB(task.ProjectID, rootDomain, fmt.Sprintf("mon-run-%d", run.ID), allResults); dbErr != nil {
 		log.Printf("[Scheduler] DB save warning: %v", dbErr)
+		s.appendJobLogf(task.ProjectID, jobID, "warn", "结果写入数据库告警: %v", dbErr)
 	}
 
 	// Detect changes
@@ -940,6 +971,8 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 
 	totalChanges := newLive + webChanged + portOpened + portClosed + svcChanged
 	log.Printf("[Scheduler] monitor task %d completed for %s: %d total changes", task.ID, rootDomain, totalChanges)
+	s.appendJobLogf(task.ProjectID, jobID, "info", "监控任务完成: changes=%d (new_live=%d web_changed=%d port_opened=%d port_closed=%d service_changed=%d)",
+		totalChanges, newLive, webChanged, portOpened, portClosed, svcChanged)
 
 	// Send notification if changes detected
 	if totalChanges > 0 {
@@ -954,7 +987,9 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 					"port_opened": portOpened, "port_closed": portClosed,
 					"service_changed": svcChanged,
 				}
-				_ = notifier.SendReconEnd(true, time.Since(run.StartedAt), stats, "")
+				if err := notifier.SendReconEnd(true, time.Since(run.StartedAt), stats, ""); err != nil {
+					s.appendJobLogf(task.ProjectID, jobID, "warn", "通知发送失败: %v", err)
+				}
 			}
 		}
 	}
@@ -1993,6 +2028,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		ID: jobID, ProjectID: projectID, RootDomain: rootDomain, Mode: mode, Modules: modules,
 		Status: "pending", StartedAt: now.Format(time.RFC3339),
 	})
+	s.appendJobLogf(projectID, jobID, "info", "任务已创建并进入队列: root=%s modules=%v dryRun=%v notify=%v", rootDomain, modules, req.DryRun, notify)
 	s.writeAudit(projectID, actorFromRequest(r), "create_scan", "job", jobID, map[string]interface{}{
 		"domain": rootDomain, "modules": modules, "dryRun": req.DryRun, "notify": notify,
 	}, r)
@@ -2022,6 +2058,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	// Update DB
 	_ = s.db.CancelScanJob(body.JobID)
 	if job, err := s.db.GetScanJob(body.JobID); err == nil {
+		s.appendJobLog(job.ProjectID, body.JobID, "warn", "任务已被用户取消")
 		s.writeAudit(job.ProjectID, actorFromRequest(r), "cancel_scan", "job", body.JobID, map[string]interface{}{
 			"rootDomain": job.RootDomain,
 		}, r)
@@ -2090,6 +2127,109 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "jobId": jobID})
 }
 
+func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	jobID := strings.TrimSpace(r.URL.Query().Get("job_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
+	if jobID == "" {
+		writeError(w, http.StatusBadRequest, "job_id is required")
+		return
+	}
+
+	sinceID := uint(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("since_id")); raw != "" {
+		n, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid since_id")
+			return
+		}
+		sinceID = uint(n)
+	}
+
+	limit := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = n
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	rows, err := s.db.ListJobLogs(projectID, jobID, sinceID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	resp := make([]jobLogItemResponse, 0, len(rows))
+	nextSinceID := sinceID
+	for _, row := range rows {
+		if row.ID > nextSinceID {
+			nextSinceID = row.ID
+		}
+		resp = append(resp, jobLogItemResponse{
+			ID:        row.ID,
+			Level:     row.Level,
+			Message:   row.Message,
+			CreatedAt: timeToISO(row.CreatedAt),
+		})
+	}
+
+	status := s.resolveJobStatus(projectID, jobID)
+	writeJSON(w, http.StatusOK, jobLogsResponse{
+		Items:     resp,
+		SinceID:   nextSinceID,
+		JobStatus: status,
+	})
+}
+
+func (s *Server) resolveJobStatus(projectID, jobID string) string {
+	projectID = strings.TrimSpace(projectID)
+	jobID = strings.TrimSpace(jobID)
+	if projectID == "" || jobID == "" {
+		return "unknown"
+	}
+
+	if strings.HasPrefix(jobID, "task-") {
+		taskIDRaw := strings.TrimPrefix(jobID, "task-")
+		taskID, err := strconv.ParseUint(taskIDRaw, 10, 64)
+		if err != nil || taskID == 0 {
+			return "unknown"
+		}
+		var task db.MonitorTask
+		if err := s.db.DB.Where("project_id = ? AND id = ?", projectID, uint(taskID)).First(&task).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return "deleted"
+			}
+			return "unknown"
+		}
+		return strings.TrimSpace(task.Status)
+	}
+
+	var scanJob db.ScanJob
+	if err := s.db.DB.Where("project_id = ? AND job_id = ?", projectID, jobID).First(&scanJob).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "deleted"
+		}
+		return "unknown"
+	}
+	return strings.TrimSpace(scanJob.Status)
+}
+
 // runScanAsync executes the scan pipeline in a background goroutine.
 func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []string, enableNuclei, activeSubs bool, dictSize int, dnsResolvers string, dryRun, notify bool) {
 	startTime := time.Now()
@@ -2118,6 +2258,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	}).Error
 
 	log.Printf("[Scan] Job %s started for %s, modules=%v dryRun=%v", jobID, rootDomain, modules, dryRun)
+	s.appendJobLogf(projectID, jobID, "info", "扫描开始: root=%s modules=%v dryRun=%v", rootDomain, modules, dryRun)
 
 	// Frontend may send stage modules (subs/ports/httpx/...) or concrete tool
 	// modules (subfinder/findomain/bbot/naabu/nmap/...); normalize behavior here.
@@ -2141,6 +2282,8 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	s.settingsMu.RUnlock()
 
 	dictSize = clampDictSize(dictSize)
+	s.appendJobLogf(projectID, jobID, "debug", "执行参数: hasSubs=%v hasActiveSubs=%v hasHttpx=%v hasPorts=%v hasNuclei=%v hasWitness=%v dictSize=%d",
+		hasSubs, hasActiveSubs, hasHttpx, hasPorts, hasNuclei, hasWitness, dictSize)
 
 	var allResults []engine.Result
 	var scanErr error
@@ -2153,50 +2296,72 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	}
 
 	if hasSubs {
+		s.appendJobLog(projectID, jobID, "info", "阶段开始: 子域收集")
 		subResults, subdomains, err := s.collectSubdomains(domains)
 		allResults = append(allResults, subResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("subdomain collection failed: %v", err)
+			s.appendJobLogf(projectID, jobID, "error", "子域收集失败: %v", err)
 			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr, dryRun, notify)
 			return
 		}
+		s.appendJobLogf(projectID, jobID, "info", "子域收集完成: unique=%d resultItems=%d", len(subdomains), len(subResults))
 		if err := s.checkScanCanceled(ctx, jobID); err != nil {
+			s.appendJobLog(projectID, jobID, "warn", "任务被取消")
 			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 			return
 		}
 
 		if hasActiveSubs {
+			s.appendJobLogf(projectID, jobID, "info", "阶段开始: 主动枚举 (dictSize=%d)", dictSize)
 			activeResults, activeSubdomains, err := s.expandActiveSubdomains(domains, subdomains, dictSize, dnsResolvers)
 			allResults = append(allResults, activeResults...)
 			if err != nil {
 				log.Printf("[Scan] Job %s active subs warning: %v", jobID, err)
+				s.appendJobLogf(projectID, jobID, "warn", "主动枚举告警: %v", err)
 			} else {
 				subdomains = mergeUnique(subdomains, activeSubdomains)
+				s.appendJobLogf(projectID, jobID, "info", "主动枚举完成: 新增=%d, 合并后=%d", len(activeSubdomains), len(subdomains))
 			}
 			if err := s.checkScanCanceled(ctx, jobID); err != nil {
+				s.appendJobLog(projectID, jobID, "warn", "任务被取消")
 				s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 				return
 			}
 		}
 
 		if hasPorts || hasHttpx {
+			s.appendJobLogf(projectID, jobID, "info", "阶段开始: 网络探测 (targets=%d httpx=%v ports=%v nuclei=%v witness=%v)",
+				len(subdomains), hasHttpx, hasPorts, hasNuclei, hasWitness)
 			networkResults, err := s.runNetworkPipeline(subdomains, hasHttpx, hasPorts, hasNuclei, hasWitness, screenshotDir)
 			allResults = append(allResults, networkResults...)
 			if err != nil {
 				scanErr = fmt.Errorf("network stage failed: %v", err)
+				s.appendJobLogf(projectID, jobID, "error", "网络探测失败: %v", err)
 			}
+			networkCounts := countResults(networkResults)
+			s.appendJobLogf(projectID, jobID, "info", "网络探测完成: web=%d ports=%d vulns=%d",
+				networkCounts["web_services"], networkCounts["ports"], networkCounts["vulnerabilities"])
 			if err := s.checkScanCanceled(ctx, jobID); err != nil {
+				s.appendJobLog(projectID, jobID, "warn", "任务被取消")
 				s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 				return
 			}
 		}
 	} else if hasPorts || hasHttpx {
+		s.appendJobLogf(projectID, jobID, "info", "阶段开始: 网络探测 (targets=%d httpx=%v ports=%v nuclei=%v witness=%v)",
+			len(domains), hasHttpx, hasPorts, hasNuclei, hasWitness)
 		networkResults, err := s.runNetworkPipeline(domains, hasHttpx, hasPorts, hasNuclei, hasWitness, screenshotDir)
 		allResults = append(allResults, networkResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("network stage failed: %v", err)
+			s.appendJobLogf(projectID, jobID, "error", "网络探测失败: %v", err)
 		}
+		networkCounts := countResults(networkResults)
+		s.appendJobLogf(projectID, jobID, "info", "网络探测完成: web=%d ports=%d vulns=%d",
+			networkCounts["web_services"], networkCounts["ports"], networkCounts["vulnerabilities"])
 		if err := s.checkScanCanceled(ctx, jobID); err != nil {
+			s.appendJobLog(projectID, jobID, "warn", "任务被取消")
 			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 			return
 		}
@@ -2226,6 +2391,9 @@ func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.
 	var dbErr error
 	if !dryRun {
 		dbErr = s.saveResultsToDB(projectID, rootDomain, jobID, results)
+		if dbErr != nil {
+			s.appendJobLogf(projectID, jobID, "error", "结果写入数据库失败: %v", dbErr)
+		}
 	}
 
 	finalStatus := "success"
@@ -2263,6 +2431,8 @@ func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.
 
 	log.Printf("[Scan] Job %s finished: status=%s duration=%ds subs=%d ports=%d vulns=%d dryRun=%v",
 		jobID, finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"], dryRun)
+	s.appendJobLogf(projectID, jobID, "info", "扫描结束: status=%s duration=%ds subs=%d ports=%d vulns=%d dryRun=%v",
+		finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"], dryRun)
 	s.writeAudit(projectID, "system", "finish_scan", "job", jobID, map[string]interface{}{
 		"status": finalStatus, "durationSec": duration, "subdomains": counts["subdomains"], "ports": counts["ports"], "vulns": counts["vulnerabilities"], "dryRun": dryRun,
 	}, nil)
@@ -2282,6 +2452,7 @@ func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.
 	}
 	if err := notifier.SendReconEnd(finalStatus == "success", time.Duration(duration)*time.Second, counts, errMsg); err != nil {
 		log.Printf("[Notify] scan finish notification failed for job %s: %v", jobID, err)
+		s.appendJobLogf(projectID, jobID, "warn", "通知发送失败: %v", err)
 	}
 }
 
@@ -2806,7 +2977,8 @@ func (s *Server) handleScreenshotDomains(w http.ResponseWriter, r *http.Request)
 		count := 0
 		if entries, err := os.ReadDir(ssDir); err == nil {
 			for _, e := range entries {
-				if !e.IsDir() && (strings.HasSuffix(e.Name(), ".png") || strings.HasSuffix(e.Name(), ".jpg")) {
+				name := strings.ToLower(e.Name())
+				if !e.IsDir() && (strings.HasSuffix(name, ".png") || strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg")) {
 					count++
 				}
 			}
@@ -2866,6 +3038,7 @@ func (s *Server) handleScreenshots(w http.ResponseWriter, r *http.Request) {
 			Filename:     item.Filename,
 			Title:        item.Title,
 			StatusCode:   item.StatusCode,
+			CreatedAt:    item.ProbedAt,
 			RootDomain:   rootDomain,
 			ThumbnailURL: fmt.Sprintf("/api/screenshots/file/%s/%s?project_id=%s", rootDomain, url.PathEscape(item.Filename), url.QueryEscape(projectID)),
 			FullURL:      fmt.Sprintf("/api/screenshots/file/%s/%s?project_id=%s", rootDomain, url.PathEscape(item.Filename), url.QueryEscape(projectID)),
@@ -3523,6 +3696,32 @@ func (s *Server) writeAudit(projectID, actor, action, targetType, targetID strin
 		logRecord.UserAgent = strings.TrimSpace(r.UserAgent())
 	}
 	_ = s.db.DB.Create(&logRecord).Error
+}
+
+func normalizeJobLogLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug", "info", "warn", "error":
+		return strings.ToLower(strings.TrimSpace(level))
+	default:
+		return "info"
+	}
+}
+
+func (s *Server) appendJobLog(projectID, jobID, level, message string) {
+	if s == nil || s.db == nil {
+		return
+	}
+	msg := strings.TrimSpace(message)
+	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(jobID) == "" || msg == "" {
+		return
+	}
+	if err := s.db.CreateJobLog(projectID, jobID, normalizeJobLogLevel(level), msg); err != nil {
+		log.Printf("[JobLog] write failed project=%s job=%s: %v", projectID, jobID, err)
+	}
+}
+
+func (s *Server) appendJobLogf(projectID, jobID, level, format string, args ...interface{}) {
+	s.appendJobLog(projectID, jobID, level, fmt.Sprintf(format, args...))
 }
 
 func (s *Server) saveSimpleEdge(projectID, rootDomain, srcType, srcID, dstType, dstID, relation, jobID string) {

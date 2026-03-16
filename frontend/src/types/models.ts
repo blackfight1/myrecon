@@ -40,6 +40,19 @@ export interface PagedJobs {
   total: number;
 }
 
+export interface JobLogLine {
+  id: number;
+  level: "debug" | "info" | "warn" | "error" | string;
+  message: string;
+  createdAt: string;
+}
+
+export interface JobLogsPayload {
+  items: JobLogLine[];
+  sinceId: number;
+  jobStatus: HealthStatus | string;
+}
+
 export interface Asset {
   id: number;
   projectId?: string;

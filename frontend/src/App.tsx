@@ -4,6 +4,7 @@ import { AssetsPage } from "./pages/AssetsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { JobsPage } from "./pages/JobsPage";
+import { JobLogsPage } from "./pages/JobLogsPage";
 import { MonitoringPage } from "./pages/MonitoringPage";
 import { PortsPage } from "./pages/PortsPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="quick-scan" element={<QuickScanPage />} />
         <Route path="jobs" element={<JobsPage />} />
+        <Route path="jobs/:jobId/logs" element={<JobLogsPage />} />
         <Route path="assets" element={<AssetsPage />} />
         <Route path="assets/:id" element={<AssetDetailPage />} />
         <Route path="ports" element={<PortsPage />} />

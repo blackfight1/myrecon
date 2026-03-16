@@ -431,6 +431,22 @@ func (ScanArtifact) TableName() string {
 	return "scan_artifacts"
 }
 
+// JobLog stores structured runtime logs for scan/monitor jobs.
+type JobLog struct {
+	ID        uint           `gorm:"primarykey" json:"id"`
+	ProjectID string         `gorm:"index:idx_job_logs_project_job_id,priority:1;not null;default:'default'" json:"project_id"`
+	JobID     string         `gorm:"index:idx_job_logs_project_job_id,priority:2;not null" json:"job_id"`
+	Level     string         `gorm:"index;not null;default:info" json:"level"`
+	Message   string         `gorm:"type:text;not null" json:"message"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (JobLog) TableName() string {
+	return "job_logs"
+}
+
 // AuditLog stores critical system actions for traceability.
 type AuditLog struct {
 	ID         uint           `gorm:"primarykey" json:"id"`
