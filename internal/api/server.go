@@ -699,12 +699,51 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "id is required")
 			return
 		}
-		if err := s.db.ArchiveProject(id); err != nil {
+		purgeData := isTruthy(r.URL.Query().Get("purge_data"))
+		if !purgeData {
+			if err := s.db.ArchiveProject(id); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			s.writeAudit(id, actorFromRequest(r), "project_archive", "project", id, nil, r)
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"status":    "ok",
+				"id":        id,
+				"purgeData": false,
+			})
+			return
+		}
+
+		rootDomains, err := s.listProjectRootDomains(id)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				writeError(w, http.StatusNotFound, "project not found")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		s.writeAudit(id, actorFromRequest(r), "project_archive", "project", id, nil, r)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "id": id})
+
+		if err := s.db.DeleteProjectAndData(id); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				writeError(w, http.StatusNotFound, "project not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		cleanedDirs := s.cleanupScreenshotDirsByRootDomains(id, rootDomains)
+		s.writeAudit(id, actorFromRequest(r), "project_delete", "project", id, map[string]interface{}{
+			"purgeData":      true,
+			"rootDomains":    rootDomains,
+			"cleanedScreens": cleanedDirs,
+		}, r)
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":    "ok",
+			"id":        id,
+			"purgeData": true,
+		})
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -3386,6 +3425,65 @@ func normalizeRootDomains(items []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func (s *Server) listProjectRootDomains(projectID string) ([]string, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, fmt.Errorf("project id is required")
+	}
+	var p db.Project
+	if err := s.db.DB.Where("id = ?", projectID).First(&p).Error; err != nil {
+		return nil, err
+	}
+	var scopes []db.ProjectScope
+	if err := s.db.DB.Where("project_id = ?", projectID).Find(&scopes).Error; err != nil {
+		return nil, err
+	}
+	rootDomains := make([]string, 0, len(scopes))
+	seen := map[string]bool{}
+	for _, sc := range scopes {
+		rd := normalizeRootDomain(sc.RootDomain)
+		if rd == "" || seen[rd] {
+			continue
+		}
+		seen[rd] = true
+		rootDomains = append(rootDomains, rd)
+	}
+	sort.Strings(rootDomains)
+	return rootDomains, nil
+}
+
+func (s *Server) cleanupScreenshotDirsByRootDomains(deletedProjectID string, rootDomains []string) []string {
+	if len(rootDomains) == 0 {
+		return nil
+	}
+	cleaned := make([]string, 0, len(rootDomains))
+	for _, rd := range rootDomains {
+		rootDomain := normalizeRootDomain(rd)
+		if rootDomain == "" {
+			continue
+		}
+		var refs int64
+		err := s.db.DB.Model(&db.ProjectScope{}).
+			Where("root_domain = ? AND project_id <> ?", rootDomain, deletedProjectID).
+			Count(&refs).Error
+		if err != nil {
+			log.Printf("[Project] screenshot cleanup check failed root=%s: %v", rootDomain, err)
+			continue
+		}
+		if refs > 0 {
+			continue
+		}
+		dir := filepath.Join(s.screenshotDir, rootDomain)
+		if err := os.RemoveAll(dir); err != nil {
+			log.Printf("[Project] screenshot dir cleanup failed root=%s path=%s: %v", rootDomain, dir, err)
+			continue
+		}
+		cleaned = append(cleaned, rootDomain)
+	}
+	sort.Strings(cleaned)
+	return cleaned
 }
 
 func dedupTrimmed(items []string) []string {

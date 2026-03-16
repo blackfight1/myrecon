@@ -21,6 +21,8 @@ export function ProjectsPage() {
 
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<ProjectRecord | null>(null);
+  const [deleteWithData, setDeleteWithData] = useState(false);
 
   const startEdit = (p: ProjectRecord) => {
     setFeedback(null);
@@ -80,16 +82,30 @@ export function ProjectsPage() {
     }
   };
 
-  const handleDelete = async (p: ProjectRecord) => {
+  const handleDelete = (p: ProjectRecord) => {
     if (busy) return;
-    if (!confirm(`确定要归档项目 "${p.name}" 吗？归档后项目将不再显示。`)) return;
+    setDeleteCandidate(p);
+    setDeleteWithData(false);
+  };
+
+  const closeDeleteModal = () => {
+    if (busy) return;
+    setDeleteCandidate(null);
+    setDeleteWithData(false);
+  };
+
+  const confirmDelete = async () => {
+    const target = deleteCandidate;
+    if (!target || busy) return;
     setBusy(true);
     setFeedback(null);
     try {
-      await deleteProject(p.id);
-      setFeedback({ ok: true, text: "项目已归档" });
+      await deleteProject(target.id, deleteWithData);
+      setFeedback({ ok: true, text: deleteWithData ? "项目及相关数据已删除" : "项目已归档" });
+      setDeleteCandidate(null);
+      setDeleteWithData(false);
     } catch (err) {
-      setFeedback({ ok: false, text: `归档失败：${errorMessage(err)}` });
+      setFeedback({ ok: false, text: `删除失败：${errorMessage(err)}` });
     } finally {
       setBusy(false);
     }
@@ -198,7 +214,7 @@ export function ProjectsPage() {
                           {isActive ? "已激活" : "设为活跃"}
                         </button>
                         {projects.length > 1 && (
-                          <button className="btn btn-sm btn-danger" onClick={() => { void handleDelete(p); }} disabled={busy}>归档</button>
+                          <button className="btn btn-sm btn-danger" onClick={() => { void handleDelete(p); }} disabled={busy}>删除</button>
                         )}
                       </div>
                     </div>
@@ -238,6 +254,40 @@ export function ProjectsPage() {
           })}
         </div>
       </article>
+
+      {deleteCandidate && (
+        <div className="modal-overlay" onClick={closeDeleteModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>删除项目</h3>
+              <button className="modal-close" onClick={closeDeleteModal} disabled={busy}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ marginTop: 0, marginBottom: 10 }}>
+                你正在删除项目 <strong>{deleteCandidate.name}</strong>。
+              </p>
+              <p style={{ marginTop: 0, marginBottom: 14, color: "var(--text-secondary)", fontSize: 13 }}>
+                默认仅归档项目（可恢复）；勾选后会彻底删除该项目的资产、端口、漏洞、任务、监控与日志数据。
+              </p>
+              <label className="form-checkbox">
+                <input
+                  type="checkbox"
+                  checked={deleteWithData}
+                  disabled={busy}
+                  onChange={(e) => setDeleteWithData(e.target.checked)}
+                />
+                同时删除该项目所有数据（不可恢复）
+              </label>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={closeDeleteModal} disabled={busy}>取消</button>
+              <button className="btn btn-danger" onClick={() => { void confirmDelete(); }} disabled={busy}>
+                {busy ? "处理中..." : deleteWithData ? "删除项目和数据" : "仅归档项目"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

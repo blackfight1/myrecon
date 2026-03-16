@@ -26,7 +26,7 @@ interface WorkspaceState {
     tagsRaw?: string;
     archived?: boolean;
   }) => Promise<void>;
-  deleteProject: (id: string) => Promise<void>;
+  deleteProject: (id: string, purgeData?: boolean) => Promise<void>;
 }
 
 const WorkspaceContext = createContext<WorkspaceState | null>(null);
@@ -130,8 +130,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     await refresh();
   };
 
-  const deleteProject: WorkspaceState["deleteProject"] = async (id) => {
-    await endpoints.deleteProject(id);
+  const deleteProject: WorkspaceState["deleteProject"] = async (id, purgeData) => {
+    await endpoints.deleteProject(id, purgeData);
     await refresh();
   };
 

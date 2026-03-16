@@ -768,6 +768,77 @@ func (d *Database) ArchiveProject(projectID string) error {
 	})
 }
 
+// DeleteProjectAndData permanently removes one project and all project-scoped data.
+func (d *Database) DeleteProjectAndData(projectID string) error {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return fmt.Errorf("projectID is required")
+	}
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		var existing Project
+		if err := tx.Where("id = ?", projectID).First(&existing).Error; err != nil {
+			return err
+		}
+
+		// Delete child tables first, then project metadata.
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&VulnEvent{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&JobLog{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&ScanArtifact{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&ScanStage{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&ScanJob{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&MonitorTask{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&PortChange{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&AssetChange{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&MonitorEvent{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&MonitorRun{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&MonitorTarget{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&AssetEdge{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&Vulnerability{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&Port{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&Asset{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&ProjectScope{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&AuditLog{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("id = ?", projectID).Delete(&Project{}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
 // ClaimDueMonitorTask atomically claims one due pending task.
 func (d *Database) ClaimDueMonitorTask() (*MonitorTask, error) {
 	var claimed *MonitorTask

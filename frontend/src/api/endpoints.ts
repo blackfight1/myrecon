@@ -150,7 +150,13 @@ export const endpoints = {
   getProjects: () => apiGet<ProjectRecord[]>("/projects"),
   createProject: (body: ProjectUpsertRequest) => apiPost<ProjectUpsertRequest, { status: string; id: string }>("/projects", body),
   updateProject: (body: ProjectUpsertRequest) => apiPut<ProjectUpsertRequest, { status: string; id: string }>("/projects", body),
-  deleteProject: (id: string) => apiDelete<{ status: string; id: string }>(`/projects?id=${encodeURIComponent(id)}`),
+  deleteProject: (id: string, purgeData?: boolean) =>
+    apiDelete<{ status: string; id: string; purgeData?: boolean }>(
+      withQuery("/projects", {
+        id,
+        purge_data: purgeData ? "1" : undefined
+      })
+    ),
 
   getDashboard: (projectId: string, rootDomain?: string) =>
     apiGet<DashboardResponse>(withQuery("/dashboard/summary", { project_id: projectId, root_domain: rootDomain })),

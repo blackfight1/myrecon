@@ -146,6 +146,16 @@ DINGTALK_SECRET=SECxxxxxxxxxxxxxxxx
 CORS_ALLOWED_ORIGINS=*
 # 指定多个来源：
 # CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+
+# Nuclei 降噪（可选）
+# 默认会排除 info/unknown 严重级别
+NUCLEI_EXCLUDE_SEVERITIES=info,unknown
+# 可额外排除标签（逗号分隔），例如：
+# NUCLEI_EXCLUDE_TAGS=tech,panel
+# 排除协议模板类型（默认 ssl,dns）
+# NUCLEI_EXCLUDE_PROTOCOL_TYPES=ssl,dns
+# 排除模板 ID（逗号分隔，设置为空可禁用默认排除）
+# NUCLEI_EXCLUDE_TEMPLATE_IDS=https-to-http-redirect,form-detection
 ```
 
 PowerShell 示例：
@@ -285,6 +295,7 @@ go run . -mode scan -scan-delete-domain example.com
 ## 关键 API（前端主要使用）
 
 - `GET /api/projects`
+- `DELETE /api/projects?id=<project_id>[&purge_data=1]`（`purge_data=1` 时彻底删除项目及其数据）
 - `GET /api/dashboard/summary`
 - `GET/POST /api/jobs`
 - `POST /api/jobs/cancel`

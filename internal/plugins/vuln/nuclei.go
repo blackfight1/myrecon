@@ -20,6 +20,8 @@ import (
 type NucleiPlugin struct {
 	excludeProtocolTypes []string
 	excludeTemplateIDs   []string
+	excludeSeverities    []string
+	excludeTags          []string
 }
 
 // NucleiResult is a subset of nuclei JSONL output fields.
@@ -44,14 +46,17 @@ func NewNucleiPlugin() *NucleiPlugin {
 	return &NucleiPlugin{
 		// Use -ept to exclude protocol/template types (ssl/dns),
 		// and -eid to exclude noisy template IDs.
-		excludeProtocolTypes: []string{"ssl", "dns"},
-		excludeTemplateIDs: []string{
+		excludeProtocolTypes: parseCSVEnv("NUCLEI_EXCLUDE_PROTOCOL_TYPES", []string{"ssl", "dns"}, true),
+		excludeTemplateIDs: parseCSVEnv("NUCLEI_EXCLUDE_TEMPLATE_IDS", []string{
 			"https-to-http-redirect",
 			"xss-deprecated-header",
 			"form-detection",
 			"missing-sri",
 			"cookies-without-httponly-secure",
-		},
+		}, false),
+		// Default to removing informational findings unless user overrides.
+		excludeSeverities: parseCSVEnv("NUCLEI_EXCLUDE_SEVERITIES", []string{"info", "unknown"}, true),
+		excludeTags:       parseCSVEnv("NUCLEI_EXCLUDE_TAGS", nil, true),
 	}
 }
 
@@ -94,16 +99,33 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 	}
 	defer os.Remove(resultPath)
 
-	cmd := exec.Command("nuclei",
+	args := []string{
 		"-l", tmpFile,
 		"-jsonl",
 		"-silent",
-		"-ept", strings.Join(n.excludeProtocolTypes, ","),
-		"-eid", strings.Join(n.excludeTemplateIDs, ","),
 		"-o", resultPath,
 		"-timeout", "10",
 		"-retries", "1",
+	}
+	if len(n.excludeProtocolTypes) > 0 {
+		args = append(args, "-ept", strings.Join(n.excludeProtocolTypes, ","))
+	}
+	if len(n.excludeTemplateIDs) > 0 {
+		args = append(args, "-eid", strings.Join(n.excludeTemplateIDs, ","))
+	}
+	if len(n.excludeSeverities) > 0 {
+		args = append(args, "-es", strings.Join(n.excludeSeverities, ","))
+	}
+	if len(n.excludeTags) > 0 {
+		args = append(args, "-etags", strings.Join(n.excludeTags, ","))
+	}
+	fmt.Printf("[Nuclei] filters ept=%s eid=%d es=%s etags=%s\n",
+		strings.Join(n.excludeProtocolTypes, ","),
+		len(n.excludeTemplateIDs),
+		strings.Join(n.excludeSeverities, ","),
+		strings.Join(n.excludeTags, ","),
 	)
+	cmd := exec.Command("nuclei", args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -331,4 +353,43 @@ func extractCVE(text string) string {
 	re := regexp.MustCompile(`(?i)CVE-\d{4}-\d{4,}`)
 	match := re.FindString(text)
 	return strings.ToUpper(match)
+}
+
+func parseCSVEnv(key string, defaultValues []string, toLower bool) []string {
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		return cloneAndNormalize(defaultValues, toLower)
+	}
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	return splitCSV(raw, toLower)
+}
+
+func splitCSV(raw string, toLower bool) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, 8)
+	for _, item := range strings.Split(raw, ",") {
+		v := strings.TrimSpace(item)
+		if v == "" {
+			continue
+		}
+		if toLower {
+			v = strings.ToLower(v)
+		}
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
+}
+
+func cloneAndNormalize(values []string, toLower bool) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	joined := strings.Join(values, ",")
+	return splitCSV(joined, toLower)
 }
