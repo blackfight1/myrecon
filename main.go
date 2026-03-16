@@ -1065,9 +1065,7 @@ func collectResultCounts(results []engine.Result) map[string]int {
 			counts["vulnerabilities"]++
 		case "screenshot":
 			if data, ok := result.Data.(map[string]interface{}); ok {
-				if count, ok := data["screenshot_count"].(int); ok {
-					counts["screenshots"] += count
-				}
+				counts["screenshots"] += getIntFromMap(data, "screenshot_count")
 			}
 		}
 	}

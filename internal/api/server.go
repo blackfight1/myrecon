@@ -2468,12 +2468,12 @@ func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.
 			"finished_at":  &now,
 		}).Error
 
-	log.Printf("[Scan] Job %s finished: status=%s duration=%ds subs=%d ports=%d vulns=%d dryRun=%v",
-		jobID, finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"], dryRun)
-	s.appendJobLogf(projectID, jobID, "info", "扫描结束: status=%s duration=%ds subs=%d ports=%d vulns=%d dryRun=%v",
-		finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"], dryRun)
+	log.Printf("[Scan] Job %s finished: status=%s duration=%ds subs=%d ports=%d vulns=%d screenshots=%d dryRun=%v",
+		jobID, finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"], counts["screenshots"], dryRun)
+	s.appendJobLogf(projectID, jobID, "info", "扫描结束: status=%s duration=%ds subs=%d ports=%d vulns=%d screenshots=%d dryRun=%v",
+		finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"], counts["screenshots"], dryRun)
 	s.writeAudit(projectID, "system", "finish_scan", "job", jobID, map[string]interface{}{
-		"status": finalStatus, "durationSec": duration, "subdomains": counts["subdomains"], "ports": counts["ports"], "vulns": counts["vulnerabilities"], "dryRun": dryRun,
+		"status": finalStatus, "durationSec": duration, "subdomains": counts["subdomains"], "ports": counts["ports"], "vulns": counts["vulnerabilities"], "screenshots": counts["screenshots"], "dryRun": dryRun,
 	}, nil)
 
 	if !notify || dryRun {
@@ -2686,7 +2686,13 @@ func containsAnyModule(modules []string, names ...string) bool {
 }
 
 func countResults(results []engine.Result) map[string]int {
-	counts := map[string]int{"subdomains": 0, "web_services": 0, "ports": 0, "vulnerabilities": 0}
+	counts := map[string]int{
+		"subdomains":      0,
+		"web_services":    0,
+		"ports":           0,
+		"vulnerabilities": 0,
+		"screenshots":     0,
+	}
 	for _, r := range results {
 		switch r.Type {
 		case "domain":
@@ -2697,6 +2703,10 @@ func countResults(results []engine.Result) map[string]int {
 			counts["ports"]++
 		case "vulnerability":
 			counts["vulnerabilities"]++
+		case "screenshot":
+			if data, ok := r.Data.(map[string]interface{}); ok {
+				counts["screenshots"] += mapInt(data, "screenshot_count")
+			}
 		}
 	}
 	return counts
