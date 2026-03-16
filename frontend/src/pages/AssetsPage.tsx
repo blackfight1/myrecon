@@ -34,7 +34,7 @@ export function AssetsPage() {
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const bulkDelete = useBulkDeleteAssets();
-  const [liveOnly, setLiveOnly] = useState(false);
+  const liveOnly = true;
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [sortBy, setSortBy] = useState<"created_at" | "updated_at" | "last_seen" | "domain" | "status_code">("last_seen");
@@ -42,7 +42,7 @@ export function AssetsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [projectId, search, liveOnly, pageSize, sortBy, sortDir]);
+  }, [projectId, search, pageSize, sortBy, sortDir]);
 
   const assetsQ = useAssetsPage(projectId, {
     q: search.trim() || undefined,
@@ -60,7 +60,7 @@ export function AssetsPage() {
 
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [page, search, liveOnly, sortBy, sortDir]);
+  }, [page, search, sortBy, sortDir]);
 
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
@@ -116,7 +116,7 @@ export function AssetsPage() {
             placeholder="搜索域名、URL、IP、标题、技术栈..."
           />
           <label className="form-check">
-            <input type="checkbox" checked={liveOnly} onChange={(e) => setLiveOnly(e.target.checked)} />
+            <input type="checkbox" checked={liveOnly} disabled />
             仅显示存活
           </label>
           <select className="form-select" value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)}>

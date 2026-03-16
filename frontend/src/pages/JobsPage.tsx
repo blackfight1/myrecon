@@ -1,14 +1,14 @@
 import { createColumnHelper, type SortingState } from "@tanstack/react-table";
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState, type ChangeEvent } from "react";
 import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useJobsPage, useCancelJob, useCreateJob } from "../hooks/queries";
+import { useCancelJob, useCreateJob, useDeleteJob, useJobsPage } from "../hooks/queries";
 import { errorMessage } from "../lib/errors";
 import { formatDate } from "../lib/format";
-import type { JobOverview } from "../types/models";
 import type { JobListQuery } from "../api/endpoints";
+import type { JobOverview } from "../types/models";
 
 const col = createColumnHelper<JobOverview>();
 
@@ -32,6 +32,7 @@ export function JobsPage() {
   const projectId = activeProject?.id;
   const rootDomains = activeProject?.rootDomains ?? [];
   const cancelJob = useCancelJob();
+  const deleteJob = useDeleteJob();
   const createJob = useCreateJob();
 
   const [page, setPage] = useState(1);
@@ -52,23 +53,22 @@ export function JobsPage() {
     q: search.trim() || undefined,
     page,
     pageSize,
-    sortBy: sortBy as JobListQuery["sortBy"],
-    sortDir: sortDir as JobListQuery["sortDir"]
+    sortBy,
+    sortDir
   };
 
   const { data, isLoading, isError, refetch } = useJobsPage(projectId, query);
-
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
 
   const handlePageChange = useCallback((p: number) => setPage(p + 1), []);
   const handlePageSizeChange = useCallback((s: number) => { setPageSize(s); setPage(1); }, []);
   const handleSortingChange = useCallback((s: SortingState) => { setSorting(s); setPage(1); }, []);
-  const handleStatusFilterChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => { setStatusFilter(e.target.value); setPage(1); }, []);
-  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => { setSearch(e.target.value); setPage(1); }, []);
+  const handleStatusFilterChange = useCallback((e: ChangeEvent<HTMLSelectElement>) => { setStatusFilter(e.target.value); setPage(1); }, []);
+  const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => { setSearch(e.target.value); setPage(1); }, []);
 
   const handleCancel = (jobId: string) => {
-    if (!confirm("确认取消此任务？")) return;
+    if (!confirm("确认取消该任务吗？")) return;
     cancelJob.mutate(
       { jobId },
       {
@@ -81,26 +81,53 @@ export function JobsPage() {
     );
   };
 
+  const handleDelete = (jobId: string) => {
+    if (!projectId) return;
+    if (!confirm("确认删除该任务历史记录？此操作不可恢复。")) return;
+    deleteJob.mutate(
+      { projectId, jobId },
+      {
+        onSuccess: () => {
+          setFeedback({ ok: true, text: `任务记录已删除：${jobId}` });
+          void refetch();
+        },
+        onError: (err) => setFeedback({ ok: false, text: `删除失败：${errorMessage(err)}` })
+      }
+    );
+  };
+
   const columns = [
     col.accessor("id", { header: "ID", cell: (c) => <span className="cell-mono">{c.getValue()}</span> }),
     col.accessor("rootDomain", { header: "根域名" }),
-    col.accessor("modules", { header: "模块", cell: (c) => (c.getValue() ?? []).join(", ") || <span className="cell-muted">—</span> }),
+    col.accessor("modules", { header: "模块", cell: (c) => (c.getValue() ?? []).join(", ") || <span className="cell-muted">-</span> }),
     col.accessor("status", { header: "状态", cell: (c) => <StatusBadge status={c.getValue()} /> }),
     col.accessor("startedAt", { header: "开始时间", cell: (c) => formatDate(c.getValue()) }),
     col.accessor("finishedAt", { header: "结束时间", cell: (c) => formatDate(c.getValue()) }),
-    col.accessor("durationSec", { header: "耗时", cell: (c) => { const v = c.getValue(); return v != null ? `${v}s` : <span className="cell-muted">—</span>; } }),
-    col.accessor("errorMessage", { header: "错误信息", cell: (c) => c.getValue() ? <span style={{ color: "var(--color-danger)", fontSize: 12 }}>{c.getValue()}</span> : <span className="cell-muted">—</span> }),
+    col.accessor("durationSec", { header: "耗时", cell: (c) => { const v = c.getValue(); return v != null ? `${v}s` : <span className="cell-muted">-</span>; } }),
+    col.accessor("errorMessage", { header: "错误信息", cell: (c) => c.getValue() ? <span style={{ color: "var(--color-danger)", fontSize: 12 }}>{c.getValue()}</span> : <span className="cell-muted">-</span> }),
     col.display({
       id: "actions",
       header: "操作",
       cell: (c) => {
         const j = c.row.original;
-        if (!isRunning(j.status)) return <span className="cell-muted">—</span>;
+        if (!projectId) return <span className="cell-muted">-</span>;
+        if (!isRunning(j.status)) {
+          return (
+            <button
+              className="btn btn-sm btn-danger"
+              onClick={() => handleDelete(j.id)}
+              disabled={deleteJob.isPending || cancelJob.isPending}
+              style={{ fontSize: 11, padding: "2px 8px" }}
+            >
+              删除
+            </button>
+          );
+        }
         return (
           <button
             className="btn btn-sm btn-danger"
             onClick={() => handleCancel(j.id)}
-            disabled={cancelJob.isPending}
+            disabled={cancelJob.isPending || deleteJob.isPending}
             style={{ fontSize: 11, padding: "2px 8px" }}
           >
             取消
@@ -148,9 +175,9 @@ export function JobsPage() {
     }
 
     if (failed.length === 0) {
-      setFeedback({ ok: true, text: `已提交 ${success.length} 个扫描任务` });
+      setFeedback({ ok: true, text: `已提交 ${success.length} 个扫描任务。` });
     } else {
-      setFeedback({ ok: false, text: `部分提交失败：${failed.join(" | ")}` });
+      setFeedback({ ok: false, text: `部分任务提交失败：${failed.join(" | ")}` });
     }
 
     await refetch();
@@ -160,10 +187,10 @@ export function JobsPage() {
     <section className="page">
       <div className="page-header">
         <h1 className="page-title">扫描任务</h1>
-        <p className="page-desc">流水线执行历史和快速启动控制，服务端分页与排序。</p>
+        <p className="page-desc">流水线执行历史和快速启动控制，支持服务端分页与排序。</p>
       </div>
 
-      <ProjectScopeBanner title="任务范围" hint="仅显示 root_domain 匹配项目范围的任务。" />
+      <ProjectScopeBanner title="任务范围" hint="仅展示当前项目范围内的任务记录。" />
 
       {feedback && (
         <div className="empty-state" style={{ color: feedback.ok ? "#16a34a" : "#dc2626", marginBottom: 12 }}>
@@ -179,15 +206,15 @@ export function JobsPage() {
         <div className="filter-bar">
           <span className="panel-meta">固定流程: subs -&gt; httpx -&gt; ports</span>
           <button className={`btn btn-sm${enableWitness ? " btn-primary" : ""}`} onClick={() => setEnableWitness((v) => !v)}>
-            Screenshot {enableWitness ? "ON" : "OFF"}
+            截图 {enableWitness ? "开启" : "关闭"}
           </button>
           <button className={`btn btn-sm${enableNuclei ? " btn-primary" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
-            Vulnerability {enableNuclei ? "ON" : "OFF"}
+            漏洞扫描 {enableNuclei ? "开启" : "关闭"}
           </button>
           <button className="btn btn-sm" onClick={() => { void launchScan(); }} disabled={rootDomains.length === 0 || createJob.isPending}>
             {createJob.isPending ? "提交中..." : "启动快速扫描"}
           </button>
-          <span className="filter-summary">执行: {previewModules.join(" -> ")}</span>
+          <span className="filter-summary">执行链路: {previewModules.join(" -> ")}</span>
         </div>
       </article>
 
@@ -204,7 +231,7 @@ export function JobsPage() {
             <option value="failed">失败</option>
             <option value="canceled">已取消</option>
           </select>
-          <input className="form-input" value={search} onChange={handleSearchChange} placeholder="搜索 ID/域名/状态/错误信息..." />
+          <input className="form-input" value={search} onChange={handleSearchChange} placeholder="搜索 ID/根域名/状态/错误信息..." />
           <button className="btn btn-sm" onClick={() => { void refetch(); }}>刷新</button>
           <span className="filter-summary">第 {page} 页，每页 {pageSize} 条</span>
         </div>

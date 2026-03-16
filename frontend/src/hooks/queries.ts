@@ -3,6 +3,7 @@ import {
   endpoints,
   type NewScanJobRequest,
   type CancelJobRequest,
+  type DeleteJobRequest,
   type CreateMonitorTargetRequest,
   type AssetListQuery,
   type JobListQuery,
@@ -62,6 +63,18 @@ export function useCancelJob() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: CancelJobRequest) => endpoints.cancelJob(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["jobs"] });
+      await qc.invalidateQueries({ queryKey: ["jobs-page"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+    }
+  });
+}
+
+export function useDeleteJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: DeleteJobRequest) => endpoints.deleteJob(body.projectId, body.jobId),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["jobs"] });
       await qc.invalidateQueries({ queryKey: ["jobs-page"] });

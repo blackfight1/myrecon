@@ -40,6 +40,11 @@ export interface CancelJobRequest {
   jobId: string;
 }
 
+export interface DeleteJobRequest {
+  projectId: string;
+  jobId: string;
+}
+
 export interface CreateMonitorTargetRequest {
   projectId: string;
   domain: string;
@@ -215,6 +220,10 @@ export const endpoints = {
     apiGet<RelationEdge[]>(withQuery("/graph/relations", { project_id: projectId, root_domain: rootDomain })),
   cancelJob: (body: CancelJobRequest) =>
     apiPost<CancelJobRequest, { status: string; jobId: string }>("/jobs/cancel", body),
+  deleteJob: (projectId: string, jobId: string) =>
+    apiDelete<{ status: string; jobId: string }>(
+      withQuery("/jobs/delete", { project_id: projectId, job_id: jobId })
+    ),
   getMonitorTargets: (projectId?: string) =>
     apiGet<MonitorTarget[]>(withQuery("/monitor/targets", { project_id: projectId })),
   createMonitorTarget: (body: CreateMonitorTargetRequest) =>

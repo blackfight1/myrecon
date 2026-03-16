@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -22,6 +23,11 @@ import (
 type Database struct {
 	DB *gorm.DB
 }
+
+var (
+	ErrJobActive         = errors.New("job is running or pending")
+	ErrMonitorTaskActive = errors.New("monitor task is running or pending")
+)
 
 // NewDatabase creates database connection.
 func NewDatabase(dsn string) (*Database, error) {
@@ -1095,6 +1101,60 @@ func (d *Database) CancelScanJob(jobID string) error {
 			"status":      "canceled",
 			"finished_at": now,
 		}).Error
+}
+
+// DeleteScanJobHistory removes one finished/canceled scan job and its stage/artifact rows.
+func (d *Database) DeleteScanJobHistory(projectID, jobID string) error {
+	projectID = strings.TrimSpace(projectID)
+	jobID = strings.TrimSpace(jobID)
+	if projectID == "" || jobID == "" {
+		return gorm.ErrRecordNotFound
+	}
+
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		var job ScanJob
+		if err := tx.Where("project_id = ? AND job_id = ?", projectID, jobID).First(&job).Error; err != nil {
+			return err
+		}
+		status := strings.ToLower(strings.TrimSpace(job.Status))
+		if status == "running" || status == "pending" {
+			return ErrJobActive
+		}
+
+		if err := tx.Where("project_id = ? AND job_id = ?", projectID, jobID).Delete(&ScanArtifact{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ? AND job_id = ?", projectID, jobID).Delete(&ScanStage{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ? AND job_id = ?", projectID, jobID).Delete(&ScanJob{}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+// DeleteMonitorTaskHistory removes one finished/canceled monitor task record.
+func (d *Database) DeleteMonitorTaskHistory(projectID string, taskID uint) error {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" || taskID == 0 {
+		return gorm.ErrRecordNotFound
+	}
+
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		var task MonitorTask
+		if err := tx.Where("project_id = ? AND id = ?", projectID, taskID).First(&task).Error; err != nil {
+			return err
+		}
+		status := strings.ToLower(strings.TrimSpace(task.Status))
+		if status == "running" || status == "pending" {
+			return ErrMonitorTaskActive
+		}
+		if err := tx.Where("project_id = ? AND id = ?", projectID, taskID).Delete(&MonitorTask{}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 // ClaimPendingScanJob atomically claims one pending scan job.

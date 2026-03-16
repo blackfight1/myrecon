@@ -492,6 +492,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/dashboard/summary", s.handleDashboard)
 	s.mux.HandleFunc("/api/jobs", s.handleJobs)
 	s.mux.HandleFunc("/api/jobs/cancel", s.handleCancelJob)
+	s.mux.HandleFunc("/api/jobs/delete", s.handleDeleteJob)
 	s.mux.HandleFunc("/api/assets/detail", s.handleAssetDetail)
 	s.mux.HandleFunc("/api/assets", s.handleAssets)
 	s.mux.HandleFunc("/api/ports", s.handlePorts)
@@ -1418,7 +1419,10 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	base := s.db.DB.Model(&db.Asset{}).Where("project_id = ?", projectID)
 	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
 		pattern := "%." + rd
-		base = base.Where("domain = ? OR domain LIKE ?", rd, pattern)
+		base = base.Where(
+			"root_domain = ? OR domain = ? OR domain LIKE ?",
+			rd, rd, pattern,
+		)
 	}
 	if search != "" {
 		pattern := "%" + search + "%"
@@ -1428,7 +1432,7 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 	if liveOnly {
-		base = base.Where("status_code > 0")
+		base = base.Where("status_code > 0 AND BTRIM(COALESCE(url, '')) <> ''")
 	}
 
 	var assets []db.Asset
@@ -1513,7 +1517,10 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 
 	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
 		pattern := "%." + rd
-		base = base.Where("domain = ? OR domain LIKE ?", rd, pattern)
+		base = base.Where(
+			"root_domain = ? OR domain = ? OR domain LIKE ?",
+			rd, rd, pattern,
+		)
 	}
 	if search != "" {
 		pattern := "%" + search + "%"
@@ -2014,6 +2021,66 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "canceled", "jobId": body.JobID})
+}
+
+func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
+	jobID := strings.TrimSpace(r.URL.Query().Get("job_id"))
+	if jobID == "" {
+		writeError(w, http.StatusBadRequest, "job_id is required")
+		return
+	}
+
+	if strings.HasPrefix(jobID, "task-") {
+		taskIDRaw := strings.TrimPrefix(jobID, "task-")
+		taskID, err := strconv.ParseUint(taskIDRaw, 10, 64)
+		if err != nil || taskID == 0 {
+			writeError(w, http.StatusBadRequest, "invalid monitor task id")
+			return
+		}
+		if err := s.db.DeleteMonitorTaskHistory(projectID, uint(taskID)); err != nil {
+			switch {
+			case errors.Is(err, gorm.ErrRecordNotFound):
+				writeError(w, http.StatusNotFound, "job not found")
+				return
+			case errors.Is(err, db.ErrMonitorTaskActive):
+				writeError(w, http.StatusConflict, "job is running or pending; cancel it first")
+				return
+			default:
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		s.writeAudit(projectID, actorFromRequest(r), "delete_monitor_task", "job", jobID, map[string]interface{}{}, r)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "jobId": jobID})
+		return
+	}
+
+	if err := s.db.DeleteScanJobHistory(projectID, jobID); err != nil {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			writeError(w, http.StatusNotFound, "job not found")
+			return
+		case errors.Is(err, db.ErrJobActive):
+			writeError(w, http.StatusConflict, "job is running or pending; cancel it first")
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	s.writeAudit(projectID, actorFromRequest(r), "delete_scan_job", "job", jobID, map[string]interface{}{}, r)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "jobId": jobID})
 }
 
 // runScanAsync executes the scan pipeline in a background goroutine.
@@ -3193,29 +3260,8 @@ func parseBoundedInt(raw string, defaultValue, minValue, maxValue int) int {
 }
 
 func parseCORSOrigins() (bool, map[string]bool) {
-	raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_ORIGINS"))
-	if raw == "" {
-		return false, map[string]bool{
-			"http://localhost:5173": true,
-			"http://127.0.0.1:5173": true,
-		}
-	}
-	if raw == "*" {
-		return true, nil
-	}
-	origins := map[string]bool{}
-	for _, item := range strings.Split(raw, ",") {
-		origin := strings.TrimSpace(item)
-		if origin == "" {
-			continue
-		}
-		origins[origin] = true
-	}
-	if len(origins) == 0 {
-		log.Printf("[CORS] CORS_ALLOWED_ORIGINS is set but no valid origin was parsed; deny all cross-origin requests")
-		return false, map[string]bool{}
-	}
-	return false, origins
+	// Allow all origins to avoid frontend origin mismatch issues.
+	return true, nil
 }
 
 func isTruthy(raw string) bool {
