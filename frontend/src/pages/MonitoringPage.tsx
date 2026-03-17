@@ -90,7 +90,7 @@ export function MonitoringPage() {
   const openEvents = useMemo(() => events.filter((e: MonitorEvent) => e.status === "open").length, [events]);
   const recentChanges = useMemo(() => {
     const cutoff = Date.now() - 86400000;
-    return changes.filter((c: MonitorChange) => new Date(c.createdAt).getTime() > cutoff).length;
+    return changes.filter((c: MonitorChange) => (c.createdAt ? new Date(c.createdAt).getTime() : 0) > cutoff).length;
   }, [changes]);
   const activeTargets = useMemo(() => targets.filter((t: MonitorTarget) => t.enabled).length, [targets]);
   const lastRunStatus = useMemo(() => {
@@ -213,13 +213,14 @@ export function MonitoringPage() {
         {targets.length > 0 ? (
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th>根域名</th><th>状态</th><th>基线</th><th>上次运行</th><th>操作</th></tr></thead>
+              <thead><tr><th>根域名</th><th>状态</th><th>基线</th><th>基线时间</th><th>上次运行</th><th>操作</th></tr></thead>
               <tbody>
                 {targets.map((t: MonitorTarget) => (
                   <tr key={t.id}>
                     <td>{t.rootDomain}</td>
                     <td>{t.enabled ? <span className="badge badge-success">开启</span> : <span className="badge badge-danger">关闭</span>}</td>
-                    <td>{t.baselineDone ? "✓" : "—"}</td>
+                    <td>{t.baselineDone ? `v${Math.max(1, t.baselineVersion ?? 0)}` : "—"}</td>
+                    <td className="cell-muted">{formatDate(t.baselineAt)}</td>
                     <td className="cell-muted">{formatDate(t.lastRunAt)}</td>
                     <td>
                       <div style={{ display: "flex", gap: 6 }}>
@@ -269,8 +270,8 @@ export function MonitoringPage() {
                                   <td><span className={changeTypeBadge(c.changeType)}>{changeTypeLabel(c.changeType)}</span></td>
                                   <td className="cell-mono">{c.domain || "—"}</td>
                                   <td className="cell-mono">{c.ip || "—"}</td>
-                                  <td>{c.port > 0 ? c.port : "—"}</td>
-                                  <td>{c.statusCode > 0 ? c.statusCode : "—"}</td>
+                                  <td>{(c.port ?? 0) > 0 ? c.port : "—"}</td>
+                                  <td>{(c.statusCode ?? 0) > 0 ? c.statusCode : "—"}</td>
                                   <td>{c.title || "—"}</td>
                                   <td className="cell-muted">{formatDate(c.createdAt)}</td>
                                 </tr>
@@ -331,7 +332,7 @@ export function MonitoringPage() {
                     <td><span className={changeTypeBadge(ev.eventType)}>{changeTypeLabel(ev.eventType)}</span></td>
                     <td className="cell-mono">{ev.domain || "—"}</td>
                     <td className="cell-mono">{ev.ip || "—"}</td>
-                    <td>{ev.port > 0 ? ev.port : "—"}</td>
+                    <td>{(ev.port ?? 0) > 0 ? ev.port : "—"}</td>
                     <td>{ev.service || "—"}</td>
                     <td>{ev.title || "—"}</td>
                     <td className="cell-muted">{formatDate(ev.firstSeenAt)}</td>
@@ -366,11 +367,11 @@ export function MonitoringPage() {
             <div><strong>域名：</strong>{drawerEvent.domain || "—"}</div>
             <div><strong>URL：</strong>{drawerEvent.url || "—"}</div>
             <div><strong>IP：</strong>{drawerEvent.ip || "—"}</div>
-            <div><strong>端口：</strong>{drawerEvent.port > 0 ? drawerEvent.port : "—"}</div>
+            <div><strong>端口：</strong>{(drawerEvent.port ?? 0) > 0 ? drawerEvent.port : "—"}</div>
             <div><strong>协议：</strong>{drawerEvent.protocol || "—"}</div>
             <div><strong>服务：</strong>{drawerEvent.service || "—"} {drawerEvent.version || ""}</div>
             <div><strong>标题：</strong>{drawerEvent.title || "—"}</div>
-            <div><strong>HTTP：</strong>{drawerEvent.statusCode > 0 ? drawerEvent.statusCode : "—"}</div>
+            <div><strong>HTTP：</strong>{(drawerEvent.statusCode ?? 0) > 0 ? drawerEvent.statusCode : "—"}</div>
             <div><strong>首次发现：</strong>{formatDate(drawerEvent.firstSeenAt)}</div>
             <div><strong>末次发现：</strong>{formatDate(drawerEvent.lastSeenAt)}</div>
             <div><strong>末次变更：</strong>{formatDate(drawerEvent.lastChangedAt)}</div>

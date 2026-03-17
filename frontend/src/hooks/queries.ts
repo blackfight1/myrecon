@@ -106,7 +106,7 @@ export function useAssets(projectId?: string, rootDomain?: string) {
 
 export function useAssetsPage(projectId: string | undefined, q: AssetListQuery) {
   return useQuery({
-    queryKey: ["assets-page", projectId ?? "", q.rootDomain ?? "", q.q ?? "", q.liveOnly ? "1" : "0", String(q.page ?? 1), String(q.pageSize ?? 50), q.sortBy ?? "", q.sortDir ?? ""],
+    queryKey: ["assets-page", projectId ?? "", q.rootDomain ?? "", q.q ?? "", q.liveOnly ? "1" : "0", q.monitorNew ?? "all", String(q.page ?? 1), String(q.pageSize ?? 50), q.sortBy ?? "", q.sortDir ?? ""],
     queryFn: () => endpoints.getAssetsPage(requiredProjectId(projectId), q),
     enabled: !!projectId,
     refetchInterval: 20000

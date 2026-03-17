@@ -204,7 +204,7 @@ func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool
 		)
 	}
 	if !dryRun {
-		_ = database.UpdateMonitorTarget(projectID, rootDomain, true, time.Now())
+		_ = database.UpdateMonitorTargetAfterRun(projectID, rootDomain, time.Now(), baselineMode)
 	}
 
 	if err := database.CompleteMonitorTaskSuccess(task.ID); err != nil {

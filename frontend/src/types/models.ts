@@ -139,6 +139,8 @@ export interface MonitorTarget {
   rootDomain: string;
   enabled: boolean;
   baselineDone: boolean;
+  baselineVersion?: number;
+  baselineAt?: string;
   lastRunAt?: string;
   createdAt?: string;
   updatedAt?: string;

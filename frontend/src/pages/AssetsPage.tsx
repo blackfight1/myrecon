@@ -37,16 +37,18 @@ export function AssetsPage() {
   const liveOnly = true;
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
+  const [monitorNew, setMonitorNew] = useState<"all" | "open" | "recent24h">("all");
   const [sortBy, setSortBy] = useState<"created_at" | "updated_at" | "last_seen" | "domain" | "status_code">("last_seen");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     setPage(1);
-  }, [projectId, search, pageSize, sortBy, sortDir]);
+  }, [projectId, search, pageSize, monitorNew, sortBy, sortDir]);
 
   const assetsQ = useAssetsPage(projectId, {
     q: search.trim() || undefined,
     liveOnly,
+    monitorNew,
     page,
     pageSize,
     sortBy,
@@ -60,7 +62,7 @@ export function AssetsPage() {
 
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [page, search, sortBy, sortDir]);
+  }, [page, search, monitorNew, sortBy, sortDir]);
 
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
@@ -125,6 +127,11 @@ export function AssetsPage() {
             <option value="updated_at">按更新时间</option>
             <option value="domain">按域名</option>
             <option value="status_code">按状态码</option>
+          </select>
+          <select className="form-select" value={monitorNew} onChange={(e) => setMonitorNew(e.target.value as typeof monitorNew)}>
+            <option value="all">全部资产</option>
+            <option value="open">监控新增（待处理）</option>
+            <option value="recent24h">监控新增（24h）</option>
           </select>
           <select className="form-select" value={sortDir} onChange={(e) => setSortDir(e.target.value as typeof sortDir)}>
             <option value="desc">降序</option>

@@ -95,6 +95,7 @@ export interface AssetListQuery {
   rootDomain?: string;
   q?: string;
   liveOnly?: boolean;
+  monitorNew?: "all" | "open" | "recent24h";
   page?: number;
   pageSize?: number;
   sortBy?: "created_at" | "updated_at" | "last_seen" | "domain" | "status_code";
@@ -195,6 +196,7 @@ export const endpoints = {
         root_domain: q.rootDomain,
         q: q.q,
         live_only: q.liveOnly ? "1" : undefined,
+        monitor_new: q.monitorNew && q.monitorNew !== "all" ? q.monitorNew : undefined,
         page: q.page ? String(q.page) : undefined,
         page_size: q.pageSize ? String(q.pageSize) : undefined,
         sort_by: q.sortBy,

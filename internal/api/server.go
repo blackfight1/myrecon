@@ -227,14 +227,16 @@ type vulnerabilityResponse struct {
 }
 
 type monitorTargetResponse struct {
-	ID           int    `json:"id"`
-	ProjectID    string `json:"projectId,omitempty"`
-	RootDomain   string `json:"rootDomain"`
-	Enabled      bool   `json:"enabled"`
-	BaselineDone bool   `json:"baselineDone"`
-	LastRunAt    string `json:"lastRunAt,omitempty"`
-	CreatedAt    string `json:"createdAt,omitempty"`
-	UpdatedAt    string `json:"updatedAt,omitempty"`
+	ID              int    `json:"id"`
+	ProjectID       string `json:"projectId,omitempty"`
+	RootDomain      string `json:"rootDomain"`
+	Enabled         bool   `json:"enabled"`
+	BaselineDone    bool   `json:"baselineDone"`
+	BaselineVersion int    `json:"baselineVersion"`
+	BaselineAt      string `json:"baselineAt,omitempty"`
+	LastRunAt       string `json:"lastRunAt,omitempty"`
+	CreatedAt       string `json:"createdAt,omitempty"`
+	UpdatedAt       string `json:"updatedAt,omitempty"`
 }
 
 type monitorRunResponse struct {
@@ -964,6 +966,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 		_ = s.db.HandleMonitorTaskFailure(task, err.Error())
 		return
 	}
+	establishBaseline := !target.BaselineDone
 
 	// Collect subdomains
 	s.appendJobLog(task.ProjectID, jobID, "info", "阶段开始: 子域收集")
@@ -1003,9 +1006,9 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 	status := "success"
 	_ = s.db.CompleteMonitorRun(run.ID, status, "", newLive, webChanged, portOpened, portClosed, svcChanged)
 
-	// Update target baseline
+	// Update target last run info and establish baseline version on first successful run.
 	now := time.Now()
-	_ = s.db.UpdateMonitorTarget(task.ProjectID, rootDomain, true, now)
+	_ = s.db.UpdateMonitorTargetAfterRun(task.ProjectID, rootDomain, now, establishBaseline)
 
 	// Complete task and schedule next
 	_ = s.db.CompleteMonitorTaskSuccess(task.ID)
@@ -1493,6 +1496,7 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	paged := isTruthy(r.URL.Query().Get("paged"))
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	liveOnly := isTruthy(r.URL.Query().Get("live_only"))
+	monitorNew := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("monitor_new")))
 
 	base := s.db.DB.Model(&db.Asset{}).Where("project_id = ?", projectID)
 	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
@@ -1511,6 +1515,26 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	}
 	if liveOnly {
 		base = base.Where("status_code > 0 AND BTRIM(COALESCE(url, '')) <> ''")
+	}
+	switch monitorNew {
+	case "", "all":
+		// no-op
+	case "open":
+		sub := s.db.DB.Model(&db.MonitorEvent{}).
+			Select("1").
+			Where("project_id = ? AND event_type = ? AND status = ? AND domain = assets.domain",
+				projectID, "new_live", monitorEventStatusOpen)
+		base = base.Where("EXISTS (?)", sub)
+	case "recent24h":
+		since := time.Now().Add(-24 * time.Hour)
+		sub := s.db.DB.Model(&db.AssetChange{}).
+			Select("1").
+			Where("project_id = ? AND change_type IN ? AND created_at >= ? AND domain = assets.domain",
+				projectID, []string{"new_live", "new_live_subdomain"}, since)
+		base = base.Where("EXISTS (?)", sub)
+	default:
+		writeError(w, http.StatusBadRequest, "invalid monitor_new (use open|recent24h)")
+		return
 	}
 
 	var assets []db.Asset
@@ -2746,7 +2770,7 @@ func (s *Server) handleListMonitorTargets(w http.ResponseWriter, r *http.Request
 	for _, t := range targets {
 		resp = append(resp, monitorTargetResponse{
 			ID: int(t.ID), ProjectID: t.ProjectID, RootDomain: t.RootDomain, Enabled: t.Enabled,
-			BaselineDone: t.BaselineDone, LastRunAt: timePtrToISO(t.LastRunAt),
+			BaselineDone: t.BaselineDone, BaselineVersion: t.BaselineVersion, BaselineAt: timePtrToISO(t.BaselineAt), LastRunAt: timePtrToISO(t.LastRunAt),
 			CreatedAt: timeToISO(t.CreatedAt), UpdatedAt: timeToISO(t.UpdatedAt),
 		})
 	}

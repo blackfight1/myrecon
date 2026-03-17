@@ -597,10 +597,24 @@ func (d *Database) GetOrCreateMonitorTarget(projectID, rootDomain string) (*Moni
 }
 
 // UpdateMonitorTarget updates baseline and last run time.
+// Deprecated: prefer UpdateMonitorTargetAfterRun for versioned baselines.
 func (d *Database) UpdateMonitorTarget(projectID, rootDomain string, baselineDone bool, lastRunAt time.Time) error {
 	updates := map[string]interface{}{
 		"baseline_done": baselineDone,
 		"last_run_at":   lastRunAt,
+	}
+	return d.DB.Model(&MonitorTarget{}).Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Updates(updates).Error
+}
+
+// UpdateMonitorTargetAfterRun marks run completion and optionally establishes a new baseline version.
+func (d *Database) UpdateMonitorTargetAfterRun(projectID, rootDomain string, lastRunAt time.Time, establishBaseline bool) error {
+	updates := map[string]interface{}{
+		"baseline_done": true,
+		"last_run_at":   lastRunAt,
+	}
+	if establishBaseline {
+		updates["baseline_at"] = lastRunAt
+		updates["baseline_version"] = gorm.Expr("COALESCE(baseline_version, 0) + 1")
 	}
 	return d.DB.Model(&MonitorTarget{}).Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Updates(updates).Error
 }
