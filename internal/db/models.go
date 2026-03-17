@@ -66,6 +66,34 @@ func (Asset) TableName() string {
 	return "assets"
 }
 
+// AssetCandidate stores discovered-but-not-yet-verified asset candidates.
+// A candidate becomes verified after at least one successful active signal
+// (e.g. httpx live URL or open port).
+type AssetCandidate struct {
+	ID                 uint           `gorm:"primarykey" json:"id"`
+	ProjectID          string         `gorm:"index:idx_asset_candidates_project_domain,unique;not null;default:'default'" json:"project_id"`
+	RootDomain         string         `gorm:"index" json:"root_domain"`
+	Domain             string         `gorm:"index:idx_asset_candidates_project_domain,unique;not null" json:"domain"`
+	LastIP             string         `json:"last_ip"`
+	LastURL            string         `gorm:"type:text" json:"last_url"`
+	LastStatusCode     int            `json:"last_status_code"`
+	LastTitle          string         `gorm:"type:text" json:"last_title"`
+	VerifyStatus       string         `gorm:"index;not null;default:pending" json:"verify_status"` // pending / verified
+	VerificationMethod string         `json:"verification_method"`
+	VerifiedAt         *time.Time     `json:"verified_at"`
+	SourceJobID        string         `gorm:"index" json:"source_job_id"`
+	SourceModule       string         `gorm:"index" json:"source_module"`
+	FirstSeenAt        time.Time      `json:"first_seen_at"`
+	LastSeen           time.Time      `json:"last_seen"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (AssetCandidate) TableName() string {
+	return "asset_candidates"
+}
+
 // Port port model.
 type Port struct {
 	ID           uint           `gorm:"primarykey" json:"id"`
@@ -168,6 +196,8 @@ type AssetChange struct {
 	RootDomain   string         `gorm:"index;not null" json:"root_domain"`
 	ChangeType   string         `gorm:"index;not null" json:"change_type"`
 	Domain       string         `gorm:"index;not null" json:"domain"`
+	IP           string         `gorm:"index" json:"ip"`
+	Port         int            `gorm:"index" json:"port"`
 	URL          string         `gorm:"type:text" json:"url"`
 	StatusCode   int            `json:"status_code"`
 	Title        string         `gorm:"type:text" json:"title"`

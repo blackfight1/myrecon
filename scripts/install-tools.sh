@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # Hunter/MyRecon external tools installer.
 # Installs:
-# subfinder, findomain, bbot, shosubgo, dnsx, httpx, naabu, nmap, gowitness, nuclei
+# subfinder, chaos, findomain, bbot, shosubgo, dnsx, httpx, naabu, nmap, gowitness, nuclei
 #
 # Usage:
 #   bash scripts/install-tools.sh
@@ -120,7 +120,7 @@ install_nmap() {
 verify_tools() {
   local missing=0
   local tools=(
-    subfinder findomain bbot shosubgo dnsx httpx naabu nmap gowitness nuclei
+    subfinder chaos findomain bbot shosubgo dnsx httpx naabu nmap gowitness nuclei
   )
   echo
   log "Tool check:"
@@ -145,6 +145,7 @@ main() {
   ensure_path
 
   install_go_tool "subfinder" "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
+  install_go_tool "chaos" "github.com/projectdiscovery/chaos-client/cmd/chaos@latest"
   install_findomain
   install_bbot
   install_go_tool "shosubgo" "github.com/incogbyte/shosubgo@latest"
@@ -165,4 +166,3 @@ main() {
 }
 
 main "$@"
-

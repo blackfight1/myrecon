@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,7 +41,7 @@ func NewDatabase(dsn string) (*Database, error) {
 
 	if err := database.AutoMigrate(
 		&Project{}, &ProjectScope{},
-		&Asset{}, &Port{}, &Vulnerability{}, &VulnEvent{},
+		&Asset{}, &AssetCandidate{}, &Port{}, &Vulnerability{}, &VulnEvent{},
 		&MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorEvent{}, &MonitorTarget{}, &MonitorTask{},
 		&ScanJob{}, &ScanStage{}, &ScanArtifact{}, &JobLog{}, &AssetEdge{}, &AuditLog{},
 	); err != nil {
@@ -57,6 +58,7 @@ func ensureProjectScopedSchema(database *gorm.DB) error {
 	return database.Transaction(func(tx *gorm.DB) error {
 		backfillStatements := []string{
 			"UPDATE assets SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE asset_candidates SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE ports SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE vulnerabilities SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE monitor_targets SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
@@ -97,6 +99,7 @@ func ensureProjectScopedSchema(database *gorm.DB) error {
 
 		createStatements := []string{
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_project_domain ON assets (project_id, domain)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_candidates_project_domain ON asset_candidates (project_id, domain)",
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_project_fingerprint ON vulnerabilities (project_id, fingerprint)",
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_target_project_root ON monitor_targets (project_id, root_domain)",
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_event_project_key ON monitor_events (project_id, event_key)",
@@ -192,6 +195,133 @@ func (d *Database) SaveOrUpdateAsset(data map[string]interface{}) error {
 		return fmt.Errorf("database query error: %v", result.Error)
 	}
 
+	return nil
+}
+
+// SaveOrUpdateAssetCandidate saves or updates candidate pool entries.
+func (d *Database) SaveOrUpdateAssetCandidate(data map[string]interface{}) error {
+	domain := strings.ToLower(strings.TrimSpace(getStringValue(data, "domain")))
+	if domain == "" {
+		return fmt.Errorf("domain is required")
+	}
+
+	projectID := strings.TrimSpace(getStringValue(data, "project_id"))
+	if projectID == "" {
+		projectID = "default"
+	}
+	rootDomain := strings.TrimSpace(getStringValue(data, "root_domain"))
+	sourceJobID := strings.TrimSpace(getStringValue(data, "source_job_id"))
+	sourceModule := strings.TrimSpace(getStringValue(data, "source_module"))
+
+	lastIP := strings.TrimSpace(getStringValue(data, "last_ip"))
+	if lastIP == "" {
+		lastIP = strings.TrimSpace(getStringValue(data, "ip"))
+	}
+	lastURL := strings.TrimSpace(getStringValue(data, "last_url"))
+	if lastURL == "" {
+		lastURL = strings.TrimSpace(getStringValue(data, "url"))
+	}
+	lastStatusCode := getIntValue(data, "last_status_code")
+	if lastStatusCode <= 0 {
+		lastStatusCode = getIntValue(data, "status_code")
+	}
+	lastTitle := strings.TrimSpace(getStringValue(data, "last_title"))
+	if lastTitle == "" {
+		lastTitle = strings.TrimSpace(getStringValue(data, "title"))
+	}
+
+	verifyStatus := strings.ToLower(strings.TrimSpace(getStringValue(data, "verify_status")))
+	verificationMethod := strings.TrimSpace(getStringValue(data, "verification_method"))
+	if verifyStatus == "" {
+		if v, ok := data["verified"]; ok {
+			switch vv := v.(type) {
+			case bool:
+				if vv {
+					verifyStatus = "verified"
+				}
+			case string:
+				switch strings.ToLower(strings.TrimSpace(vv)) {
+				case "1", "true", "yes", "on", "verified":
+					verifyStatus = "verified"
+				}
+			}
+		}
+	}
+	if verifyStatus != "verified" {
+		verifyStatus = "pending"
+	}
+
+	now := time.Now()
+	var existing AssetCandidate
+	result := d.DB.Where("project_id = ? AND domain = ?", projectID, domain).First(&existing)
+
+	if result.Error == gorm.ErrRecordNotFound {
+		candidate := AssetCandidate{
+			ProjectID:          projectID,
+			RootDomain:         rootDomain,
+			Domain:             domain,
+			LastIP:             lastIP,
+			LastURL:            lastURL,
+			LastStatusCode:     lastStatusCode,
+			LastTitle:          lastTitle,
+			VerifyStatus:       verifyStatus,
+			VerificationMethod: verificationMethod,
+			SourceJobID:        sourceJobID,
+			SourceModule:       sourceModule,
+			FirstSeenAt:        now,
+			LastSeen:           now,
+		}
+		if verifyStatus == "verified" {
+			candidate.VerifiedAt = &now
+		}
+		if err := d.DB.Create(&candidate).Error; err != nil {
+			return fmt.Errorf("failed to create asset candidate: %v", err)
+		}
+		return nil
+	}
+	if result.Error != nil {
+		return fmt.Errorf("database query error: %v", result.Error)
+	}
+
+	updates := map[string]interface{}{
+		"last_seen": now,
+	}
+	if rootDomain != "" {
+		updates["root_domain"] = rootDomain
+	}
+	if sourceJobID != "" {
+		updates["source_job_id"] = sourceJobID
+	}
+	if sourceModule != "" {
+		updates["source_module"] = sourceModule
+	}
+	if lastIP != "" {
+		updates["last_ip"] = lastIP
+	}
+	if lastURL != "" {
+		updates["last_url"] = lastURL
+	}
+	if lastStatusCode > 0 {
+		updates["last_status_code"] = lastStatusCode
+	}
+	if lastTitle != "" {
+		updates["last_title"] = lastTitle
+	}
+
+	// Do not downgrade verified records back to pending.
+	if verifyStatus == "verified" {
+		updates["verify_status"] = "verified"
+		if verificationMethod != "" {
+			updates["verification_method"] = verificationMethod
+		}
+		if existing.VerifiedAt == nil {
+			updates["verified_at"] = now
+		}
+	}
+
+	if err := d.DB.Model(&existing).Updates(updates).Error; err != nil {
+		return fmt.Errorf("failed to update asset candidate: %v", err)
+	}
 	return nil
 }
 
@@ -837,6 +967,9 @@ func (d *Database) DeleteProjectAndData(projectID string) error {
 		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&Port{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&AssetCandidate{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&Asset{}).Error; err != nil {
 			return err
 		}
@@ -1072,17 +1205,40 @@ func (d *Database) GetPreviousPortCloseState(projectID, rootDomain string, curre
 	return pc.ChangeType, nil
 }
 
-// ListAssetDomains returns distinct domains from assets table.
+// ListAssetDomains returns distinct domains from both verified and candidate pools.
 func (d *Database) ListAssetDomains(projectID string) ([]string, error) {
-	var domains []string
+	var verified []string
 	query := d.DB.Model(&Asset{}).Distinct("domain").Where("domain <> ''")
 	if strings.TrimSpace(projectID) != "" {
 		query = query.Where("project_id = ?", strings.TrimSpace(projectID))
 	}
-	if err := query.Order("domain asc").Pluck("domain", &domains).Error; err != nil {
+	if err := query.Order("domain asc").Pluck("domain", &verified).Error; err != nil {
 		return nil, err
 	}
-	return domains, nil
+	var candidates []string
+	cq := d.DB.Model(&AssetCandidate{}).Distinct("domain").Where("domain <> ''")
+	if strings.TrimSpace(projectID) != "" {
+		cq = cq.Where("project_id = ?", strings.TrimSpace(projectID))
+	}
+	if err := cq.Order("domain asc").Pluck("domain", &candidates).Error; err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(verified)+len(candidates))
+	out := make([]string, 0, len(verified)+len(candidates))
+	appendUnique := func(items []string) {
+		for _, d := range items {
+			d = strings.TrimSpace(d)
+			if d == "" || seen[d] {
+				continue
+			}
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	appendUnique(verified)
+	appendUnique(candidates)
+	sort.Strings(out)
+	return out, nil
 }
 
 // DeleteAllDataByRootDomain removes all related scan/monitor data for a root domain.
@@ -1109,6 +1265,10 @@ func (d *Database) DeleteAllDataByRootDomain(projectID, rootDomain string) error
 		}
 		if err := tx.Where("project_id = ? AND (domain = ? OR domain LIKE ?)", projectID, rootDomain, pattern).
 			Delete(&Asset{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ? AND (domain = ? OR domain LIKE ?)", projectID, rootDomain, pattern).
+			Delete(&AssetCandidate{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&PortChange{}).Error; err != nil {

@@ -33,19 +33,21 @@ export function AssetsPage() {
 
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const bulkDelete = useBulkDeleteAssets();
-  const liveOnly = true;
+  const [pool, setPool] = useState<"verified" | "candidate">("verified");
+  const liveOnly = pool === "verified";
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [monitorNew, setMonitorNew] = useState<"all" | "open" | "recent24h">("all");
   const [sortBy, setSortBy] = useState<"created_at" | "updated_at" | "last_seen" | "domain" | "status_code">("last_seen");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const bulkDelete = useBulkDeleteAssets();
 
   useEffect(() => {
     setPage(1);
-  }, [projectId, search, pageSize, monitorNew, sortBy, sortDir]);
+  }, [projectId, pool, search, pageSize, monitorNew, sortBy, sortDir]);
 
   const assetsQ = useAssetsPage(projectId, {
+    pool,
     q: search.trim() || undefined,
     liveOnly,
     monitorNew,
@@ -56,13 +58,17 @@ export function AssetsPage() {
   });
 
   const items = assetsQ.data?.items ?? [];
-  const liveCount = useMemo(() => items.filter((a) => a.statusCode != null && a.statusCode > 0).length, [items]);
+  const liveCount = useMemo(() => items.filter((a) => (a.statusCode ?? 0) > 0).length, [items]);
   const total = assetsQ.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [page, search, monitorNew, sortBy, sortDir]);
+  }, [page, pool, search, monitorNew, sortBy, sortDir]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
@@ -92,15 +98,11 @@ export function AssetsPage() {
     }
   };
 
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
-
   return (
     <section className="page">
       <div className="page-header">
         <h1 className="page-title">资产管理</h1>
-        <p className="page-desc">项目范围内的 Web 资产清单，包含响应状态和技术栈详情。</p>
+        <p className="page-desc">项目范围内的资产清单，支持候选/已验证双资产池视图。</p>
       </div>
 
       <ProjectScopeBanner title="资产范围" hint="服务端按项目范围过滤，支持分页与排序。" />
@@ -111,11 +113,15 @@ export function AssetsPage() {
           <span className="panel-meta">当前页存活: {liveCount} / 当前页: {items.length} / 总计: {total}</span>
         </header>
         <div className="filter-bar">
+          <select className="form-select" value={pool} onChange={(e) => setPool(e.target.value as typeof pool)}>
+            <option value="verified">已验证资产池</option>
+            <option value="candidate">候选资产池</option>
+          </select>
           <input
             className="form-input"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜索域名、URL、IP、标题、技术栈..."
+            placeholder="搜索域名、URL、IP、标题..."
           />
           <label className="form-check">
             <input type="checkbox" checked={liveOnly} disabled />
@@ -162,9 +168,11 @@ export function AssetsPage() {
             <button className="btn btn-sm" onClick={() => setPage(totalPages)} disabled={page >= totalPages}>末页 »</button>
           </div>
         </header>
+
         {!projectId && <div className="empty-state">未选择项目，无法加载资产数据。</div>}
         {assetsQ.isLoading && <div className="empty-state">正在加载资产数据...</div>}
         {assetsQ.error && <div className="empty-state">加载资产失败。</div>}
+
         {!assetsQ.isLoading && !assetsQ.error && projectId && (
           <div className="table-wrap">
             <table className="data-table">
@@ -173,6 +181,7 @@ export function AssetsPage() {
                   <th style={{ width: 36 }}>
                     <input type="checkbox" checked={items.length > 0 && selectedIds.size === items.length} onChange={toggleAll} />
                   </th>
+                  <th>池状态</th>
                   <th>域名</th>
                   <th>URL</th>
                   <th>IP</th>
@@ -186,17 +195,34 @@ export function AssetsPage() {
                 {items.map((a) => (
                   <tr key={a.id} style={{ background: selectedIds.has(a.id) ? "rgba(96,165,250,0.08)" : undefined }}>
                     <td><input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelect(a.id)} /></td>
+                    <td>
+                      {a.pool === "candidate" ? (
+                        <span className={a.verifyStatus === "verified" ? "badge badge-success" : "badge badge-warning"}>
+                          {a.verifyStatus === "verified" ? "候选-已验证" : "候选-待验证"}
+                        </span>
+                      ) : (
+                        <span className="badge badge-success">已验证</span>
+                      )}
+                    </td>
                     <td><DomainLink asset={a} /></td>
                     <td>{a.url || <span className="cell-muted">—</span>}</td>
                     <td>{a.ip ? <span className="cell-mono">{a.ip}</span> : <span className="cell-muted">—</span>}</td>
-                    <td>{a.statusCode ? <span className={a.statusCode >= 200 && a.statusCode < 300 ? "badge badge-success" : a.statusCode >= 400 ? "badge badge-danger" : "badge badge-warning"}>{a.statusCode}</span> : <span className="cell-muted">—</span>}</td>
+                    <td>
+                      {a.statusCode ? (
+                        <span className={a.statusCode >= 200 && a.statusCode < 300 ? "badge badge-success" : a.statusCode >= 400 ? "badge badge-danger" : "badge badge-warning"}>
+                          {a.statusCode}
+                        </span>
+                      ) : (
+                        <span className="cell-muted">—</span>
+                      )}
+                    </td>
                     <td>{a.title || <span className="cell-muted">—</span>}</td>
                     <td>{joinList(a.technologies, " · ") || <span className="cell-muted">—</span>}</td>
                     <td className="cell-muted">{formatDate(a.lastSeen)}</td>
                   </tr>
                 ))}
                 {items.length === 0 && (
-                  <tr><td colSpan={8} style={{ textAlign: "center", padding: 32, color: "#888" }}>暂无数据</td></tr>
+                  <tr><td colSpan={9} style={{ textAlign: "center", padding: 32, color: "#888" }}>暂无数据</td></tr>
                 )}
               </tbody>
             </table>

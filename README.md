@@ -11,8 +11,8 @@
 
 ## 核心能力
 
-- 子域名收集：`subfinder` / `findomain` / `bbot` / `shosubgo`
-- 可选主动扩展：`dictgen + dnsx`
+- 子域名收集：`subfinder` / `chaos` / `findomain` / `bbot` / `shosubgo`
+- 可选主动扩展：`bbot_active`（独立模块）/ `dictgen + dnsx`
 - Web 存活探测：`httpx`
 - 端口与服务识别：`naabu + nmap`
 - Web 截图：`gowitness`
@@ -72,6 +72,9 @@ myrecon/
 # subfinder
 go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 
+# chaos
+go install -v github.com/projectdiscovery/chaos-client/cmd/chaos@latest
+
 # findomain（常见方式：cargo）
 cargo install findomain
 # 或使用官方 release 二进制
@@ -116,7 +119,7 @@ nuclei -update-templates
 Linux/macOS:
 
 ```bash
-for t in subfinder findomain bbot shosubgo dnsx httpx naabu nmap gowitness nuclei; do
+for t in subfinder chaos findomain bbot shosubgo dnsx httpx naabu nmap gowitness nuclei; do
   command -v "$t" >/dev/null 2>&1 && echo "[OK] $t" || echo "[MISS] $t"
 done
 ```
@@ -124,7 +127,7 @@ done
 PowerShell:
 
 ```powershell
-$tools = "subfinder","findomain","bbot","shosubgo","dnsx","httpx","naabu","nmap","gowitness","nuclei"
+$tools = "subfinder","chaos","findomain","bbot","shosubgo","dnsx","httpx","naabu","nmap","gowitness","nuclei"
 foreach ($t in $tools) {
   if (Get-Command $t -ErrorAction SilentlyContinue) { "[OK] $t" } else { "[MISS] $t" }
 }
@@ -135,6 +138,11 @@ foreach ($t in $tools) {
 ```bash
 # shosubgo 依赖（使用 Shodan 数据时必需）
 SHODAN_API_KEY=your_key
+
+# chaos 依赖（任选其一）
+CHAOS_KEY=your_key
+# 或：
+PDCP_API_KEY=your_key
 
 # DingTalk 通知（开启 -notify 时）
 DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxxx

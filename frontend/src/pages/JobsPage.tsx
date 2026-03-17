@@ -43,6 +43,7 @@ export function JobsPage() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
+  const [enableBbotActive, setEnableBbotActive] = useState(false);
   const [enableNotify, setEnableNotify] = useState(true);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -175,8 +176,13 @@ export function JobsPage() {
   ];
 
   const previewModules = useMemo(
-    () => [...QUICK_BASELINE_MODULES, ...(enableWitness ? ["witness"] : []), ...(enableNuclei ? ["nuclei"] : [])],
-    [enableWitness, enableNuclei]
+    () => [
+      ...QUICK_BASELINE_MODULES,
+      ...(enableBbotActive ? ["bbot_active"] : []),
+      ...(enableWitness ? ["witness"] : []),
+      ...(enableNuclei ? ["nuclei"] : [])
+    ],
+    [enableBbotActive, enableWitness, enableNuclei]
   );
 
   const launchScan = async () => {
@@ -187,6 +193,7 @@ export function JobsPage() {
 
     setFeedback(null);
     const modules = [...QUICK_BASELINE_MODULES];
+    if (enableBbotActive) modules.push("bbot_active");
     if (enableWitness) modules.push("witness");
     if (enableNuclei) modules.push("nuclei");
 
@@ -248,6 +255,9 @@ export function JobsPage() {
           </button>
           <button className={`btn btn-sm${enableNuclei ? " btn-primary" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
             漏洞扫描 {enableNuclei ? "开启" : "关闭"}
+          </button>
+          <button className={`btn btn-sm${enableBbotActive ? " btn-primary" : ""}`} onClick={() => setEnableBbotActive((v) => !v)}>
+            BBOT主动扩展 {enableBbotActive ? "开启" : "关闭"}
           </button>
           <button className={`btn btn-sm${enableNotify ? " btn-primary" : ""}`} onClick={() => setEnableNotify((v) => !v)}>
             通知 {enableNotify ? "开启" : "关闭"}

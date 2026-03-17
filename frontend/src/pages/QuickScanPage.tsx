@@ -12,12 +12,18 @@ export function QuickScanPage() {
   const [scanDomain, setScanDomain] = useState(activeProject?.rootDomains?.[0] ?? "");
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
+  const [enableBbotActive, setEnableBbotActive] = useState(false);
   const [enableNotify, setEnableNotify] = useState(true);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const previewModules = useMemo(
-    () => [...BASELINE_MODULES, ...(enableWitness ? ["witness"] : []), ...(enableNuclei ? ["nuclei"] : [])],
-    [enableWitness, enableNuclei]
+    () => [
+      ...BASELINE_MODULES,
+      ...(enableBbotActive ? ["bbot_active"] : []),
+      ...(enableWitness ? ["witness"] : []),
+      ...(enableNuclei ? ["nuclei"] : [])
+    ],
+    [enableBbotActive, enableWitness, enableNuclei]
   );
 
   useEffect(() => {
@@ -37,6 +43,7 @@ export function QuickScanPage() {
     }
 
     const modules = [...BASELINE_MODULES];
+    if (enableBbotActive) modules.push("bbot_active");
     if (enableWitness) modules.push("witness");
     if (enableNuclei) modules.push("nuclei");
 
@@ -111,6 +118,9 @@ export function QuickScanPage() {
             </button>
             <button className={`module-chip ${enableNuclei ? "active" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
               漏洞扫描 {enableNuclei ? "ON" : "OFF"}
+            </button>
+            <button className={`module-chip ${enableBbotActive ? "active" : ""}`} onClick={() => setEnableBbotActive((v) => !v)}>
+              BBOT主动扩展 {enableBbotActive ? "ON" : "OFF"}
             </button>
             <button className={`module-chip ${enableNotify ? "active" : ""}`} onClick={() => setEnableNotify((v) => !v)}>
               通知 {enableNotify ? "ON" : "OFF"}

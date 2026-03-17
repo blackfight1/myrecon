@@ -690,6 +690,7 @@ func runPassiveSubdomainCollection(domains []string) ([]engine.Result, []string,
 	isBatchMode := len(domains) > 1
 
 	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatchMode))
+	pipeline.AddDomainScanner(plugins.NewChaosPlugin(isBatchMode))
 	pipeline.AddDomainScanner(plugins.NewFindomainPlugin())
 	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
 	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
@@ -929,9 +930,10 @@ func saveResultsWithContext(database *db.Database, results []engine.Result, proj
 					"source_job_id": sourceJobID,
 					"source_module": sourceModule,
 					"domain":        subdomain,
+					"verify_status": "pending",
 				}
 				normalizeRoot(record)
-				recordFailure("asset(domain)", database.SaveOrUpdateAsset(record))
+				recordFailure("asset_candidate(domain)", database.SaveOrUpdateAssetCandidate(record))
 			}
 		case "web_service":
 			if data, ok := result.Data.(map[string]interface{}); ok {
@@ -940,6 +942,21 @@ func saveResultsWithContext(database *db.Database, results []engine.Result, proj
 				data["source_module"] = sourceModule
 				normalizeRoot(data)
 				recordFailure("asset(web_service)", database.SaveOrUpdateAsset(data))
+				if strings.TrimSpace(getStringFromMap(data, "domain")) != "" {
+					recordFailure("asset_candidate(web_service)", database.SaveOrUpdateAssetCandidate(map[string]interface{}{
+						"project_id":          projectID,
+						"root_domain":         getStringFromMap(data, "root_domain"),
+						"source_job_id":       sourceJobID,
+						"source_module":       sourceModule,
+						"domain":              getStringFromMap(data, "domain"),
+						"last_ip":             getStringFromMap(data, "ip"),
+						"last_url":            getStringFromMap(data, "url"),
+						"last_status_code":    getIntFromMap(data, "status_code"),
+						"last_title":          getStringFromMap(data, "title"),
+						"verify_status":       "verified",
+						"verification_method": "httpx",
+					}))
+				}
 			}
 		case "port_service", "open_port":
 			if data, ok := result.Data.(map[string]interface{}); ok {
@@ -948,6 +965,18 @@ func saveResultsWithContext(database *db.Database, results []engine.Result, proj
 				data["source_module"] = sourceModule
 				normalizeRoot(data)
 				recordFailure("port", database.SaveOrUpdatePort(data))
+				if strings.TrimSpace(getStringFromMap(data, "domain")) != "" {
+					recordFailure("asset_candidate(open_port)", database.SaveOrUpdateAssetCandidate(map[string]interface{}{
+						"project_id":          projectID,
+						"root_domain":         getStringFromMap(data, "root_domain"),
+						"source_job_id":       sourceJobID,
+						"source_module":       sourceModule,
+						"domain":              getStringFromMap(data, "domain"),
+						"last_ip":             getStringFromMap(data, "ip"),
+						"verify_status":       "verified",
+						"verification_method": "open_port",
+					}))
+				}
 			}
 		case "vulnerability":
 			if data, ok := result.Data.(map[string]interface{}); ok {

@@ -92,6 +92,7 @@ export interface DashboardResponse {
 }
 
 export interface AssetListQuery {
+  pool?: "verified" | "candidate";
   rootDomain?: string;
   q?: string;
   liveOnly?: boolean;
@@ -193,6 +194,7 @@ export const endpoints = {
     apiGet<PagedAssets>(
       withQuery("/assets", {
         project_id: projectId,
+        pool: q.pool,
         root_domain: q.rootDomain,
         q: q.q,
         live_only: q.liveOnly ? "1" : undefined,

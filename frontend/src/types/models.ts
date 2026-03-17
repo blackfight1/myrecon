@@ -60,6 +60,8 @@ export interface Asset {
   domain: string;
   url?: string;
   ip?: string;
+  pool?: "verified" | "candidate";
+  verifyStatus?: "pending" | "verified" | string;
   statusCode?: number;
   title?: string;
   technologies?: string[];

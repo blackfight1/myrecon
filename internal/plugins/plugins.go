@@ -20,6 +20,10 @@ func NewSubfinderPlugin(batchMode bool) engine.Scanner {
 	return subdomain.NewSubfinderPlugin(batchMode)
 }
 
+func NewChaosPlugin(batchMode bool) engine.Scanner {
+	return subdomain.NewChaosPlugin(batchMode)
+}
+
 func NewBBOTPlugin(passiveOnly bool) engine.Scanner {
 	return subdomain.NewBBOTPlugin(passiveOnly)
 }
