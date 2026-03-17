@@ -1,12 +1,12 @@
 ﻿import { createColumnHelper, type SortingState } from "@tanstack/react-table";
-import { useCallback, useMemo, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import type { JobListQuery } from "../api/endpoints";
 import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useCancelJob, useCreateJob, useDeleteJob, useJobsPage } from "../hooks/queries";
+import { useCancelJob, useCreateJob, useDeleteJob, useJobsPage, useSettings } from "../hooks/queries";
 import { errorMessage } from "../lib/errors";
 import { formatDate } from "../lib/format";
 import type { JobOverview } from "../types/models";
@@ -35,6 +35,8 @@ export function JobsPage() {
   const cancelJob = useCancelJob();
   const deleteJob = useDeleteJob();
   const createJob = useCreateJob();
+  const settingsQuery = useSettings();
+  const scannerDefaults = settingsQuery.data?.scanner;
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -43,9 +45,18 @@ export function JobsPage() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
+  const [enableActiveSubs, setEnableActiveSubs] = useState(false);
   const [enableBbotActive, setEnableBbotActive] = useState(false);
   const [enableNotify, setEnableNotify] = useState(true);
+  const [defaultsLoaded, setDefaultsLoaded] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    if (defaultsLoaded || !scannerDefaults) return;
+    setEnableNuclei(scannerDefaults.defaultNuclei);
+    setEnableActiveSubs(scannerDefaults.defaultActiveSubs);
+    setDefaultsLoaded(true);
+  }, [defaultsLoaded, scannerDefaults]);
 
   const sortBy = sorting.length > 0 ? SORT_KEY_MAP[sorting[0].id] ?? "started_at" : "started_at";
   const sortDir = sorting.length > 0 && sorting[0].desc ? "desc" : sorting.length > 0 ? "asc" : "desc";
@@ -178,11 +189,12 @@ export function JobsPage() {
   const previewModules = useMemo(
     () => [
       ...QUICK_BASELINE_MODULES,
+      ...(enableActiveSubs ? ["dnsx_bruteforce"] : []),
       ...(enableBbotActive ? ["bbot_active"] : []),
       ...(enableWitness ? ["witness"] : []),
       ...(enableNuclei ? ["nuclei"] : [])
     ],
-    [enableBbotActive, enableWitness, enableNuclei]
+    [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei]
   );
 
   const launchScan = async () => {
@@ -193,6 +205,7 @@ export function JobsPage() {
 
     setFeedback(null);
     const modules = [...QUICK_BASELINE_MODULES];
+    if (enableActiveSubs) modules.push("dnsx_bruteforce");
     if (enableBbotActive) modules.push("bbot_active");
     if (enableWitness) modules.push("witness");
     if (enableNuclei) modules.push("nuclei");
@@ -208,8 +221,8 @@ export function JobsPage() {
           mode: "scan",
           modules,
           enableNuclei,
-          activeSubs: false,
-          dictSize: 1500,
+          activeSubs: enableActiveSubs,
+          dictSize: scannerDefaults?.defaultDictSize ?? 1500,
           dryRun: false,
           notify: enableNotify
         });
@@ -255,6 +268,9 @@ export function JobsPage() {
           </button>
           <button className={`btn btn-sm${enableNuclei ? " btn-primary" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
             漏洞扫描 {enableNuclei ? "开启" : "关闭"}
+          </button>
+          <button className={`btn btn-sm${enableActiveSubs ? " btn-primary" : ""}`} onClick={() => setEnableActiveSubs((v) => !v)}>
+            主动子域 {enableActiveSubs ? "开启" : "关闭"}
           </button>
           <button className={`btn btn-sm${enableBbotActive ? " btn-primary" : ""}`} onClick={() => setEnableBbotActive((v) => !v)}>
             BBOT主动扩展 {enableBbotActive ? "开启" : "关闭"}

@@ -579,6 +579,7 @@ func (d *Database) SaveOrUpdateVulnerability(data map[string]interface{}) error 
 			updates["status"] = "open"
 			updates["reopen_count"] = existing.ReopenCount + 1
 			updates["last_transition_at"] = &transitionAt
+			updates["fixed_at"] = nil
 		}
 
 		if err := d.DB.Model(&existing).Updates(updates).Error; err != nil {
@@ -807,6 +808,21 @@ func (d *Database) DeleteMonitorDataByRootDomain(projectID, rootDomain string) e
 		return fmt.Errorf("rootDomain is required")
 	}
 	return d.DB.Transaction(func(tx *gorm.DB) error {
+		var taskIDs []uint
+		if err := tx.Model(&MonitorTask{}).
+			Where("project_id = ? AND root_domain = ?", projectID, rootDomain).
+			Pluck("id", &taskIDs).Error; err != nil {
+			return err
+		}
+		if len(taskIDs) > 0 {
+			jobIDs := make([]string, 0, len(taskIDs))
+			for _, id := range taskIDs {
+				jobIDs = append(jobIDs, fmt.Sprintf("task-%d", id))
+			}
+			if err := tx.Where("project_id = ? AND job_id IN ?", projectID, jobIDs).Delete(&JobLog{}).Error; err != nil {
+				return err
+			}
+		}
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorTask{}).Error; err != nil {
 			return err
 		}
@@ -1249,6 +1265,40 @@ func (d *Database) DeleteAllDataByRootDomain(projectID, rootDomain string) error
 	}
 	pattern := "%." + rootDomain
 	return d.DB.Transaction(func(tx *gorm.DB) error {
+		var monitorTaskIDs []uint
+		if err := tx.Model(&MonitorTask{}).
+			Where("project_id = ? AND root_domain = ?", projectID, rootDomain).
+			Pluck("id", &monitorTaskIDs).Error; err != nil {
+			return err
+		}
+		if len(monitorTaskIDs) > 0 {
+			taskJobIDs := make([]string, 0, len(monitorTaskIDs))
+			for _, id := range monitorTaskIDs {
+				taskJobIDs = append(taskJobIDs, fmt.Sprintf("task-%d", id))
+			}
+			if err := tx.Where("project_id = ? AND job_id IN ?", projectID, taskJobIDs).Delete(&JobLog{}).Error; err != nil {
+				return err
+			}
+		}
+
+		var scanJobIDs []string
+		if err := tx.Model(&ScanJob{}).
+			Where("project_id = ? AND root_domain = ?", projectID, rootDomain).
+			Pluck("job_id", &scanJobIDs).Error; err != nil {
+			return err
+		}
+		if len(scanJobIDs) > 0 {
+			if err := tx.Where("project_id = ? AND job_id IN ?", projectID, scanJobIDs).Delete(&ScanArtifact{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ? AND job_id IN ?", projectID, scanJobIDs).Delete(&ScanStage{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ? AND job_id IN ?", projectID, scanJobIDs).Delete(&JobLog{}).Error; err != nil {
+				return err
+			}
+		}
+
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorTask{}).Error; err != nil {
 			return err
 		}
@@ -1290,9 +1340,6 @@ func (d *Database) DeleteAllDataByRootDomain(projectID, rootDomain string) error
 			return err
 		}
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&ScanJob{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&ScanStage{}).Error; err != nil {
 			return err
 		}
 		return nil

@@ -123,8 +123,8 @@ type createJobRequest struct {
 	Domain       string   `json:"domain"`
 	Mode         string   `json:"mode"`
 	Modules      []string `json:"modules"`
-	EnableNuclei bool     `json:"enableNuclei"`
-	ActiveSubs   bool     `json:"activeSubs"`
+	EnableNuclei *bool    `json:"enableNuclei"`
+	ActiveSubs   *bool    `json:"activeSubs"`
 	DictSize     int      `json:"dictSize"`
 	DNSResolvers string   `json:"dnsResolvers"`
 	DryRun       bool     `json:"dryRun"`
@@ -796,6 +796,8 @@ func (s *Server) handlePatchVulnStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if status == "fixed" {
 		updates["fixed_at"] = &now
+	} else {
+		updates["fixed_at"] = nil
 	}
 	if status == "open" && vuln.Status == "fixed" {
 		updates["reopen_count"] = vuln.ReopenCount + 1
@@ -2268,6 +2270,19 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	if req.Notify != nil {
 		notify = *req.Notify
 	}
+	s.settingsMu.RLock()
+	defaultNuclei := s.settings.Scanner.DefaultNuclei
+	defaultActiveSubs := s.settings.Scanner.DefaultActiveSubs
+	s.settingsMu.RUnlock()
+
+	enableNuclei := defaultNuclei
+	if req.EnableNuclei != nil {
+		enableNuclei = *req.EnableNuclei
+	}
+	activeSubs := defaultActiveSubs
+	if req.ActiveSubs != nil {
+		activeSubs = *req.ActiveSubs
+	}
 
 	modules := sanitizeModules(req.Modules)
 	if len(modules) == 0 {
@@ -2275,12 +2290,19 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			modules = []string{"subs", "ports", "monitor"}
 		} else {
 			modules = []string{"subs", "ports", "httpx"}
-			if req.EnableNuclei {
+			if enableNuclei {
 				modules = append(modules, "nuclei")
 			}
-			if req.ActiveSubs {
+			if activeSubs {
 				modules = append(modules, "dnsx_bruteforce")
 			}
+		}
+	} else if mode == "scan" {
+		if enableNuclei && !containsAnyModule(modules, "nuclei") {
+			modules = append(modules, "nuclei")
+		}
+		if activeSubs && !containsAnyModule(modules, "dnsx_bruteforce", "dictgen") {
+			modules = append(modules, "dnsx_bruteforce")
 		}
 	}
 
@@ -2292,10 +2314,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	if mode == "monitor" {
 		if err := s.db.EnableMonitorTarget(projectID, rootDomain, defaultMonitorIntervalSec, 3); err != nil {
-			writeJSON(w, http.StatusOK, jobOverviewResponse{
-				ID: jobID, ProjectID: projectID, RootDomain: rootDomain, Mode: mode, Modules: modules,
-				Status: "error", StartedAt: now.Format(time.RFC3339), ErrorMessage: err.Error(),
-			})
+			writeError(w, http.StatusInternalServerError, "failed to create monitor task: "+err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, jobOverviewResponse{
@@ -2316,8 +2335,8 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		Mode:         mode,
 		Modules:      strings.Join(modules, ","),
 		Status:       "pending",
-		EnableNuclei: req.EnableNuclei,
-		ActiveSubs:   req.ActiveSubs,
+		EnableNuclei: enableNuclei,
+		ActiveSubs:   activeSubs,
 		DictSize:     req.DictSize,
 		DNSResolvers: strings.TrimSpace(req.DNSResolvers),
 		DryRun:       req.DryRun,
@@ -3320,23 +3339,24 @@ func (s *Server) handleMonitorEventStatus(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	status := normalizeMonitorEventStatus(body.Status)
+	status, ok := parseMonitorEventStatus(body.Status)
 	if body.ProjectID == "" || body.EventID <= 0 {
 		writeError(w, http.StatusBadRequest, "projectId and eventId are required")
 		return
 	}
-	valid := map[string]bool{"open": true, "resolved": true, "ack": true, "ignored": true}
-	if !valid[status] {
+	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid status; must be open/resolved/ack/ignored")
 		return
 	}
+	now := time.Now()
 	updates := map[string]interface{}{
 		"status":          status,
-		"last_changed_at": time.Now(),
+		"last_changed_at": now,
 	}
 	if status == "resolved" {
-		now := time.Now()
 		updates["resolved_at"] = &now
+	} else {
+		updates["resolved_at"] = nil
 	}
 	result := s.db.DB.Model(&db.MonitorEvent{}).Where("id = ? AND project_id = ?", body.EventID, body.ProjectID).Updates(updates)
 	if result.Error != nil {
@@ -3365,13 +3385,12 @@ func (s *Server) handleBulkMonitorEventStatus(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	status := normalizeMonitorEventStatus(body.Status)
+	status, ok := parseMonitorEventStatus(body.Status)
 	if body.ProjectID == "" || len(body.EventIDs) == 0 {
 		writeError(w, http.StatusBadRequest, "projectId and eventIds are required")
 		return
 	}
-	valid := map[string]bool{"open": true, "resolved": true, "ack": true, "ignored": true}
-	if !valid[status] {
+	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid status; must be open/resolved/ack/ignored")
 		return
 	}
@@ -3379,13 +3398,15 @@ func (s *Server) handleBulkMonitorEventStatus(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "max 500 IDs per request")
 		return
 	}
+	now := time.Now()
 	updates := map[string]interface{}{
 		"status":          status,
-		"last_changed_at": time.Now(),
+		"last_changed_at": now,
 	}
 	if status == "resolved" {
-		now := time.Now()
 		updates["resolved_at"] = &now
+	} else {
+		updates["resolved_at"] = nil
 	}
 	result := s.db.DB.Model(&db.MonitorEvent{}).Where("id IN ? AND project_id = ?", body.EventIDs, body.ProjectID).Updates(updates)
 	if result.Error != nil {
@@ -3604,6 +3625,23 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.settingsMu.Lock()
+	if p := patch.Database; p != nil {
+		if p.Host != nil {
+			s.settings.Database.Host = strings.TrimSpace(*p.Host)
+		}
+		if p.Port != nil {
+			s.settings.Database.Port = *p.Port
+		}
+		if p.User != nil {
+			s.settings.Database.User = strings.TrimSpace(*p.User)
+		}
+		if p.DBName != nil {
+			s.settings.Database.DBName = strings.TrimSpace(*p.DBName)
+		}
+		if p.SSLMode != nil {
+			s.settings.Database.SSLMode = strings.TrimSpace(*p.SSLMode)
+		}
+	}
 	if p := patch.Scanner; p != nil {
 		if p.ScreenshotDir != nil {
 			s.settings.Scanner.ScreenshotDir = *p.ScreenshotDir
@@ -3751,20 +3789,27 @@ func normalizeHealthStatus(raw string) string {
 }
 
 func normalizeMonitorEventStatus(raw string) string {
+	if status, ok := parseMonitorEventStatus(raw); ok {
+		return status
+	}
+	return monitorEventStatusOpen
+}
+
+func parseMonitorEventStatus(raw string) (string, bool) {
 	s := strings.ToLower(strings.TrimSpace(raw))
 	switch s {
 	case "open", "resolved", "ack", "ignored":
-		return s
+		return s, true
 	default:
-		return monitorEventStatusOpen
+		return "", false
 	}
 }
 
 func sanitizeModules(raw []string) []string {
 	allowed := map[string]bool{
 		"subfinder": true, "findomain": true, "bbot": true, "shosubgo": true,
-		"bbot_active": true,
-		"dictgen":     true, "dnsx_bruteforce": true,
+		"bbot_active": true, "chaos": true,
+		"dictgen": true, "dnsx_bruteforce": true,
 		"naabu": true, "nmap": true,
 		"httpx": true, "gowitness": true, "nuclei": true,
 		"subs": true, "ports": true, "monitor": true, "witness": true,
@@ -4600,6 +4645,8 @@ func (s *Server) handleBulkVulnStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if status == "fixed" {
 		updates["fixed_at"] = &now
+	} else {
+		updates["fixed_at"] = nil
 	}
 	result := s.db.DB.Model(&db.Vulnerability{}).Where("id IN ? AND project_id = ?", body.IDs, body.ProjectID).Updates(updates)
 	if result.Error != nil {

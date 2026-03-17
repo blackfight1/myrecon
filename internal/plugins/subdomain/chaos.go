@@ -41,6 +41,10 @@ func (c *ChaosPlugin) Execute(input []string) ([]engine.Result, error) {
 	if apiKey == "" {
 		apiKey = strings.TrimSpace(os.Getenv("PDCP_API_KEY"))
 	}
+	if apiKey == "" {
+		fmt.Println("[Chaos] CHAOS_KEY/PDCP_API_KEY not set, skip chaos passive source")
+		return []engine.Result{}, nil
+	}
 
 	fmt.Printf("[Chaos] Running passive enumeration for %d root domains...\n", len(targets))
 
@@ -120,7 +124,8 @@ func (c *ChaosPlugin) executeOnce(args []string, seen map[string]bool, seed []en
 
 	if err := cmd.Wait(); err != nil {
 		if len(results) == 0 {
-			return nil, fmt.Errorf("chaos execution failed: %v", err)
+			fmt.Printf("[Chaos] no result or command warning, skipped: %v\n", err)
+			return results, nil
 		}
 		fmt.Printf("[Chaos] Command finished with warning: %v\n", err)
 	}

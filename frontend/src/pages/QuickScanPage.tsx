@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useCreateJob } from "../hooks/queries";
+import { useCreateJob, useSettings } from "../hooks/queries";
 import { errorMessage } from "../lib/errors";
 import { matchesProjectDomain, normalizeRootDomain } from "../lib/projectScope";
 
@@ -9,21 +9,27 @@ const BASELINE_MODULES = ["subs", "httpx", "ports"];
 export function QuickScanPage() {
   const { activeProject } = useWorkspace();
   const createJob = useCreateJob();
+  const settingsQuery = useSettings();
+  const scannerDefaults = settingsQuery.data?.scanner;
+
   const [scanDomain, setScanDomain] = useState(activeProject?.rootDomains?.[0] ?? "");
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
+  const [enableActiveSubs, setEnableActiveSubs] = useState(false);
   const [enableBbotActive, setEnableBbotActive] = useState(false);
   const [enableNotify, setEnableNotify] = useState(true);
+  const [defaultsLoaded, setDefaultsLoaded] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const previewModules = useMemo(
     () => [
       ...BASELINE_MODULES,
+      ...(enableActiveSubs ? ["dnsx_bruteforce"] : []),
       ...(enableBbotActive ? ["bbot_active"] : []),
       ...(enableWitness ? ["witness"] : []),
       ...(enableNuclei ? ["nuclei"] : [])
     ],
-    [enableBbotActive, enableWitness, enableNuclei]
+    [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei]
   );
 
   useEffect(() => {
@@ -31,6 +37,13 @@ export function QuickScanPage() {
       setScanDomain(activeProject?.rootDomains?.[0] ?? "");
     }
   }, [activeProject, scanDomain]);
+
+  useEffect(() => {
+    if (defaultsLoaded || !scannerDefaults) return;
+    setEnableNuclei(scannerDefaults.defaultNuclei);
+    setEnableActiveSubs(scannerDefaults.defaultActiveSubs);
+    setDefaultsLoaded(true);
+  }, [defaultsLoaded, scannerDefaults]);
 
   const handleQuickScan = async () => {
     const domain = normalizeRootDomain(scanDomain);
@@ -43,6 +56,7 @@ export function QuickScanPage() {
     }
 
     const modules = [...BASELINE_MODULES];
+    if (enableActiveSubs) modules.push("dnsx_bruteforce");
     if (enableBbotActive) modules.push("bbot_active");
     if (enableWitness) modules.push("witness");
     if (enableNuclei) modules.push("nuclei");
@@ -54,8 +68,8 @@ export function QuickScanPage() {
         modules,
         mode: "scan",
         enableNuclei,
-        activeSubs: false,
-        dictSize: 1500,
+        activeSubs: enableActiveSubs,
+        dictSize: scannerDefaults?.defaultDictSize ?? 1500,
         dryRun: false,
         notify: enableNotify
       });
@@ -118,6 +132,9 @@ export function QuickScanPage() {
             </button>
             <button className={`module-chip ${enableNuclei ? "active" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
               漏洞扫描 {enableNuclei ? "ON" : "OFF"}
+            </button>
+            <button className={`module-chip ${enableActiveSubs ? "active" : ""}`} onClick={() => setEnableActiveSubs((v) => !v)}>
+              主动子域 {enableActiveSubs ? "ON" : "OFF"}
             </button>
             <button className={`module-chip ${enableBbotActive ? "active" : ""}`} onClick={() => setEnableBbotActive((v) => !v)}>
               BBOT主动扩展 {enableBbotActive ? "ON" : "OFF"}
