@@ -14,9 +14,9 @@
 - 子域名收集：`subfinder` / `chaos` / `findomain` / `bbot` / `shosubgo`
 - 可选主动扩展：`bbot_active`（独立模块）/ `dictgen + dnsx`
 - Web 存活探测：`httpx`
-- 端口与服务识别：`naabu + nmap`
+- 端口与服务识别：`naabu + nmap`（`service/version/banner`）
 - Web 截图：`gowitness`
-- 漏洞候选：`nuclei`
+- 漏洞候选：`nuclei` + `cors`（高危 CORS）
 - 资产、端口、漏洞、任务、监控结果统一落地 PostgreSQL
 - 前端控制台（React + Vite）
 
@@ -164,6 +164,22 @@ NUCLEI_EXCLUDE_SEVERITIES=info,unknown
 # NUCLEI_EXCLUDE_PROTOCOL_TYPES=ssl,dns
 # 排除模板 ID（逗号分隔，设置为空可禁用默认排除）
 # NUCLEI_EXCLUDE_TEMPLATE_IDS=https-to-http-redirect,form-detection
+
+# 高危 CORS 扫描（可选）
+# 是否启用 CORS 扫描器（默认 true）
+# CORS_SCAN_ENABLED=true
+# 仅保留高风险规则（默认 true）
+# CORS_HIGH_RISK_ONLY=true
+# 单次任务最多检测多少个 live URL（默认 200）
+# CORS_MAX_TARGETS=200
+# HTTP 请求超时（毫秒，默认 7000）
+# CORS_TIMEOUT_MS=7000
+# 攻击者域名占位（默认 evil-cors.invalid）
+# CORS_ATTACKER_HOST=evil-cors.invalid
+# User-Agent（可选）
+# CORS_USER_AGENT=myrecon-cors/1.0
+# 当任务使用默认模块且启用 nuclei 时，是否自动附带 cors（默认 true）
+# CORS_WITH_NUCLEI=true
 ```
 
 PowerShell 示例：
@@ -242,6 +258,9 @@ go run . -mode scan -d example.com
 # 完整扫描 + nuclei
 go run . -mode scan -d example.com -nuclei
 
+# 完整扫描 + nuclei + 高危 CORS（显式模块）
+go run . -mode scan -m subs,httpx,ports,nuclei,cors -d example.com
+
 # 完整扫描 + 主动子域名扩展
 go run . -mode scan -d example.com -active-subs -dict-size 1500
 
@@ -291,14 +310,25 @@ go run . -mode scan -scan-delete-domain example.com
 | `-d` | 单个根域名 |
 | `-dL` | 根域名文件 |
 | `-i` | 输入文件（ports/witness） |
-| `-m` | 模块：`subs,ports,witness` |
+| `-m` | 模块：`subs,httpx,ports,witness,nuclei,cors,dnsx_bruteforce,bbot_active` |
 | `-dry-run` | 只执行不入库 |
 | `-nuclei` | 启用 nuclei |
 | `-active-subs` | 启用主动子域名扩展 |
 | `-dict-size` | 主动扩展字典大小上限 |
 | `-dns-resolvers` | dnsx resolvers 文件 |
-| `-notify` | 启用钉钉开始/结束通知 |
+| `-notify` | 扫描任务结束通知（`scan` 模式） |
 | `-monitor-interval` | 监控周期 |
+
+## 通知行为说明
+
+- `scan` 模式：任务结束后发送摘要通知（成功/失败/取消），受任务级 `notify` 和全局 `DINGTALK_WEBHOOK` 控制。
+- `monitor` 模式：仅在检测到变更时发送通知，且有降噪冷却；目前由全局 `DINGTALK_WEBHOOK` 控制。
+- `monitor` 通知内容包含：新资产 URL/标题/技术栈、端口变化（OPEN/CLOSED/CHANGED）摘要。
+
+## 端口指纹显示说明
+
+- 端口页与资产详情页会展示 `service/version`，端口页额外展示 `banner`。
+- 后端会对 `naabu` 与 `nmap` 的端口结果做统一归一，尽量避免“同一端口分裂为两行（有指纹/无指纹）”。
 
 ## 关键 API（前端主要使用）
 
