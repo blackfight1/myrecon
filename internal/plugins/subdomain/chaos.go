@@ -16,6 +16,8 @@ type ChaosPlugin struct {
 	batchMode bool
 }
 
+const defaultChaosAPIKey = "94d30089-1a22-44a7-9c2e-79f2ec4fe2ef"
+
 // NewChaosPlugin creates a chaos plugin instance.
 func NewChaosPlugin(batchMode bool) *ChaosPlugin {
 	return &ChaosPlugin{batchMode: batchMode}
@@ -37,14 +39,7 @@ func (c *ChaosPlugin) Execute(input []string) ([]engine.Result, error) {
 		return []engine.Result{}, nil
 	}
 
-	apiKey := strings.TrimSpace(os.Getenv("CHAOS_KEY"))
-	if apiKey == "" {
-		apiKey = strings.TrimSpace(os.Getenv("PDCP_API_KEY"))
-	}
-	if apiKey == "" {
-		fmt.Println("[Chaos] CHAOS_KEY/PDCP_API_KEY not set, skip chaos passive source")
-		return []engine.Result{}, nil
-	}
+	apiKey := resolveChaosAPIKey()
 
 	fmt.Printf("[Chaos] Running passive enumeration for %d root domains...\n", len(targets))
 
@@ -84,6 +79,18 @@ func (c *ChaosPlugin) Execute(input []string) ([]engine.Result, error) {
 
 	fmt.Printf("[Chaos] Found %d subdomains\n", len(results))
 	return results, nil
+}
+
+func resolveChaosAPIKey() string {
+	apiKey := strings.TrimSpace(os.Getenv("CHAOS_KEY"))
+	if apiKey != "" {
+		return apiKey
+	}
+	apiKey = strings.TrimSpace(os.Getenv("PDCP_API_KEY"))
+	if apiKey != "" {
+		return apiKey
+	}
+	return defaultChaosAPIKey
 }
 
 func (c *ChaosPlugin) executeOnce(args []string, seen map[string]bool, seed []engine.Result) ([]engine.Result, error) {

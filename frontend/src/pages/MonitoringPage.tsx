@@ -262,7 +262,7 @@ export function MonitoringPage() {
   };
 
   const handleStop = async (domain: string) => {
-    if (!projectId || !confirm(`确认停止监控 ${domain} ?`)) return;
+    if (!projectId || !confirm(`确认停止监控 ${domain}？`)) return;
     try {
       await stopMonitor.mutateAsync({ projectId, domain });
       setFeedback({ ok: true, text: `已停止: ${domain}` });
@@ -303,38 +303,27 @@ export function MonitoringPage() {
       <ProjectScopeBanner title="监控范围" hint="按当前项目根域名过滤显示。" />
 
       {feedback && (
-        <div
-          style={{
-            color: feedback.ok ? "#16a34a" : "#dc2626",
-            marginBottom: 12,
-            padding: "8px 16px",
-            background: "var(--bg-secondary)",
-            borderRadius: 8
-          }}
-        >
-          {feedback.text}
-          <button
-            style={{ marginLeft: 12, cursor: "pointer", background: "none", border: "none", color: "inherit" }}
-            onClick={() => setFeedback(null)}
-          >
-            ×
+        <div className={`inline-feedback ${feedback.ok ? "ok" : "error"}`}>
+          <span>{feedback.text}</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => setFeedback(null)}>
+            关闭
           </button>
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
-        <StatCard label="Open 事件" value={openEvents} icon="●" />
-        <StatCard label="24h 变化" value={recentChanges} icon="Δ" />
+      <div className="stats-row">
+        <StatCard label="Open 事件" value={openEvents} icon="●" accent="danger" />
+        <StatCard label="24h 变化" value={recentChanges} icon="Δ" accent="blue" />
         <StatCard label="监控目标" value={`${activeTargets} / ${targets.length}`} icon="◎" />
         <StatCard label="最近运行" value={lastRunStatus} icon="↻" />
       </div>
 
       {loading && <div className="empty-state">正在加载...</div>}
 
-      <article className="panel" style={{ marginBottom: 24 }}>
+      <article className="panel monitor-section">
         <header className="panel-header">
           <h2>监控目标</h2>
-          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <div className="toolbar-group">
             <span className="panel-meta">{targets.length} 个</span>
             <button className="btn btn-primary btn-sm" onClick={openCreateModal} disabled={!projectId}>
               + 添加
@@ -360,11 +349,11 @@ export function MonitoringPage() {
                   <tr key={t.id}>
                     <td>{t.rootDomain}</td>
                     <td>{t.enabled ? <span className="badge badge-success">启用</span> : <span className="badge badge-danger">停用</span>}</td>
-                    <td style={{ fontSize: 12, maxWidth: 420 }}>{monitorPolicySummary(t)}</td>
+                    <td className="monitor-policy-cell">{monitorPolicySummary(t)}</td>
                     <td>{t.baselineDone ? `v${Math.max(1, t.baselineVersion ?? 0)}` : "—"}</td>
                     <td className="cell-muted">{formatDate(t.lastRunAt)}</td>
                     <td>
-                      <div style={{ display: "flex", gap: 6 }}>
+                      <div className="row-actions">
                         <button className="btn btn-sm btn-secondary" onClick={() => openEditModal(t)}>
                           策略
                         </button>
@@ -394,7 +383,7 @@ export function MonitoringPage() {
         )}
       </article>
 
-      <article className="panel" style={{ marginBottom: 24 }}>
+      <article className="panel monitor-section">
         <header className="panel-header">
           <h2>运行记录</h2>
           <span className="panel-meta">{runs.length} 条</span>
@@ -435,39 +424,33 @@ export function MonitoringPage() {
         </div>
       </article>
 
-      <article className="panel" style={{ marginBottom: 24 }}>
+      <article className="panel monitor-section">
         <header className="panel-header">
           <h2>事件生命周期</h2>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-sm" onClick={() => void handleBulkResolved()}>
+          <div className="toolbar-group">
+            <button className="btn btn-sm btn-secondary" onClick={() => void handleBulkResolved()}>
               批量关闭 Open
             </button>
             <span className="panel-meta">{events.length} 条</span>
           </div>
         </header>
 
-        <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
-          <div style={{ display: "flex", gap: 4 }}>
+        <div className="filter-bar monitor-filter-bar">
+          <div className="toolbar-group">
             {EVENT_TABS.map((tab) => (
               <button key={tab.key} className={`btn btn-sm ${eventTab === tab.key ? "btn-primary" : "btn-secondary"}`} onClick={() => setEventTab(tab.key)}>
                 {tab.label}
               </button>
             ))}
           </div>
-          <select className="form-input" style={{ width: 140, padding: "4px 8px", fontSize: 13 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <select className="form-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             {STATUS_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
             ))}
           </select>
-          <input
-            className="form-input"
-            style={{ width: 220, padding: "4px 8px", fontSize: 13 }}
-            placeholder="搜索域名/IP/标题..."
-            value={searchQ}
-            onChange={(e) => setSearchQ(e.target.value)}
-          />
+          <input className="form-input" placeholder="搜索域名/IP/标题..." value={searchQ} onChange={(e) => setSearchQ(e.target.value)} />
         </div>
 
         {events.length === 0 ? (
@@ -508,7 +491,7 @@ export function MonitoringPage() {
                     <td className="cell-muted">{formatDate(ev.lastSeenAt)}</td>
                     <td>{ev.occurrenceCount}</td>
                     <td>
-                      <div style={{ display: "flex", gap: 4 }}>
+                      <div className="row-actions">
                         {ev.status === "open" && (
                           <button className="btn btn-sm btn-primary" onClick={() => void handleEventAction(ev.id, "ack")}>
                             确认
@@ -540,79 +523,88 @@ export function MonitoringPage() {
       </article>
 
       {showPolicyModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ background: "var(--bg-primary)", borderRadius: 12, padding: 24, width: 500 }}>
-            <h3 style={{ marginBottom: 16 }}>{editingTarget ? "编辑监控策略" : "添加监控目标"}</h3>
-
-            <label style={{ display: "block", marginBottom: 8, fontSize: 13 }}>根域名</label>
-            <input
-              className="form-input"
-              style={{ width: "100%", marginBottom: 12, padding: "8px 12px" }}
-              value={newDomain}
-              onChange={(e) => setNewDomain(e.target.value)}
-              placeholder="example.com"
-              readOnly={Boolean(editingTarget)}
-            />
-
-            {!editingTarget && (
-              <>
-                <label style={{ display: "block", marginBottom: 8, fontSize: 13 }}>检测间隔</label>
-                <select className="form-input" style={{ width: "100%", marginBottom: 16, padding: "8px 12px" }} value={newInterval} onChange={(e) => setNewInterval(Number(e.target.value))}>
-                  <option value={3600}>每 1 小时</option>
-                  <option value={7200}>每 2 小时</option>
-                  <option value={14400}>每 4 小时</option>
-                  <option value={21600}>每 6 小时 (默认)</option>
-                  <option value={43200}>每 12 小时</option>
-                  <option value={86400}>每 24 小时</option>
-                </select>
-              </>
-            )}
-
-            <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, marginBottom: 16, display: "grid", gap: 8 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input type="checkbox" checked={newEnableVulnScan} onChange={(e) => setNewEnableVulnScan(e.target.checked)} />
-                <span>开启变更后增量漏扫</span>
-              </label>
-
-              {newEnableVulnScan && (
-                <>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <input type="checkbox" checked={newEnableNuclei} onChange={(e) => setNewEnableNuclei(e.target.checked)} />
-                      <span>Nuclei</span>
-                    </label>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <input type="checkbox" checked={newEnableCors} onChange={(e) => setNewEnableCors(e.target.checked)} />
-                      <span>High-risk CORS</span>
-                    </label>
-                  </div>
-
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <input type="checkbox" checked={newVulnOnNewLive} onChange={(e) => setNewVulnOnNewLive(e.target.checked)} />
-                      <span>new_live 触发</span>
-                    </label>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <input type="checkbox" checked={newVulnOnWebChanged} onChange={(e) => setNewVulnOnWebChanged(e.target.checked)} />
-                      <span>web_changed 触发</span>
-                    </label>
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                    <label style={{ display: "grid", gap: 4, fontSize: 12 }}>
-                      <span>每轮最大 URL</span>
-                      <input className="form-input" type="number" min={1} max={1000} value={newVulnMaxUrls} onChange={(e) => setNewVulnMaxUrls(Number(e.target.value) || 50)} />
-                    </label>
-                    <label style={{ display: "grid", gap: 4, fontSize: 12 }}>
-                      <span>冷却分钟</span>
-                      <input className="form-input" type="number" min={1} max={1440} value={newVulnCooldownMin} onChange={(e) => setNewVulnCooldownMin(Number(e.target.value) || 30)} />
-                    </label>
-                  </div>
-                </>
-              )}
+        <div className="modal-overlay" onClick={closePolicyModal}>
+          <div className="modal-content monitor-policy-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{editingTarget ? "编辑监控策略" : "添加监控目标"}</h3>
+              <button className="modal-close" onClick={closePolicyModal} disabled={submitting}>
+                ×
+              </button>
             </div>
 
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">根域名</label>
+                <input
+                  className="form-input"
+                  value={newDomain}
+                  onChange={(e) => setNewDomain(e.target.value)}
+                  placeholder="example.com"
+                  readOnly={Boolean(editingTarget)}
+                />
+              </div>
+
+              {!editingTarget && (
+                <div className="form-group">
+                  <label className="form-label">检测间隔</label>
+                  <select className="form-select" value={newInterval} onChange={(e) => setNewInterval(Number(e.target.value))}>
+                    <option value={3600}>每 1 小时</option>
+                    <option value={7200}>每 2 小时</option>
+                    <option value={14400}>每 4 小时</option>
+                    <option value={21600}>每 6 小时（默认）</option>
+                    <option value={43200}>每 12 小时</option>
+                    <option value={86400}>每 24 小时</option>
+                  </select>
+                </div>
+              )}
+
+              <div className="monitor-policy-box">
+                <label className="form-checkbox">
+                  <input type="checkbox" checked={newEnableVulnScan} onChange={(e) => setNewEnableVulnScan(e.target.checked)} />
+                  开启变更后增量漏扫
+                </label>
+
+                {newEnableVulnScan && (
+                  <>
+                    <div className="monitor-policy-toggle-row">
+                      <label className="form-checkbox">
+                        <input type="checkbox" checked={newEnableNuclei} onChange={(e) => setNewEnableNuclei(e.target.checked)} />
+                        Nuclei
+                      </label>
+                      <label className="form-checkbox">
+                        <input type="checkbox" checked={newEnableCors} onChange={(e) => setNewEnableCors(e.target.checked)} />
+                        High-risk CORS
+                      </label>
+                    </div>
+
+                    <div className="monitor-policy-toggle-row">
+                      <label className="form-checkbox">
+                        <input type="checkbox" checked={newVulnOnNewLive} onChange={(e) => setNewVulnOnNewLive(e.target.checked)} />
+                        new_live 触发
+                      </label>
+                      <label className="form-checkbox">
+                        <input type="checkbox" checked={newVulnOnWebChanged} onChange={(e) => setNewVulnOnWebChanged(e.target.checked)} />
+                        web_changed 触发
+                      </label>
+                    </div>
+
+                    <div className="form-row form-row-2">
+                      <div className="form-group">
+                        <label className="form-label">每轮最大 URL</label>
+                        <input className="form-input" type="number" min={1} max={1000} value={newVulnMaxUrls} onChange={(e) => setNewVulnMaxUrls(Number(e.target.value) || 50)} />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">冷却分钟</label>
+                        <input className="form-input" type="number" min={1} max={1440} value={newVulnCooldownMin} onChange={(e) => setNewVulnCooldownMin(Number(e.target.value) || 30)} />
+                      </div>
+                    </div>
+                    <div className="monitor-policy-help">建议：生产监控可先启用 new_live + Nuclei，观察稳定后再开启 web_changed。</div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="modal-footer">
               <button className="btn btn-secondary" onClick={closePolicyModal} disabled={submitting}>
                 取消
               </button>
@@ -626,4 +618,3 @@ export function MonitoringPage() {
     </section>
   );
 }
-
