@@ -1874,6 +1874,15 @@ button.module-chip {
   line-height: 1.55;
 }
 
+.job-log-controls .form-select {
+  min-width: 160px;
+}
+
+.job-log-controls .form-input {
+  min-width: 260px;
+  max-width: 420px;
+}
+
 .job-log-line {
   display: flex;
   gap: 10px;
@@ -1885,6 +1894,12 @@ button.module-chip {
 .job-log-time {
   color: #94a3b8;
   flex: 0 0 auto;
+}
+
+.job-log-id {
+  color: #64748b;
+  flex: 0 0 auto;
+  min-width: 54px;
 }
 
 .job-log-level {

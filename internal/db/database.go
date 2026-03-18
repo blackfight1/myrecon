@@ -1577,12 +1577,15 @@ func (d *Database) CreateJobLog(projectID, jobID, level, message string) error {
 }
 
 // ListJobLogs lists job logs in ascending ID order.
-// When sinceID is 0, it returns latest <limit> lines (tail).
-func (d *Database) ListJobLogs(projectID, jobID string, sinceID uint, limit int) ([]JobLog, error) {
+// - sinceID > 0: incremental fetch (id > sinceID)
+// - beforeID > 0: history backfill page (id < beforeID), ascending
+// - default: latest tail page
+// The second return value indicates whether there are older rows before the first item.
+func (d *Database) ListJobLogs(projectID, jobID string, sinceID, beforeID uint, limit int) ([]JobLog, bool, error) {
 	projectID = strings.TrimSpace(projectID)
 	jobID = strings.TrimSpace(jobID)
 	if projectID == "" || jobID == "" {
-		return []JobLog{}, nil
+		return []JobLog{}, false, nil
 	}
 	if limit <= 0 {
 		limit = 200
@@ -1591,25 +1594,46 @@ func (d *Database) ListJobLogs(projectID, jobID string, sinceID uint, limit int)
 		limit = 1000
 	}
 
-	query := d.DB.Model(&JobLog{}).
+	base := d.DB.Model(&JobLog{}).
 		Where("project_id = ? AND job_id = ?", projectID, jobID)
 
 	if sinceID > 0 {
 		var rows []JobLog
-		if err := query.Where("id > ?", sinceID).Order("id asc").Limit(limit).Find(&rows).Error; err != nil {
-			return nil, err
+		if err := base.Where("id > ?", sinceID).Order("id asc").Limit(limit).Find(&rows).Error; err != nil {
+			return nil, false, err
 		}
-		return rows, nil
+		return rows, false, nil
+	}
+
+	if beforeID > 0 {
+		var chunk []JobLog
+		if err := base.Where("id < ?", beforeID).Order("id desc").Limit(limit).Find(&chunk).Error; err != nil {
+			return nil, false, err
+		}
+		for i, j := 0, len(chunk)-1; i < j; i, j = i+1, j-1 {
+			chunk[i], chunk[j] = chunk[j], chunk[i]
+		}
+		if len(chunk) == 0 {
+			return chunk, false, nil
+		}
+		var older JobLog
+		hasMoreBefore := base.Where("id < ?", chunk[0].ID).Order("id desc").Take(&older).Error == nil
+		return chunk, hasMoreBefore, nil
 	}
 
 	var tail []JobLog
-	if err := query.Order("id desc").Limit(limit).Find(&tail).Error; err != nil {
-		return nil, err
+	if err := base.Order("id desc").Limit(limit).Find(&tail).Error; err != nil {
+		return nil, false, err
 	}
 	for i, j := 0, len(tail)-1; i < j; i, j = i+1, j-1 {
 		tail[i], tail[j] = tail[j], tail[i]
 	}
-	return tail, nil
+	if len(tail) == 0 {
+		return tail, false, nil
+	}
+	var older JobLog
+	hasMoreBefore := base.Where("id < ?", tail[0].ID).Order("id desc").Take(&older).Error == nil
+	return tail, hasMoreBefore, nil
 }
 
 // GetScanJob returns a scan job by job_id.

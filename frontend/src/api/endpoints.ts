@@ -154,6 +154,7 @@ export interface JobListQuery {
 
 export interface JobLogsQuery {
   sinceId?: number;
+  beforeId?: number;
   limit?: number;
 }
 
@@ -203,6 +204,7 @@ export const endpoints = {
         project_id: projectId,
         job_id: jobId,
         since_id: q?.sinceId != null ? String(q.sinceId) : undefined,
+        before_id: q?.beforeId != null ? String(q.beforeId) : undefined,
         limit: q?.limit != null ? String(q.limit) : undefined
       })
     ),

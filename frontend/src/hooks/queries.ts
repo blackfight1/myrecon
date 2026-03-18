@@ -51,10 +51,11 @@ export function useJobsPage(projectId: string | undefined, q: JobListQuery) {
 
 export function useJobLogs(projectId: string | undefined, jobId: string | undefined, q?: JobLogsQuery) {
   const sinceId = q?.sinceId ?? 0;
+  const beforeId = q?.beforeId ?? 0;
   const limit = q?.limit ?? 200;
   return useQuery({
-    queryKey: ["job-logs", projectId ?? "", jobId ?? ""],
-    queryFn: () => endpoints.getJobLogs(requiredProjectId(projectId), jobId ?? "", { sinceId, limit }),
+    queryKey: ["job-logs", projectId ?? "", jobId ?? "", String(sinceId), String(beforeId), String(limit)],
+    queryFn: () => endpoints.getJobLogs(requiredProjectId(projectId), jobId ?? "", { sinceId, beforeId, limit }),
     enabled: !!projectId && !!jobId,
     refetchInterval: 3000
   });

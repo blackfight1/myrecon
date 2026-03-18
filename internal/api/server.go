@@ -189,9 +189,10 @@ type jobLogItemResponse struct {
 }
 
 type jobLogsResponse struct {
-	Items     []jobLogItemResponse `json:"items"`
-	SinceID   uint                 `json:"sinceId"`
-	JobStatus string               `json:"jobStatus"`
+	Items         []jobLogItemResponse `json:"items"`
+	SinceID       uint                 `json:"sinceId"`
+	JobStatus     string               `json:"jobStatus"`
+	HasMoreBefore bool                 `json:"hasMoreBefore"`
 }
 
 type portResponse struct {
@@ -2846,6 +2847,15 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		sinceID = uint(n)
 	}
+	beforeID := uint(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("before_id")); raw != "" {
+		n, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid before_id")
+			return
+		}
+		beforeID = uint(n)
+	}
 
 	limit := 200
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
@@ -2863,7 +2873,7 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 		limit = 1000
 	}
 
-	rows, err := s.db.ListJobLogs(projectID, jobID, sinceID, limit)
+	rows, hasMoreBefore, err := s.db.ListJobLogs(projectID, jobID, sinceID, beforeID, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -2885,9 +2895,10 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 
 	status := s.resolveJobStatus(projectID, jobID)
 	writeJSON(w, http.StatusOK, jobLogsResponse{
-		Items:     resp,
-		SinceID:   nextSinceID,
-		JobStatus: status,
+		Items:         resp,
+		SinceID:       nextSinceID,
+		JobStatus:     status,
+		HasMoreBefore: hasMoreBefore,
 	})
 }
 

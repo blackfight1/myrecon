@@ -51,6 +51,7 @@ export interface JobLogsPayload {
   items: JobLogLine[];
   sinceId: number;
   jobStatus: HealthStatus | string;
+  hasMoreBefore?: boolean;
 }
 
 export interface Asset {

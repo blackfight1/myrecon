@@ -1,0 +1,12 @@
+# Frontend dependencies/build output
+frontend/node_modules/
+frontend/dist/
+
+# TypeScript incremental cache
+frontend/*.tsbuildinfo
+
+# Generated JS/DTS when TS compiler emits in-place
+frontend/src/**/*.js
+frontend/src/**/*.d.ts
+frontend/*.js
+frontend/*.d.ts
