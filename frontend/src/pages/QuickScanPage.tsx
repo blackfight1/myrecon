@@ -15,6 +15,7 @@ export function QuickScanPage() {
   const [scanDomain, setScanDomain] = useState(activeProject?.rootDomains?.[0] ?? "");
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
+  const [enableCors, setEnableCors] = useState(false);
   const [enableActiveSubs, setEnableActiveSubs] = useState(false);
   const [enableBbotActive, setEnableBbotActive] = useState(false);
   const [enableNotify, setEnableNotify] = useState(true);
@@ -27,9 +28,10 @@ export function QuickScanPage() {
       ...(enableActiveSubs ? ["dnsx_bruteforce"] : []),
       ...(enableBbotActive ? ["bbot_active"] : []),
       ...(enableWitness ? ["witness"] : []),
-      ...(enableNuclei ? ["nuclei"] : [])
+      ...(enableNuclei ? ["nuclei"] : []),
+      ...(enableCors ? ["cors"] : [])
     ],
-    [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei]
+    [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei, enableCors]
   );
 
   useEffect(() => {
@@ -41,6 +43,7 @@ export function QuickScanPage() {
   useEffect(() => {
     if (defaultsLoaded || !scannerDefaults) return;
     setEnableNuclei(scannerDefaults.defaultNuclei);
+    setEnableCors(scannerDefaults.defaultNuclei);
     setEnableActiveSubs(scannerDefaults.defaultActiveSubs);
     setDefaultsLoaded(true);
   }, [defaultsLoaded, scannerDefaults]);
@@ -60,6 +63,7 @@ export function QuickScanPage() {
     if (enableBbotActive) modules.push("bbot_active");
     if (enableWitness) modules.push("witness");
     if (enableNuclei) modules.push("nuclei");
+    if (enableCors) modules.push("cors");
 
     try {
       const job = await createJob.mutateAsync({
@@ -132,6 +136,9 @@ export function QuickScanPage() {
             </button>
             <button className={`module-chip ${enableNuclei ? "active" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
               漏洞扫描 {enableNuclei ? "ON" : "OFF"}
+            </button>
+            <button className={`module-chip ${enableCors ? "active" : ""}`} onClick={() => setEnableCors((v) => !v)}>
+              高危CORS {enableCors ? "ON" : "OFF"}
             </button>
             <button className={`module-chip ${enableActiveSubs ? "active" : ""}`} onClick={() => setEnableActiveSubs((v) => !v)}>
               主动子域 {enableActiveSubs ? "ON" : "OFF"}

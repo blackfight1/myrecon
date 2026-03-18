@@ -2516,9 +2516,6 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		if enableNuclei && !containsAnyModule(modules, "nuclei") {
 			modules = append(modules, "nuclei")
 		}
-		if enableNuclei && autoCorsWithNuclei && !containsAnyModule(modules, "cors") {
-			modules = append(modules, "cors")
-		}
 		if activeSubs && !containsAnyModule(modules, "dnsx_bruteforce", "dictgen") {
 			modules = append(modules, "dnsx_bruteforce")
 		}
@@ -2810,7 +2807,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	hasPorts := containsAnyModule(modules, "ports", "naabu", "nmap")
 	hasWitness := containsAnyModule(modules, "witness", "gowitness")
 	hasNuclei := enableNuclei || containsAnyModule(modules, "nuclei")
-	hasCors := containsAnyModule(modules, "cors") || (hasNuclei && shouldEnableCorsWithNuclei())
+	hasCors := containsAnyModule(modules, "cors")
 	// Nuclei/Cors/Witness all depend on live HTTP targets from httpx.
 	hasHttpx := containsAnyModule(modules, "httpx") || hasNuclei || hasCors || hasWitness
 

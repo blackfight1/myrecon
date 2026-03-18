@@ -45,6 +45,7 @@ export function JobsPage() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
+  const [enableCors, setEnableCors] = useState(false);
   const [enableActiveSubs, setEnableActiveSubs] = useState(false);
   const [enableBbotActive, setEnableBbotActive] = useState(false);
   const [enableNotify, setEnableNotify] = useState(true);
@@ -54,6 +55,7 @@ export function JobsPage() {
   useEffect(() => {
     if (defaultsLoaded || !scannerDefaults) return;
     setEnableNuclei(scannerDefaults.defaultNuclei);
+    setEnableCors(scannerDefaults.defaultNuclei);
     setEnableActiveSubs(scannerDefaults.defaultActiveSubs);
     setDefaultsLoaded(true);
   }, [defaultsLoaded, scannerDefaults]);
@@ -192,9 +194,10 @@ export function JobsPage() {
       ...(enableActiveSubs ? ["dnsx_bruteforce"] : []),
       ...(enableBbotActive ? ["bbot_active"] : []),
       ...(enableWitness ? ["witness"] : []),
-      ...(enableNuclei ? ["nuclei"] : [])
+      ...(enableNuclei ? ["nuclei"] : []),
+      ...(enableCors ? ["cors"] : [])
     ],
-    [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei]
+    [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei, enableCors]
   );
 
   const launchScan = async () => {
@@ -209,6 +212,7 @@ export function JobsPage() {
     if (enableBbotActive) modules.push("bbot_active");
     if (enableWitness) modules.push("witness");
     if (enableNuclei) modules.push("nuclei");
+    if (enableCors) modules.push("cors");
 
     const success: string[] = [];
     const failed: string[] = [];
@@ -268,6 +272,9 @@ export function JobsPage() {
           </button>
           <button className={`btn btn-sm${enableNuclei ? " btn-primary" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
             漏洞扫描 {enableNuclei ? "开启" : "关闭"}
+          </button>
+          <button className={`btn btn-sm${enableCors ? " btn-primary" : ""}`} onClick={() => setEnableCors((v) => !v)}>
+            高危CORS {enableCors ? "开启" : "关闭"}
           </button>
           <button className={`btn btn-sm${enableActiveSubs ? " btn-primary" : ""}`} onClick={() => setEnableActiveSubs((v) => !v)}>
             主动子域 {enableActiveSubs ? "开启" : "关闭"}
