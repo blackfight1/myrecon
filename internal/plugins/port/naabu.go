@@ -102,9 +102,10 @@ func (n *NaabuPlugin) Execute(input []string) ([]engine.Result, error) {
 		results = append(results, engine.Result{
 			Type: "open_port",
 			Data: map[string]interface{}{
-				"host": naabuResult.Host,
-				"ip":   naabuResult.IP,
-				"port": naabuResult.Port,
+				"host":   naabuResult.Host,
+				"domain": naabuResult.Host,
+				"ip":     naabuResult.IP,
+				"port":   naabuResult.Port,
 			},
 		})
 	}

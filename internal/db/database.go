@@ -347,7 +347,11 @@ func (d *Database) GetRecentAssets(since time.Time) ([]Asset, error) {
 func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 	ip := getStringValue(data, "ip")
 	port := getIntValue(data, "port")
-	domain := getStringValue(data, "domain")
+	domain := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(getStringValue(data, "domain")), "."))
+	if domain == "" {
+		domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(getStringValue(data, "host")), "."))
+	}
+	protocol := defaultProtocol(getStringValue(data, "protocol"))
 	projectID := strings.TrimSpace(getStringValue(data, "project_id"))
 	if projectID == "" {
 		projectID = "default"
@@ -402,7 +406,16 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 	}
 
 	var existingPort Port
-	result := d.DB.Where("project_id = ? AND asset_id = ? AND ip = ? AND port = ? AND protocol = ? AND domain = ?", projectID, asset.ID, ip, port, defaultProtocol(getStringValue(data, "protocol")), domain).First(&existingPort)
+	result := d.DB.Where("project_id = ? AND ip = ? AND port = ? AND protocol = ? AND domain = ?", projectID, ip, port, protocol, domain).First(&existingPort)
+	// Backward-compat merge path:
+	// old records might exist with empty domain from naabu "open_port",
+	// then nmap "port_service" arrives with a domain and should enrich same row.
+	if result.Error == gorm.ErrRecordNotFound && domain != "" {
+		fallback := d.DB.Where("project_id = ? AND ip = ? AND port = ? AND protocol = ? AND COALESCE(domain, '') = ''", projectID, ip, port, protocol).First(&existingPort)
+		if fallback.Error == nil {
+			result = fallback
+		}
+	}
 	now := time.Now()
 
 	if result.Error == gorm.ErrRecordNotFound {
@@ -413,7 +426,7 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 			Domain:       domain,
 			IP:           ip,
 			Port:         port,
-			Protocol:     defaultProtocol(getStringValue(data, "protocol")),
+			Protocol:     protocol,
 			Service:      getStringValue(data, "service"),
 			Version:      getStringValue(data, "version"),
 			Banner:       getStringValue(data, "banner"),
@@ -427,6 +440,12 @@ func (d *Database) SaveOrUpdatePort(data map[string]interface{}) error {
 		}
 	} else if result.Error == nil {
 		updates := map[string]interface{}{"last_seen": now}
+		if existingPort.AssetID != asset.ID {
+			updates["asset_id"] = asset.ID
+		}
+		if domain != "" && strings.TrimSpace(existingPort.Domain) == "" {
+			updates["domain"] = domain
+		}
 		if rootDomain != "" {
 			updates["root_domain"] = rootDomain
 		}

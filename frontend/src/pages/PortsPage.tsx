@@ -11,12 +11,13 @@ import type { PortListQuery } from "../api/endpoints";
 const col = createColumnHelper<PortRecord>();
 
 const columns = [
-  col.accessor("domain", { header: "域名", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("domain", { header: "域名", cell: (c) => c.getValue() || <span className="cell-mono">{c.row.original.ip}</span> }),
   col.accessor("ip", { header: "IP", cell: (c) => <span className="cell-mono">{c.getValue()}</span> }),
   col.accessor("port", { header: "端口", cell: (c) => <span className="cell-mono">{c.getValue()}</span> }),
   col.accessor("protocol", { header: "协议", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
   col.accessor("service", { header: "服务", cell: (c) => c.getValue() ? <span className="badge badge-info">{c.getValue()}</span> : <span className="cell-muted">—</span> }),
   col.accessor("version", { header: "版本", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
+  col.accessor("banner", { header: "Banner", cell: (c) => c.getValue() || <span className="cell-muted">—</span> }),
   col.accessor("lastSeen", { header: "最后发现", cell: (c) => formatDate(c.getValue()) })
 ];
 
@@ -68,7 +69,7 @@ export function PortsPage() {
         <p className="page-desc">按项目根域名筛选的服务暴露记录，支持服务端分页与排序。</p>
       </div>
 
-      <ProjectScopeBanner title="端口范围" hint="服务端按项目范围过滤，支持搜索域名/IP/服务/版本。" />
+      <ProjectScopeBanner title="端口范围" hint="服务端按项目范围过滤，支持搜索域名/IP/服务/版本/Banner。" />
 
       <article className="panel">
         <header className="panel-header">
@@ -80,7 +81,7 @@ export function PortsPage() {
             className="form-input"
             value={search}
             onChange={handleSearchChange}
-            placeholder="搜索域名/IP/服务/版本..."
+            placeholder="搜索域名/IP/服务/版本/Banner..."
           />
           <span className="filter-summary">第 {page} 页，每页 {pageSize} 条</span>
         </div>

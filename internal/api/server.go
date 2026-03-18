@@ -2068,6 +2068,19 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 
 	base := s.db.DB.Model(&db.Port{}).Where("project_id = ?", projectID)
+	// Suppress stale split rows: when the same ip:port/proto exists with both
+	// empty-domain and non-empty-domain records, keep the domain-bound one.
+	base = base.Where(`NOT (
+		COALESCE(domain, '') = '' AND EXISTS (
+			SELECT 1 FROM ports p2
+			WHERE p2.project_id = ports.project_id
+			  AND p2.ip = ports.ip
+			  AND p2.port = ports.port
+			  AND p2.protocol = ports.protocol
+			  AND COALESCE(p2.domain, '') <> ''
+			  AND p2.deleted_at IS NULL
+		)
+	)`)
 
 	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
 		pattern := "%." + rd
@@ -2079,8 +2092,8 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 	if search != "" {
 		pattern := "%" + search + "%"
 		base = base.Where(
-			"LOWER(domain) LIKE ? OR LOWER(ip) LIKE ? OR LOWER(service) LIKE ? OR LOWER(version) LIKE ?",
-			pattern, pattern, pattern, pattern,
+			"LOWER(domain) LIKE ? OR LOWER(ip) LIKE ? OR LOWER(service) LIKE ? OR LOWER(version) LIKE ? OR LOWER(banner) LIKE ?",
+			pattern, pattern, pattern, pattern, pattern,
 		)
 	}
 
@@ -3141,6 +3154,13 @@ func (s *Server) saveResultsToDB(projectID, rootDomain, jobID string, results []
 			}
 		case "port_service", "open_port":
 			if data, ok := result.Data.(map[string]interface{}); ok {
+				// Normalize host/domain from different port scanners (naabu/nmap)
+				// to avoid split rows without fingerprint enrichment.
+				if mapString(data, "domain") == "" {
+					if host := strings.ToLower(strings.TrimSpace(mapString(data, "host"))); host != "" {
+						data["domain"] = strings.TrimSuffix(host, ".")
+					}
+				}
 				data["project_id"] = projectID
 				if mapString(data, "root_domain") == "" {
 					data["root_domain"] = rootDomain
