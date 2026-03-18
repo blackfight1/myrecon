@@ -25,6 +25,10 @@ import (
 
 const (
 	defaultMonitorIntervalSec   = 6 * 3600
+	defaultMonitorVulnMaxURLs   = 50
+	defaultMonitorVulnCooldown  = 30
+	maxMonitorVulnMaxURLs       = 1000
+	maxMonitorVulnCooldownMin   = 24 * 60
 	maxListRows                 = 5000
 	schedulerPollInterval       = 15 * time.Second
 	scanWorkerPollInterval      = 3 * time.Second
@@ -232,16 +236,24 @@ type vulnerabilityResponse struct {
 }
 
 type monitorTargetResponse struct {
-	ID              int    `json:"id"`
-	ProjectID       string `json:"projectId,omitempty"`
-	RootDomain      string `json:"rootDomain"`
-	Enabled         bool   `json:"enabled"`
-	BaselineDone    bool   `json:"baselineDone"`
-	BaselineVersion int    `json:"baselineVersion"`
-	BaselineAt      string `json:"baselineAt,omitempty"`
-	LastRunAt       string `json:"lastRunAt,omitempty"`
-	CreatedAt       string `json:"createdAt,omitempty"`
-	UpdatedAt       string `json:"updatedAt,omitempty"`
+	ID               int    `json:"id"`
+	ProjectID        string `json:"projectId,omitempty"`
+	RootDomain       string `json:"rootDomain"`
+	Enabled          bool   `json:"enabled"`
+	EnableVulnScan   bool   `json:"enableVulnScan"`
+	EnableNuclei     bool   `json:"enableNuclei"`
+	EnableCors       bool   `json:"enableCors"`
+	VulnOnNewLive    bool   `json:"vulnOnNewLive"`
+	VulnOnWebChanged bool   `json:"vulnOnWebChanged"`
+	VulnMaxURLs      int    `json:"vulnMaxUrls"`
+	VulnCooldownMin  int    `json:"vulnCooldownMin"`
+	LastVulnScanAt   string `json:"lastVulnScanAt,omitempty"`
+	BaselineDone     bool   `json:"baselineDone"`
+	BaselineVersion  int    `json:"baselineVersion"`
+	BaselineAt       string `json:"baselineAt,omitempty"`
+	LastRunAt        string `json:"lastRunAt,omitempty"`
+	CreatedAt        string `json:"createdAt,omitempty"`
+	UpdatedAt        string `json:"updatedAt,omitempty"`
 }
 
 type monitorRunResponse struct {
@@ -374,9 +386,16 @@ type monitorChangeSortItem struct {
 }
 
 type createMonitorRequest struct {
-	ProjectID   string `json:"projectId"`
-	Domain      string `json:"domain"`
-	IntervalSec int    `json:"intervalSec"`
+	ProjectID        string `json:"projectId"`
+	Domain           string `json:"domain"`
+	IntervalSec      int    `json:"intervalSec"`
+	EnableVulnScan   *bool  `json:"enableVulnScan"`
+	EnableNuclei     *bool  `json:"enableNuclei"`
+	EnableCors       *bool  `json:"enableCors"`
+	VulnOnNewLive    *bool  `json:"vulnOnNewLive"`
+	VulnOnWebChanged *bool  `json:"vulnOnWebChanged"`
+	VulnMaxURLs      *int   `json:"vulnMaxUrls"`
+	VulnCooldownMin  *int   `json:"vulnCooldownMin"`
 }
 
 type projectResponse struct {
@@ -1009,6 +1028,33 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 	// Detect changes
 	newLive, webChanged, portOpened, portClosed, svcChanged := s.detectChanges(task.ProjectID, rootDomain, run.ID, target)
 
+	// Optional: run vulnerability scan for incremental monitor changes.
+	policy := monitorVulnPolicyFromTarget(target)
+	monitorVulnCount := 0
+	if policy.EnableVulnScan && (policy.EnableNuclei || policy.EnableCors) {
+		cooldown := time.Duration(policy.VulnCooldownMin) * time.Minute
+		if target.LastVulnScanAt != nil && cooldown > 0 && time.Since(*target.LastVulnScanAt) < cooldown {
+			nextAt := target.LastVulnScanAt.Add(cooldown)
+			s.appendJobLogf(task.ProjectID, jobID, "info", "监控增量漏扫冷却中，跳过本轮：next=%s", timeToISO(nextAt))
+		} else {
+			vulnTargets, targetErr := s.collectMonitorVulnTargets(task.ProjectID, run.ID, policy.VulnOnNewLive, policy.VulnOnWebChanged, policy.VulnMaxURLs)
+			if targetErr != nil {
+				s.appendJobLogf(task.ProjectID, jobID, "warn", "监控增量漏扫目标提取失败: %v", targetErr)
+			} else if len(vulnTargets) == 0 {
+				s.appendJobLog(task.ProjectID, jobID, "info", "监控增量漏扫跳过：本轮无符合策略的增量 URL")
+			} else {
+				s.appendJobLogf(task.ProjectID, jobID, "info", "阶段开始: 增量漏洞扫描 (urls=%d nuclei=%v cors=%v)", len(vulnTargets), policy.EnableNuclei, policy.EnableCors)
+				vulnResults, vulnErr := s.runMonitorVulnPipeline(task.ProjectID, rootDomain, run.ID, vulnTargets, policy.EnableNuclei, policy.EnableCors)
+				if vulnErr != nil {
+					s.appendJobLogf(task.ProjectID, jobID, "warn", "监控增量漏扫告警: %v", vulnErr)
+				}
+				monitorVulnCount = countResults(vulnResults)["vulnerabilities"]
+				s.appendJobLogf(task.ProjectID, jobID, "info", "监控增量漏扫完成: new_vulns=%d", monitorVulnCount)
+				_ = s.db.UpdateMonitorTargetLastVulnScan(task.ProjectID, rootDomain, time.Now())
+			}
+		}
+	}
+
 	// Complete run
 	status := "success"
 	_ = s.db.CompleteMonitorRun(run.ID, status, "", newLive, webChanged, portOpened, portClosed, svcChanged)
@@ -1022,8 +1068,8 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 
 	totalChanges := newLive + webChanged + portOpened + portClosed + svcChanged
 	log.Printf("[Scheduler] monitor task %d completed for %s: %d total changes", task.ID, rootDomain, totalChanges)
-	s.appendJobLogf(task.ProjectID, jobID, "info", "监控任务完成: changes=%d (new_live=%d web_changed=%d port_opened=%d port_closed=%d service_changed=%d)",
-		totalChanges, newLive, webChanged, portOpened, portClosed, svcChanged)
+	s.appendJobLogf(task.ProjectID, jobID, "info", "监控任务完成: changes=%d (new_live=%d web_changed=%d port_opened=%d port_closed=%d service_changed=%d) new_vulns=%d",
+		totalChanges, newLive, webChanged, portOpened, portClosed, svcChanged, monitorVulnCount)
 
 	// Send notification if changes detected
 	if totalChanges > 0 {
@@ -1099,6 +1145,103 @@ func (s *Server) detectChanges(projectID, rootDomain string, runID uint, target 
 	portOpened, portClosed, svcChanged = s.syncPortMonitorEvents(projectID, rootDomain, runID, currentPorts)
 
 	return newLive, webChanged, portOpened, portClosed, svcChanged
+}
+
+func (s *Server) collectMonitorVulnTargets(projectID string, runID uint, includeNewLive, includeWebChanged bool, limit int) ([]string, error) {
+	types := make([]string, 0, 2)
+	if includeNewLive {
+		types = append(types, "new_live")
+	}
+	if includeWebChanged {
+		types = append(types, "web_changed")
+	}
+	if len(types) == 0 || runID == 0 {
+		return []string{}, nil
+	}
+	limit = clampMonitorVulnMaxURLs(limit)
+
+	var rows []db.AssetChange
+	queryLimit := limit * 4
+	if queryLimit < 100 {
+		queryLimit = 100
+	}
+	if queryLimit > 2000 {
+		queryLimit = 2000
+	}
+	if err := s.db.DB.
+		Where("project_id = ? AND run_id = ? AND change_type IN ? AND BTRIM(COALESCE(url, '')) <> ''", projectID, runID, types).
+		Order("id desc").
+		Limit(queryLimit).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool, len(rows))
+	urls := make([]string, 0, limit)
+	for _, row := range rows {
+		u := strings.TrimSpace(row.URL)
+		if u == "" {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSuffix(u, "/"))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		urls = append(urls, u)
+		if len(urls) >= limit {
+			break
+		}
+	}
+	return urls, nil
+}
+
+func (s *Server) runMonitorVulnPipeline(projectID, rootDomain string, runID uint, urls []string, enableNuclei, enableCors bool) ([]engine.Result, error) {
+	if len(urls) == 0 {
+		return []engine.Result{}, nil
+	}
+
+	inputs := make([]string, 0, len(urls))
+	for _, u := range urls {
+		trimmed := strings.TrimSpace(u)
+		if trimmed == "" {
+			continue
+		}
+		inputs = append(inputs, trimmed+"|"+rootDomain)
+	}
+	if len(inputs) == 0 {
+		return []engine.Result{}, nil
+	}
+
+	allResults := make([]engine.Result, 0, 64)
+	var firstErr error
+
+	if enableNuclei {
+		nucleiResults, err := plugins.NewNucleiPlugin().Execute(inputs)
+		if err != nil {
+			firstErr = err
+		}
+		allResults = append(allResults, nucleiResults...)
+	}
+	if enableCors {
+		corsResults, err := plugins.NewCorsPlugin().Execute(inputs)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		allResults = append(allResults, corsResults...)
+	}
+
+	if len(allResults) > 0 {
+		jobID := fmt.Sprintf("mon-run-%d-vuln", runID)
+		if err := s.saveResultsToDB(projectID, rootDomain, jobID, allResults); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			} else {
+				firstErr = fmt.Errorf("%v; save vuln results failed: %w", firstErr, err)
+			}
+		}
+	}
+	return allResults, firstErr
 }
 
 func (s *Server) syncLiveMonitorEvents(projectID, rootDomain string, runID uint, assets []db.Asset) (opened, webChanged, resolved int) {
@@ -2541,7 +2684,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if mode == "monitor" {
-		if err := s.db.EnableMonitorTarget(projectID, rootDomain, defaultMonitorIntervalSec, 3); err != nil {
+		if err := s.db.EnableMonitorTarget(projectID, rootDomain, defaultMonitorIntervalSec, 3, nil); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create monitor task: "+err.Error())
 			return
 		}
@@ -3305,6 +3448,8 @@ func (s *Server) handleMonitorTargets(w http.ResponseWriter, r *http.Request) {
 		s.handleListMonitorTargets(w, r)
 	case http.MethodPost:
 		s.handleCreateMonitorTarget(w, r)
+	case http.MethodPut:
+		s.handleUpdateMonitorTarget(w, r)
 	case http.MethodDelete:
 		s.handleDeleteMonitorTarget(w, r)
 	default:
@@ -3325,10 +3470,26 @@ func (s *Server) handleListMonitorTargets(w http.ResponseWriter, r *http.Request
 	}
 	resp := make([]monitorTargetResponse, 0, len(targets))
 	for _, t := range targets {
+		policy := monitorVulnPolicyFromTarget(&t)
 		resp = append(resp, monitorTargetResponse{
-			ID: int(t.ID), ProjectID: t.ProjectID, RootDomain: t.RootDomain, Enabled: t.Enabled,
-			BaselineDone: t.BaselineDone, BaselineVersion: t.BaselineVersion, BaselineAt: timePtrToISO(t.BaselineAt), LastRunAt: timePtrToISO(t.LastRunAt),
-			CreatedAt: timeToISO(t.CreatedAt), UpdatedAt: timeToISO(t.UpdatedAt),
+			ID:               int(t.ID),
+			ProjectID:        t.ProjectID,
+			RootDomain:       t.RootDomain,
+			Enabled:          t.Enabled,
+			EnableVulnScan:   policy.EnableVulnScan,
+			EnableNuclei:     policy.EnableNuclei,
+			EnableCors:       policy.EnableCors,
+			VulnOnNewLive:    policy.VulnOnNewLive,
+			VulnOnWebChanged: policy.VulnOnWebChanged,
+			VulnMaxURLs:      policy.VulnMaxURLs,
+			VulnCooldownMin:  policy.VulnCooldownMin,
+			LastVulnScanAt:   timePtrToISO(t.LastVulnScanAt),
+			BaselineDone:     t.BaselineDone,
+			BaselineVersion:  t.BaselineVersion,
+			BaselineAt:       timePtrToISO(t.BaselineAt),
+			LastRunAt:        timePtrToISO(t.LastRunAt),
+			CreatedAt:        timeToISO(t.CreatedAt),
+			UpdatedAt:        timeToISO(t.UpdatedAt),
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -3361,11 +3522,50 @@ func (s *Server) handleCreateMonitorTarget(w http.ResponseWriter, r *http.Reques
 	if intervalSec <= 0 {
 		intervalSec = defaultMonitorIntervalSec
 	}
-	if err := s.db.EnableMonitorTarget(projectID, domain, intervalSec, 3); err != nil {
+	if err := s.db.EnableMonitorTarget(projectID, domain, intervalSec, 3, buildMonitorTargetOptions(req)); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "projectId": projectID, "domain": domain, "intervalSec": intervalSec})
+}
+
+func (s *Server) handleUpdateMonitorTarget(w http.ResponseWriter, r *http.Request) {
+	var req createMonitorRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	projectID := strings.TrimSpace(req.ProjectID)
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "projectId is required")
+		return
+	}
+	domain := normalizeRootDomain(req.Domain)
+	if domain == "" {
+		writeError(w, http.StatusBadRequest, "domain is required")
+		return
+	}
+	if ok, err := s.isDomainInProjectScope(projectID, domain); err != nil {
+		writeError(w, http.StatusInternalServerError, "project scope check failed: "+err.Error())
+		return
+	} else if !ok {
+		writeError(w, http.StatusBadRequest, "domain is not in project scope")
+		return
+	}
+	opts := buildMonitorTargetOptions(req)
+	if opts == nil {
+		writeError(w, http.StatusBadRequest, "no monitor policy fields provided")
+		return
+	}
+	if err := s.db.UpdateMonitorTargetOptions(projectID, domain, opts); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeError(w, http.StatusNotFound, "monitor target not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "projectId": projectID, "domain": domain})
 }
 
 func (s *Server) handleDeleteMonitorTarget(w http.ResponseWriter, r *http.Request) {
@@ -4083,6 +4283,85 @@ func clampDictSize(n int) int {
 		return 100000
 	}
 	return n
+}
+
+type monitorVulnPolicy struct {
+	EnableVulnScan   bool
+	EnableNuclei     bool
+	EnableCors       bool
+	VulnOnNewLive    bool
+	VulnOnWebChanged bool
+	VulnMaxURLs      int
+	VulnCooldownMin  int
+}
+
+func clampMonitorVulnMaxURLs(n int) int {
+	if n <= 0 {
+		return defaultMonitorVulnMaxURLs
+	}
+	if n > maxMonitorVulnMaxURLs {
+		return maxMonitorVulnMaxURLs
+	}
+	return n
+}
+
+func clampMonitorVulnCooldownMin(n int) int {
+	if n <= 0 {
+		return defaultMonitorVulnCooldown
+	}
+	if n > maxMonitorVulnCooldownMin {
+		return maxMonitorVulnCooldownMin
+	}
+	return n
+}
+
+func monitorVulnPolicyFromTarget(target *db.MonitorTarget) monitorVulnPolicy {
+	policy := monitorVulnPolicy{
+		EnableVulnScan:   false,
+		EnableNuclei:     false,
+		EnableCors:       false,
+		VulnOnNewLive:    true,
+		VulnOnWebChanged: false,
+		VulnMaxURLs:      defaultMonitorVulnMaxURLs,
+		VulnCooldownMin:  defaultMonitorVulnCooldown,
+	}
+	if target == nil {
+		return policy
+	}
+	policy.EnableVulnScan = target.EnableVulnScan
+	policy.EnableNuclei = target.EnableNuclei
+	policy.EnableCors = target.EnableCors
+	policy.VulnOnNewLive = target.VulnOnNewLive
+	policy.VulnOnWebChanged = target.VulnOnWebChanged
+	policy.VulnMaxURLs = clampMonitorVulnMaxURLs(target.VulnMaxURLs)
+	policy.VulnCooldownMin = clampMonitorVulnCooldownMin(target.VulnCooldownMin)
+	// Guard against misconfiguration where no trigger is selected.
+	if !policy.VulnOnNewLive && !policy.VulnOnWebChanged {
+		policy.VulnOnNewLive = true
+	}
+	return policy
+}
+
+func buildMonitorTargetOptions(req createMonitorRequest) *db.MonitorTargetOptions {
+	if req.EnableVulnScan == nil &&
+		req.EnableNuclei == nil &&
+		req.EnableCors == nil &&
+		req.VulnOnNewLive == nil &&
+		req.VulnOnWebChanged == nil &&
+		req.VulnMaxURLs == nil &&
+		req.VulnCooldownMin == nil {
+		return nil
+	}
+	opts := &db.MonitorTargetOptions{
+		EnableVulnScan:   req.EnableVulnScan,
+		EnableNuclei:     req.EnableNuclei,
+		EnableCors:       req.EnableCors,
+		VulnOnNewLive:    req.VulnOnNewLive,
+		VulnOnWebChanged: req.VulnOnWebChanged,
+		VulnMaxURLs:      req.VulnMaxURLs,
+		VulnCooldownMin:  req.VulnCooldownMin,
+	}
+	return opts
 }
 
 func maskSecret(s string) string {

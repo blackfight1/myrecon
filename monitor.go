@@ -60,7 +60,7 @@ func runMonitorLoop(projectID, rootDomain string, interval time.Duration, dryRun
 		intervalSec = 3600
 	}
 
-	if err := database.EnableMonitorTarget(projectID, rootDomain, intervalSec, 3); err != nil {
+	if err := database.EnableMonitorTarget(projectID, rootDomain, intervalSec, 3, nil); err != nil {
 		fmt.Printf("[Monitor] enable target failed: %v\n", err)
 		return
 	}

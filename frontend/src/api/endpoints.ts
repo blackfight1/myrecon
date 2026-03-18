@@ -51,6 +51,25 @@ export interface CreateMonitorTargetRequest {
   projectId: string;
   domain: string;
   intervalSec?: number;
+  enableVulnScan?: boolean;
+  enableNuclei?: boolean;
+  enableCors?: boolean;
+  vulnOnNewLive?: boolean;
+  vulnOnWebChanged?: boolean;
+  vulnMaxUrls?: number;
+  vulnCooldownMin?: number;
+}
+
+export interface UpdateMonitorTargetRequest {
+  projectId: string;
+  domain: string;
+  enableVulnScan?: boolean;
+  enableNuclei?: boolean;
+  enableCors?: boolean;
+  vulnOnNewLive?: boolean;
+  vulnOnWebChanged?: boolean;
+  vulnMaxUrls?: number;
+  vulnCooldownMin?: number;
 }
 
 export interface ProjectUpsertRequest {
@@ -254,6 +273,8 @@ export const endpoints = {
     apiGet<MonitorTarget[]>(withQuery("/monitor/targets", { project_id: projectId })),
   createMonitorTarget: (body: CreateMonitorTargetRequest) =>
     apiPost<CreateMonitorTargetRequest, { status: string; domain: string; intervalSec: number }>("/monitor/targets", body),
+  updateMonitorTarget: (body: UpdateMonitorTargetRequest) =>
+    apiPut<UpdateMonitorTargetRequest, { status: string; domain: string }>("/monitor/targets", body),
   stopMonitorTarget: (projectId: string, domain: string) =>
     apiDelete<{ status: string; domain: string }>(
       withQuery("/monitor/targets", { project_id: projectId, domain, action: "stop" })

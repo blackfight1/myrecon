@@ -269,18 +269,26 @@ func (MonitorEvent) TableName() string {
 
 // MonitorTarget stores monitor target baseline state.
 type MonitorTarget struct {
-	ID              uint           `gorm:"primarykey" json:"id"`
-	ProjectID       string         `gorm:"index:idx_monitor_target_project_root,unique;not null;default:'default'" json:"project_id"`
-	Owner           string         `gorm:"index" json:"owner"`
-	RootDomain      string         `gorm:"index:idx_monitor_target_project_root,unique;not null" json:"root_domain"`
-	Enabled         bool           `gorm:"default:true;index" json:"enabled"`
-	BaselineDone    bool           `gorm:"default:false" json:"baseline_done"`
-	BaselineVersion int            `gorm:"column:baseline_version;default:0" json:"baseline_version"`
-	BaselineAt      *time.Time     `json:"baseline_at"`
-	LastRunAt       *time.Time     `json:"last_run_at"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
-	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	ID               uint           `gorm:"primarykey" json:"id"`
+	ProjectID        string         `gorm:"index:idx_monitor_target_project_root,unique;not null;default:'default'" json:"project_id"`
+	Owner            string         `gorm:"index" json:"owner"`
+	RootDomain       string         `gorm:"index:idx_monitor_target_project_root,unique;not null" json:"root_domain"`
+	Enabled          bool           `gorm:"default:true;index" json:"enabled"`
+	EnableVulnScan   bool           `gorm:"default:false" json:"enable_vuln_scan"`
+	EnableNuclei     bool           `gorm:"default:false" json:"enable_nuclei"`
+	EnableCors       bool           `gorm:"default:false" json:"enable_cors"`
+	VulnOnNewLive    bool           `gorm:"default:true" json:"vuln_on_new_live"`
+	VulnOnWebChanged bool           `gorm:"default:false" json:"vuln_on_web_changed"`
+	VulnMaxURLs      int            `gorm:"default:50" json:"vuln_max_urls"`
+	VulnCooldownMin  int            `gorm:"default:30" json:"vuln_cooldown_min"`
+	LastVulnScanAt   *time.Time     `json:"last_vuln_scan_at"`
+	BaselineDone     bool           `gorm:"default:false" json:"baseline_done"`
+	BaselineVersion  int            `gorm:"column:baseline_version;default:0" json:"baseline_version"`
+	BaselineAt       *time.Time     `json:"baseline_at"`
+	LastRunAt        *time.Time     `json:"last_run_at"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // TableName table name.

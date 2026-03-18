@@ -140,6 +140,14 @@ export interface MonitorTarget {
   projectId?: string;
   rootDomain: string;
   enabled: boolean;
+  enableVulnScan?: boolean;
+  enableNuclei?: boolean;
+  enableCors?: boolean;
+  vulnOnNewLive?: boolean;
+  vulnOnWebChanged?: boolean;
+  vulnMaxUrls?: number;
+  vulnCooldownMin?: number;
+  lastVulnScanAt?: string;
   baselineDone: boolean;
   baselineVersion?: number;
   baselineAt?: string;

@@ -5,6 +5,7 @@ import {
   type CancelJobRequest,
   type DeleteJobRequest,
   type CreateMonitorTargetRequest,
+  type UpdateMonitorTargetRequest,
   type AssetListQuery,
   type JobLogsQuery,
   type JobListQuery,
@@ -166,6 +167,18 @@ export function useCreateMonitorTarget() {
       await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
       await qc.invalidateQueries({ queryKey: ["jobs"] });
       await qc.invalidateQueries({ queryKey: ["jobs-page"] });
+    }
+  });
+}
+
+export function useUpdateMonitorTarget() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: UpdateMonitorTargetRequest) => endpoints.updateMonitorTarget(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-runs"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-events"] });
     }
   });
 }

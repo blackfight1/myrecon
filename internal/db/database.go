@@ -30,6 +30,23 @@ var (
 	ErrMonitorTaskActive = errors.New("monitor task is running or pending")
 )
 
+const (
+	defaultMonitorVulnMaxURLs     = 50
+	defaultMonitorVulnCooldownMin = 30
+	maxMonitorVulnMaxURLs         = 1000
+	maxMonitorVulnCooldownMin     = 24 * 60
+)
+
+type MonitorTargetOptions struct {
+	EnableVulnScan   *bool
+	EnableNuclei     *bool
+	EnableCors       *bool
+	VulnOnNewLive    *bool
+	VulnOnWebChanged *bool
+	VulnMaxURLs      *int
+	VulnCooldownMin  *int
+}
+
 // NewDatabase creates database connection.
 func NewDatabase(dsn string) (*Database, error) {
 	database, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
@@ -730,10 +747,17 @@ func (d *Database) GetOrCreateMonitorTarget(projectID, rootDomain string) (*Moni
 	result := d.DB.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).First(&target)
 	if result.Error == gorm.ErrRecordNotFound {
 		target = MonitorTarget{
-			ProjectID:    projectID,
-			RootDomain:   rootDomain,
-			Enabled:      true,
-			BaselineDone: false,
+			ProjectID:        projectID,
+			RootDomain:       rootDomain,
+			Enabled:          true,
+			EnableVulnScan:   false,
+			EnableNuclei:     false,
+			EnableCors:       false,
+			VulnOnNewLive:    true,
+			VulnOnWebChanged: false,
+			VulnMaxURLs:      defaultMonitorVulnMaxURLs,
+			VulnCooldownMin:  defaultMonitorVulnCooldownMin,
+			BaselineDone:     false,
 		}
 		if err := d.DB.Create(&target).Error; err != nil {
 			return nil, err
@@ -742,6 +766,12 @@ func (d *Database) GetOrCreateMonitorTarget(projectID, rootDomain string) (*Moni
 	}
 	if result.Error != nil {
 		return nil, result.Error
+	}
+	updates := monitorTargetDefaultUpdates(&target)
+	if len(updates) > 0 {
+		if err := d.DB.Model(&target).Updates(updates).Error; err != nil {
+			return nil, err
+		}
 	}
 	return &target, nil
 }
@@ -864,8 +894,98 @@ func (d *Database) DeleteMonitorDataByRootDomain(projectID, rootDomain string) e
 	})
 }
 
+func clampMonitorVulnMaxURLs(n int) int {
+	if n <= 0 {
+		return defaultMonitorVulnMaxURLs
+	}
+	if n > maxMonitorVulnMaxURLs {
+		return maxMonitorVulnMaxURLs
+	}
+	return n
+}
+
+func clampMonitorVulnCooldownMin(n int) int {
+	if n <= 0 {
+		return defaultMonitorVulnCooldownMin
+	}
+	if n > maxMonitorVulnCooldownMin {
+		return maxMonitorVulnCooldownMin
+	}
+	return n
+}
+
+func monitorTargetDefaultUpdates(target *MonitorTarget) map[string]interface{} {
+	if target == nil {
+		return nil
+	}
+	updates := make(map[string]interface{}, 2)
+	if target.VulnMaxURLs <= 0 {
+		updates["vuln_max_urls"] = defaultMonitorVulnMaxURLs
+	}
+	if target.VulnCooldownMin <= 0 {
+		updates["vuln_cooldown_min"] = defaultMonitorVulnCooldownMin
+	}
+	return updates
+}
+
+func applyMonitorTargetOptionsToStruct(target *MonitorTarget, opts *MonitorTargetOptions) {
+	if target == nil || opts == nil {
+		return
+	}
+	if opts.EnableVulnScan != nil {
+		target.EnableVulnScan = *opts.EnableVulnScan
+	}
+	if opts.EnableNuclei != nil {
+		target.EnableNuclei = *opts.EnableNuclei
+	}
+	if opts.EnableCors != nil {
+		target.EnableCors = *opts.EnableCors
+	}
+	if opts.VulnOnNewLive != nil {
+		target.VulnOnNewLive = *opts.VulnOnNewLive
+	}
+	if opts.VulnOnWebChanged != nil {
+		target.VulnOnWebChanged = *opts.VulnOnWebChanged
+	}
+	if opts.VulnMaxURLs != nil {
+		target.VulnMaxURLs = clampMonitorVulnMaxURLs(*opts.VulnMaxURLs)
+	}
+	if opts.VulnCooldownMin != nil {
+		target.VulnCooldownMin = clampMonitorVulnCooldownMin(*opts.VulnCooldownMin)
+	}
+}
+
+func monitorTargetOptionUpdates(opts *MonitorTargetOptions) map[string]interface{} {
+	if opts == nil {
+		return nil
+	}
+	updates := make(map[string]interface{}, 7)
+	if opts.EnableVulnScan != nil {
+		updates["enable_vuln_scan"] = *opts.EnableVulnScan
+	}
+	if opts.EnableNuclei != nil {
+		updates["enable_nuclei"] = *opts.EnableNuclei
+	}
+	if opts.EnableCors != nil {
+		updates["enable_cors"] = *opts.EnableCors
+	}
+	if opts.VulnOnNewLive != nil {
+		updates["vuln_on_new_live"] = *opts.VulnOnNewLive
+	}
+	if opts.VulnOnWebChanged != nil {
+		updates["vuln_on_web_changed"] = *opts.VulnOnWebChanged
+	}
+	if opts.VulnMaxURLs != nil {
+		updates["vuln_max_urls"] = clampMonitorVulnMaxURLs(*opts.VulnMaxURLs)
+	}
+	if opts.VulnCooldownMin != nil {
+		updates["vuln_cooldown_min"] = clampMonitorVulnCooldownMin(*opts.VulnCooldownMin)
+	}
+	return updates
+}
+
 // EnableMonitorTarget enables monitor target and ensures one pending task exists.
-func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec, maxAttempts int) error {
+func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec, maxAttempts int, opts *MonitorTargetOptions) error {
 	projectID = strings.TrimSpace(projectID)
 	rootDomain = strings.TrimSpace(rootDomain)
 	if projectID == "" {
@@ -879,20 +999,33 @@ func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec
 		result := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).First(&target)
 		if result.Error == gorm.ErrRecordNotFound {
 			target = MonitorTarget{
-				ProjectID:    projectID,
-				RootDomain:   rootDomain,
-				Enabled:      true,
-				BaselineDone: false,
+				ProjectID:        projectID,
+				RootDomain:       rootDomain,
+				Enabled:          true,
+				EnableVulnScan:   false,
+				EnableNuclei:     false,
+				EnableCors:       false,
+				VulnOnNewLive:    true,
+				VulnOnWebChanged: false,
+				VulnMaxURLs:      defaultMonitorVulnMaxURLs,
+				VulnCooldownMin:  defaultMonitorVulnCooldownMin,
+				BaselineDone:     false,
 			}
+			applyMonitorTargetOptionsToStruct(&target, opts)
 			if err := tx.Create(&target).Error; err != nil {
 				return err
 			}
 		} else if result.Error != nil {
 			return result.Error
 		} else {
-			if err := tx.Model(&target).Updates(map[string]interface{}{
-				"enabled": true,
-			}).Error; err != nil {
+			updates := map[string]interface{}{"enabled": true}
+			for k, v := range monitorTargetDefaultUpdates(&target) {
+				updates[k] = v
+			}
+			for k, v := range monitorTargetOptionUpdates(opts) {
+				updates[k] = v
+			}
+			if err := tx.Model(&target).Updates(updates).Error; err != nil {
 				return err
 			}
 		}
@@ -919,6 +1052,49 @@ func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec
 		}
 		return nil
 	})
+}
+
+// UpdateMonitorTargetOptions updates monitor target policy without changing
+// scheduling state (enabled/disabled) or creating tasks.
+func (d *Database) UpdateMonitorTargetOptions(projectID, rootDomain string, opts *MonitorTargetOptions) error {
+	projectID = strings.TrimSpace(projectID)
+	rootDomain = strings.TrimSpace(rootDomain)
+	if projectID == "" {
+		return fmt.Errorf("projectID is required")
+	}
+	if rootDomain == "" {
+		return fmt.Errorf("rootDomain is required")
+	}
+	if opts == nil {
+		return nil
+	}
+
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		var target MonitorTarget
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).First(&target).Error; err != nil {
+			return err
+		}
+
+		updates := monitorTargetDefaultUpdates(&target)
+		for k, v := range monitorTargetOptionUpdates(opts) {
+			updates[k] = v
+		}
+		if len(updates) == 0 {
+			return nil
+		}
+		return tx.Model(&target).Updates(updates).Error
+	})
+}
+
+func (d *Database) UpdateMonitorTargetLastVulnScan(projectID, rootDomain string, at time.Time) error {
+	projectID = strings.TrimSpace(projectID)
+	rootDomain = strings.TrimSpace(rootDomain)
+	if projectID == "" || rootDomain == "" {
+		return nil
+	}
+	return d.DB.Model(&MonitorTarget{}).
+		Where("project_id = ? AND root_domain = ?", projectID, rootDomain).
+		Update("last_vuln_scan_at", at).Error
 }
 
 // ArchiveProject marks project archived and stops related monitor scheduling.
