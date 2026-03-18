@@ -113,6 +113,64 @@ func (n *DingTalkNotifier) SendMonitorChanges(rootDomain string, changes map[str
 	return n.sendText(content)
 }
 
+// SendMonitorRunDigest sends a compact monitor digest with actionable details.
+func (n *DingTalkNotifier) SendMonitorRunDigest(
+	projectID, rootDomain string,
+	runID uint,
+	duration time.Duration,
+	changes map[string]int,
+	newAssetLines []string,
+	portLines []string,
+	omittedAssets int,
+	omittedPorts int,
+) error {
+	if !n.Enabled() {
+		return nil
+	}
+
+	var b strings.Builder
+	b.WriteString("### [Hunter] 监控变更告警\n")
+	b.WriteString(fmt.Sprintf("- 项目: `%s`\n", safeInline(projectID)))
+	b.WriteString(fmt.Sprintf("- 根域名: `%s`\n", safeInline(rootDomain)))
+	b.WriteString(fmt.Sprintf("- Run: `%d`\n", runID))
+	b.WriteString(fmt.Sprintf("- 耗时: `%s`\n", duration.Round(time.Second).String()))
+	b.WriteString(fmt.Sprintf("- 统计: new_live=%d, web_changed=%d, port_opened=%d, port_closed=%d, service_changed=%d\n",
+		changes["new_live"],
+		changes["web_changed"],
+		changes["port_opened"],
+		changes["port_closed"],
+		changes["service_changed"],
+	))
+
+	if len(newAssetLines) > 0 {
+		b.WriteString("\n**新资产（URL | 标题 | 技术栈）**\n")
+		for _, line := range newAssetLines {
+			b.WriteString("- ")
+			b.WriteString(safeMarkdownLine(line))
+			b.WriteString("\n")
+		}
+		if omittedAssets > 0 {
+			b.WriteString(fmt.Sprintf("- ... 其余 %d 条已省略\n", omittedAssets))
+		}
+	}
+
+	if len(portLines) > 0 {
+		b.WriteString("\n**端口变化（OPEN/CLOSED/CHANGED）**\n")
+		for _, line := range portLines {
+			b.WriteString("- ")
+			b.WriteString(safeMarkdownLine(line))
+			b.WriteString("\n")
+		}
+		if omittedPorts > 0 {
+			b.WriteString(fmt.Sprintf("- ... 其余 %d 条已省略\n", omittedPorts))
+		}
+	}
+
+	b.WriteString("\n> 时间: ")
+	b.WriteString(time.Now().Format("2006-01-02 15:04:05"))
+	return n.sendMarkdown("监控变更告警", b.String())
+}
+
 func (n *DingTalkNotifier) sendText(content string) error {
 	payload := map[string]interface{}{
 		"msgtype": "text",
@@ -159,6 +217,72 @@ func (n *DingTalkNotifier) sendText(content string) error {
 	}
 
 	return nil
+}
+
+func (n *DingTalkNotifier) sendMarkdown(title, text string) error {
+	payload := map[string]interface{}{
+		"msgtype": "markdown",
+		"markdown": map[string]string{
+			"title": title,
+			"text":  text,
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	requestURL, err := n.buildSignedURL()
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := n.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("dingtalk notify failed with status: %s", resp.Status)
+	}
+
+	var result struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to decode dingtalk response: %v", err)
+	}
+	if result.ErrCode != 0 {
+		return fmt.Errorf("dingtalk notify failed: errcode=%d errmsg=%s", result.ErrCode, result.ErrMsg)
+	}
+	return nil
+}
+
+func safeInline(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "-"
+	}
+	return strings.ReplaceAll(s, "`", "")
+}
+
+func safeMarkdownLine(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "-"
+	}
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return s
 }
 
 func (n *DingTalkNotifier) buildSignedURL() (string, error) {

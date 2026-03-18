@@ -24,13 +24,16 @@ import (
 )
 
 const (
-	defaultMonitorIntervalSec  = 6 * 3600
-	maxListRows                = 5000
-	schedulerPollInterval      = 15 * time.Second
-	scanWorkerPollInterval     = 3 * time.Second
-	scanJobStaleAfter          = 6 * time.Hour
-	monitorEventStatusOpen     = "open"
-	monitorEventStatusResolved = "resolved"
+	defaultMonitorIntervalSec   = 6 * 3600
+	maxListRows                 = 5000
+	schedulerPollInterval       = 15 * time.Second
+	scanWorkerPollInterval      = 3 * time.Second
+	scanJobStaleAfter           = 6 * time.Hour
+	monitorChangeNotifyCooldown = 10 * time.Minute
+	monitorNotifyMaxAssets      = 10
+	monitorNotifyMaxPorts       = 12
+	monitorEventStatusOpen      = "open"
+	monitorEventStatusResolved  = "resolved"
 )
 
 var errScanCanceled = errors.New("scan canceled")
@@ -987,7 +990,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 
 	// Run network pipeline (httpx + ports)
 	s.appendJobLogf(task.ProjectID, jobID, "info", "阶段开始: 网络探测 (targets=%d)", len(subdomains))
-	networkResults, err := s.runNetworkPipeline(subdomains, true, true, false, false, s.screenshotDir)
+	networkResults, err := s.runNetworkPipeline(subdomains, true, true, false, false, false, s.screenshotDir)
 	if err != nil {
 		log.Printf("[Scheduler] network pipeline warning for %s: %v", rootDomain, err)
 		s.appendJobLogf(task.ProjectID, jobID, "warn", "网络探测告警: %v", err)
@@ -1030,13 +1033,44 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 		if notifyEnabled {
 			notifier := plugins.NewDingTalkNotifierFromEnv(true)
 			if notifier.Enabled() {
+				shouldNotify := true
+				highSignal := newLive > 0 || portOpened > 0
+				if !highSignal {
+					recent, err := s.db.HasRecentChangeRun(task.ProjectID, rootDomain, run.ID, time.Now().Add(-monitorChangeNotifyCooldown))
+					if err != nil {
+						s.appendJobLogf(task.ProjectID, jobID, "warn", "通知降噪检查失败，继续发送: %v", err)
+					} else if recent {
+						shouldNotify = false
+						s.appendJobLogf(task.ProjectID, jobID, "info", "监控通知已降噪抑制: root=%s cooldown=%s", rootDomain, monitorChangeNotifyCooldown)
+					}
+				}
+				if !shouldNotify {
+					return
+				}
+
+				assetLines, omittedAssets, portLines, omittedPorts, detailErr := s.buildMonitorNotifyDetails(task.ProjectID, run.ID)
+				if detailErr != nil {
+					s.appendJobLogf(task.ProjectID, jobID, "warn", "监控通知详情构建失败，降级为摘要通知: %v", detailErr)
+				}
 				stats := map[string]int{
 					"new_live": newLive, "web_changed": webChanged,
 					"port_opened": portOpened, "port_closed": portClosed,
 					"service_changed": svcChanged,
 				}
-				if err := notifier.SendReconEnd(true, time.Since(run.StartedAt), stats, ""); err != nil {
+				if err := notifier.SendMonitorRunDigest(
+					task.ProjectID,
+					rootDomain,
+					run.ID,
+					time.Since(run.StartedAt),
+					stats,
+					assetLines,
+					portLines,
+					omittedAssets,
+					omittedPorts,
+				); err != nil {
 					s.appendJobLogf(task.ProjectID, jobID, "warn", "通知发送失败: %v", err)
+				} else {
+					s.appendJobLogf(task.ProjectID, jobID, "info", "监控通知已发送: run=%d assets=%d ports=%d", run.ID, len(assetLines), len(portLines))
 				}
 			}
 		}
@@ -1152,16 +1186,17 @@ func (s *Server) syncLiveMonitorEvents(projectID, rootDomain string, runID uint,
 			}
 			opened++
 			_ = s.db.SaveAssetChange(&db.AssetChange{
-				ProjectID:  projectID,
-				RunID:      runID,
-				RootDomain: rootDomain,
-				ChangeType: "new_live",
-				Domain:     displayDomain,
-				IP:         item.ip,
-				Port:       item.port,
-				URL:        a.URL,
-				StatusCode: a.StatusCode,
-				Title:      a.Title,
+				ProjectID:    projectID,
+				RunID:        runID,
+				RootDomain:   rootDomain,
+				ChangeType:   "new_live",
+				Domain:       displayDomain,
+				IP:           item.ip,
+				Port:         item.port,
+				URL:          a.URL,
+				StatusCode:   a.StatusCode,
+				Title:        a.Title,
+				Technologies: a.Technologies,
 			})
 			continue
 		}
@@ -1187,31 +1222,33 @@ func (s *Server) syncLiveMonitorEvents(projectID, rootDomain string, runID uint,
 			updates["last_changed_at"] = now
 			opened++
 			_ = s.db.SaveAssetChange(&db.AssetChange{
-				ProjectID:  projectID,
-				RunID:      runID,
-				RootDomain: rootDomain,
-				ChangeType: "new_live",
-				Domain:     displayDomain,
-				IP:         item.ip,
-				Port:       item.port,
-				URL:        a.URL,
-				StatusCode: a.StatusCode,
-				Title:      a.Title,
+				ProjectID:    projectID,
+				RunID:        runID,
+				RootDomain:   rootDomain,
+				ChangeType:   "new_live",
+				Domain:       displayDomain,
+				IP:           item.ip,
+				Port:         item.port,
+				URL:          a.URL,
+				StatusCode:   a.StatusCode,
+				Title:        a.Title,
+				Technologies: a.Technologies,
 			})
 		} else if e.StatusCode != a.StatusCode || strings.TrimSpace(e.Title) != strings.TrimSpace(a.Title) {
 			updates["last_changed_at"] = now
 			webChanged++
 			_ = s.db.SaveAssetChange(&db.AssetChange{
-				ProjectID:  projectID,
-				RunID:      runID,
-				RootDomain: rootDomain,
-				ChangeType: "web_changed",
-				Domain:     displayDomain,
-				IP:         item.ip,
-				Port:       item.port,
-				URL:        a.URL,
-				StatusCode: a.StatusCode,
-				Title:      a.Title,
+				ProjectID:    projectID,
+				RunID:        runID,
+				RootDomain:   rootDomain,
+				ChangeType:   "web_changed",
+				Domain:       displayDomain,
+				IP:           item.ip,
+				Port:         item.port,
+				URL:          a.URL,
+				StatusCode:   a.StatusCode,
+				Title:        a.Title,
+				Technologies: a.Technologies,
 			})
 		}
 
@@ -1407,6 +1444,180 @@ func (s *Server) syncPortMonitorEvents(projectID, rootDomain string, runID uint,
 	}
 
 	return opened, closed, serviceChanged
+}
+
+func (s *Server) buildMonitorNotifyDetails(projectID string, runID uint) (assetLines []string, omittedAssets int, portLines []string, omittedPorts int, err error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		projectID = "default"
+	}
+	if runID == 0 {
+		return nil, 0, nil, 0, nil
+	}
+
+	var assetChanges []db.AssetChange
+	if err := s.db.DB.
+		Where("project_id = ? AND run_id = ? AND change_type = ?", projectID, runID, "new_live").
+		Order("id desc").
+		Limit(300).
+		Find(&assetChanges).Error; err != nil {
+		return nil, 0, nil, 0, err
+	}
+
+	assetSeen := make(map[string]bool, len(assetChanges))
+	totalAssets := 0
+	assetLines = make([]string, 0, monitorNotifyMaxAssets)
+	for _, ch := range assetChanges {
+		key := strings.ToLower(strings.TrimSpace(ch.URL))
+		if key == "" {
+			key = fmt.Sprintf("%s|%s|%d", strings.ToLower(strings.TrimSpace(ch.Domain)), strings.TrimSpace(ch.IP), ch.Port)
+		}
+		if key == "" || assetSeen[key] {
+			continue
+		}
+		assetSeen[key] = true
+		totalAssets++
+		if len(assetLines) < monitorNotifyMaxAssets {
+			assetLines = append(assetLines, formatMonitorAssetNotifyLine(ch))
+		}
+	}
+	omittedAssets = totalAssets - len(assetLines)
+
+	var portChanges []db.PortChange
+	if err := s.db.DB.
+		Where("project_id = ? AND run_id = ? AND change_type IN ?", projectID, runID, []string{"opened", "closed", "service_changed"}).
+		Order("id desc").
+		Limit(400).
+		Find(&portChanges).Error; err != nil {
+		return assetLines, omittedAssets, nil, 0, err
+	}
+
+	sort.SliceStable(portChanges, func(i, j int) bool {
+		pi := monitorPortChangePriority(portChanges[i].ChangeType)
+		pj := monitorPortChangePriority(portChanges[j].ChangeType)
+		if pi != pj {
+			return pi < pj
+		}
+		return portChanges[i].ID > portChanges[j].ID
+	})
+
+	portSeen := make(map[string]bool, len(portChanges))
+	totalPorts := 0
+	portLines = make([]string, 0, monitorNotifyMaxPorts)
+	for _, ch := range portChanges {
+		proto := strings.ToLower(strings.TrimSpace(ch.Protocol))
+		key := fmt.Sprintf("%s|%s|%d|%s", strings.ToLower(strings.TrimSpace(ch.ChangeType)), strings.TrimSpace(ch.IP), ch.Port, proto)
+		if portSeen[key] {
+			continue
+		}
+		portSeen[key] = true
+		totalPorts++
+		if len(portLines) < monitorNotifyMaxPorts {
+			portLines = append(portLines, formatMonitorPortNotifyLine(ch))
+		}
+	}
+	omittedPorts = totalPorts - len(portLines)
+	return assetLines, omittedAssets, portLines, omittedPorts, nil
+}
+
+func monitorPortChangePriority(changeType string) int {
+	switch strings.ToLower(strings.TrimSpace(changeType)) {
+	case "opened":
+		return 0
+	case "service_changed":
+		return 1
+	case "closed":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func formatMonitorAssetNotifyLine(ch db.AssetChange) string {
+	target := strings.TrimSpace(ch.URL)
+	if target == "" {
+		target = strings.TrimSpace(ch.Domain)
+	}
+	if target == "" && strings.TrimSpace(ch.IP) != "" && ch.Port > 0 {
+		target = fmt.Sprintf("%s:%d", strings.TrimSpace(ch.IP), ch.Port)
+	}
+	if target == "" {
+		target = "-"
+	}
+
+	statusText := "-"
+	if ch.StatusCode > 0 {
+		statusText = strconv.Itoa(ch.StatusCode)
+	}
+	title := strings.TrimSpace(ch.Title)
+	if title == "" {
+		title = "-"
+	}
+
+	techs := decodeJSONBStrings(ch.Technologies)
+	techText := "-"
+	if len(techs) > 0 {
+		if len(techs) > 6 {
+			techs = append(techs[:6], "...")
+		}
+		techText = strings.Join(techs, ", ")
+	}
+	return fmt.Sprintf("[%s] %s | %s | %s",
+		statusText,
+		trimForNotify(target, 110),
+		trimForNotify(title, 70),
+		trimForNotify(techText, 70),
+	)
+}
+
+func formatMonitorPortNotifyLine(ch db.PortChange) string {
+	action := "CHANGED"
+	switch strings.ToLower(strings.TrimSpace(ch.ChangeType)) {
+	case "opened":
+		action = "OPEN"
+	case "closed":
+		action = "CLOSED"
+	case "service_changed":
+		action = "CHANGED"
+	}
+
+	target := strings.TrimSpace(ch.Domain)
+	ip := strings.TrimSpace(ch.IP)
+	if target == "" {
+		target = ip
+	} else if ip != "" && !strings.EqualFold(target, ip) {
+		target = target + " (" + ip + ")"
+	}
+	if target == "" {
+		target = "-"
+	}
+
+	proto := strings.ToLower(strings.TrimSpace(ch.Protocol))
+	if proto == "" {
+		proto = "tcp"
+	}
+
+	svc := strings.TrimSpace(ch.Service)
+	ver := strings.TrimSpace(ch.Version)
+	svcText := "-"
+	if svc != "" {
+		svcText = svc
+	}
+	if ver != "" {
+		if svcText == "-" {
+			svcText = ver
+		} else {
+			svcText += " " + ver
+		}
+	}
+
+	return fmt.Sprintf("%s %s:%d/%s | %s",
+		action,
+		trimForNotify(target, 85),
+		ch.Port,
+		proto,
+		trimForNotify(svcText, 70),
+	)
 }
 
 func buildMonitorLiveEventKey(host, ip string, port int) string {
@@ -2279,6 +2490,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	if req.EnableNuclei != nil {
 		enableNuclei = *req.EnableNuclei
 	}
+	autoCorsWithNuclei := shouldEnableCorsWithNuclei()
 	activeSubs := defaultActiveSubs
 	if req.ActiveSubs != nil {
 		activeSubs = *req.ActiveSubs
@@ -2292,6 +2504,9 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			modules = []string{"subs", "ports", "httpx"}
 			if enableNuclei {
 				modules = append(modules, "nuclei")
+				if autoCorsWithNuclei {
+					modules = append(modules, "cors")
+				}
 			}
 			if activeSubs {
 				modules = append(modules, "dnsx_bruteforce")
@@ -2300,6 +2515,9 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	} else if mode == "scan" {
 		if enableNuclei && !containsAnyModule(modules, "nuclei") {
 			modules = append(modules, "nuclei")
+		}
+		if enableNuclei && autoCorsWithNuclei && !containsAnyModule(modules, "cors") {
+			modules = append(modules, "cors")
 		}
 		if activeSubs && !containsAnyModule(modules, "dnsx_bruteforce", "dictgen") {
 			modules = append(modules, "dnsx_bruteforce")
@@ -2592,8 +2810,9 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	hasPorts := containsAnyModule(modules, "ports", "naabu", "nmap")
 	hasWitness := containsAnyModule(modules, "witness", "gowitness")
 	hasNuclei := enableNuclei || containsAnyModule(modules, "nuclei")
-	// Nuclei/Witness both depend on live HTTP targets from httpx.
-	hasHttpx := containsAnyModule(modules, "httpx") || hasNuclei || hasWitness
+	hasCors := containsAnyModule(modules, "cors") || (hasNuclei && shouldEnableCorsWithNuclei())
+	// Nuclei/Cors/Witness all depend on live HTTP targets from httpx.
+	hasHttpx := containsAnyModule(modules, "httpx") || hasNuclei || hasCors || hasWitness
 
 	s.settingsMu.RLock()
 	screenshotDir := s.screenshotDir
@@ -2606,8 +2825,8 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	s.settingsMu.RUnlock()
 
 	dictSize = clampDictSize(dictSize)
-	s.appendJobLogf(projectID, jobID, "debug", "执行参数: hasSubs=%v hasBbotActive=%v hasActiveSubs=%v hasHttpx=%v hasPorts=%v hasNuclei=%v hasWitness=%v dictSize=%d",
-		hasSubs, hasBbotActive, hasActiveSubs, hasHttpx, hasPorts, hasNuclei, hasWitness, dictSize)
+	s.appendJobLogf(projectID, jobID, "debug", "执行参数: hasSubs=%v hasBbotActive=%v hasActiveSubs=%v hasHttpx=%v hasPorts=%v hasNuclei=%v hasCors=%v hasWitness=%v dictSize=%d",
+		hasSubs, hasBbotActive, hasActiveSubs, hasHttpx, hasPorts, hasNuclei, hasCors, hasWitness, dictSize)
 
 	var allResults []engine.Result
 	var scanErr error
@@ -2675,9 +2894,9 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 		}
 
 		if hasPorts || hasHttpx {
-			s.appendJobLogf(projectID, jobID, "info", "阶段开始: 网络探测 (targets=%d httpx=%v ports=%v nuclei=%v witness=%v)",
-				len(subdomains), hasHttpx, hasPorts, hasNuclei, hasWitness)
-			networkResults, err := s.runNetworkPipeline(subdomains, hasHttpx, hasPorts, hasNuclei, hasWitness, screenshotDir)
+			s.appendJobLogf(projectID, jobID, "info", "阶段开始: 网络探测 (targets=%d httpx=%v ports=%v nuclei=%v cors=%v witness=%v)",
+				len(subdomains), hasHttpx, hasPorts, hasNuclei, hasCors, hasWitness)
+			networkResults, err := s.runNetworkPipeline(subdomains, hasHttpx, hasPorts, hasNuclei, hasCors, hasWitness, screenshotDir)
 			allResults = append(allResults, networkResults...)
 			if err != nil {
 				scanErr = fmt.Errorf("network stage failed: %v", err)
@@ -2693,9 +2912,9 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 			}
 		}
 	} else if hasPorts || hasHttpx {
-		s.appendJobLogf(projectID, jobID, "info", "阶段开始: 网络探测 (targets=%d httpx=%v ports=%v nuclei=%v witness=%v)",
-			len(domains), hasHttpx, hasPorts, hasNuclei, hasWitness)
-		networkResults, err := s.runNetworkPipeline(domains, hasHttpx, hasPorts, hasNuclei, hasWitness, screenshotDir)
+		s.appendJobLogf(projectID, jobID, "info", "阶段开始: 网络探测 (targets=%d httpx=%v ports=%v nuclei=%v cors=%v witness=%v)",
+			len(domains), hasHttpx, hasPorts, hasNuclei, hasCors, hasWitness)
+		networkResults, err := s.runNetworkPipeline(domains, hasHttpx, hasPorts, hasNuclei, hasCors, hasWitness, screenshotDir)
 		allResults = append(allResults, networkResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("network stage failed: %v", err)
@@ -2857,7 +3076,7 @@ func (s *Server) expandActiveSubdomains(rootDomains, passiveSubdomains []string,
 	return allResults, extractDomains(bruteResults), nil
 }
 
-func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, enableNuclei, enableWitness bool, screenshotDir string) ([]engine.Result, error) {
+func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, enableNuclei, enableCors, enableWitness bool, screenshotDir string) ([]engine.Result, error) {
 	pipeline := engine.NewPipeline()
 	if enableHTTPX {
 		pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
@@ -2867,7 +3086,10 @@ func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, 
 		pipeline.AddPortScanner(plugins.NewNmapPlugin())
 	}
 	if enableNuclei {
-		pipeline.SetVulnScanner(plugins.NewNucleiPlugin())
+		pipeline.AddVulnScanner(plugins.NewNucleiPlugin())
+	}
+	if enableCors {
+		pipeline.AddVulnScanner(plugins.NewCorsPlugin())
 	}
 	if enableWitness {
 		pipeline.SetScreenshotScanner(plugins.NewGowitnessPlugin(screenshotDir))
@@ -3755,6 +3977,18 @@ func envOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
+func shouldEnableCorsWithNuclei() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("CORS_WITH_NUCLEI")))
+	switch raw {
+	case "", "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return true
+	}
+}
+
 func normalizeRootDomain(raw string) string {
 	s := strings.TrimSpace(strings.ToLower(raw))
 	s = strings.TrimPrefix(s, "http://")
@@ -3811,7 +4045,7 @@ func sanitizeModules(raw []string) []string {
 		"bbot_active": true, "chaos": true,
 		"dictgen": true, "dnsx_bruteforce": true,
 		"naabu": true, "nmap": true,
-		"httpx": true, "gowitness": true, "nuclei": true,
+		"httpx": true, "gowitness": true, "nuclei": true, "cors": true,
 		"subs": true, "ports": true, "monitor": true, "witness": true,
 	}
 	var out []string
@@ -3839,6 +4073,18 @@ func maskSecret(s string) string {
 		return strings.Repeat("*", len(s))
 	}
 	return s[:4] + strings.Repeat("*", len(s)-8) + s[len(s)-4:]
+}
+
+func trimForNotify(s string, maxLen int) string {
+	s = strings.TrimSpace(s)
+	if s == "" || maxLen <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= maxLen {
+		return s
+	}
+	return string(r[:maxLen]) + "..."
 }
 
 func timeToISO(t time.Time) string {

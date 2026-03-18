@@ -27,7 +27,7 @@ type Pipeline struct {
 	nextScanners      []Scanner
 	httpxScanner      Scanner
 	portScanners      []Scanner
-	vulnScanner       Scanner
+	vulnScanners      []Scanner
 	screenshotScanner Scanner
 }
 
@@ -37,6 +37,7 @@ func NewPipeline() *Pipeline {
 		domainScanners: make([]Scanner, 0),
 		nextScanners:   make([]Scanner, 0),
 		portScanners:   make([]Scanner, 0),
+		vulnScanners:   make([]Scanner, 0),
 	}
 }
 
@@ -67,7 +68,18 @@ func (p *Pipeline) AddPortScanner(scanner Scanner) {
 
 // SetVulnScanner sets vulnerability scanner (runs after httpx).
 func (p *Pipeline) SetVulnScanner(scanner Scanner) {
-	p.vulnScanner = scanner
+	p.vulnScanners = []Scanner{}
+	if scanner != nil {
+		p.vulnScanners = append(p.vulnScanners, scanner)
+	}
+}
+
+// AddVulnScanner appends a vulnerability scanner (runs after httpx).
+func (p *Pipeline) AddVulnScanner(scanner Scanner) {
+	if scanner == nil {
+		return
+	}
+	p.vulnScanners = append(p.vulnScanners, scanner)
 }
 
 type scannerResult struct {
@@ -281,18 +293,20 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 		}
 	}
 
-	if p.vulnScanner != nil && len(vulnInputs) > 0 {
-		fmt.Printf("[Vuln] scanning %d live URLs...\n", len(vulnInputs))
-		start := time.Now()
-		vulnResults, err := p.vulnScanner.Execute(vulnInputs)
-		allResults = append(allResults, buildPluginStatusResult(p.vulnScanner.Name(), len(vulnResults), err, time.Since(start)))
-		if err != nil {
-			if strings.Contains(err.Error(), "not found in PATH") {
-				fmt.Printf("[WARN] [%s] tool not found in PATH, vulnerability scan skipped\n", p.vulnScanner.Name())
-			} else {
-				fmt.Printf("[WARN] vulnerability scan failed: %v\n", err)
+	if len(p.vulnScanners) > 0 && len(vulnInputs) > 0 {
+		for _, vulnScanner := range p.vulnScanners {
+			fmt.Printf("[Vuln] %s scanning %d live URLs...\n", vulnScanner.Name(), len(vulnInputs))
+			start := time.Now()
+			vulnResults, err := vulnScanner.Execute(vulnInputs)
+			allResults = append(allResults, buildPluginStatusResult(vulnScanner.Name(), len(vulnResults), err, time.Since(start)))
+			if err != nil {
+				if strings.Contains(err.Error(), "not found in PATH") {
+					fmt.Printf("[WARN] [%s] tool not found in PATH, vulnerability scan skipped\n", vulnScanner.Name())
+				} else {
+					fmt.Printf("[WARN] [%s] vulnerability scan failed: %v\n", vulnScanner.Name(), err)
+				}
+				continue
 			}
-		} else {
 			allResults = append(allResults, vulnResults...)
 		}
 	}

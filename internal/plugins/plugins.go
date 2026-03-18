@@ -64,6 +64,10 @@ func NewNucleiPlugin() engine.Scanner {
 	return vuln.NewNucleiPlugin()
 }
 
+func NewCorsPlugin() engine.Scanner {
+	return vuln.NewCorsPlugin()
+}
+
 func StartReportServer(baseDir, rootDomain, host string, port int) error {
 	return web.StartReportServer(baseDir, rootDomain, host, port)
 }
