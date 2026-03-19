@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { endpoints } from "../api/endpoints";
 import type { ProjectRecord } from "../types/models";
 import { parseDomainList } from "../lib/projectScope";
+import { useAuth } from "./AuthContext";
 
 const ACTIVE_PROJECT_KEY = "myrecon.activeProjectId.v2";
 
@@ -67,11 +68,17 @@ async function ensureDefaultProject(): Promise<void> {
 }
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
+  const { authenticated, loading: authLoading } = useAuth();
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeProjectId, setActiveProjectId] = useState<string>(() => loadActiveProjectId());
 
   const refresh = async () => {
+    if (!authenticated) {
+      setProjects([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       await ensureDefaultProject();
@@ -92,9 +99,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!authenticated) {
+      setProjects([]);
+      setLoading(false);
+      return;
+    }
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authenticated, authLoading]);
 
   const setActiveProject = (id: string) => {
     setActiveProjectId(id);
