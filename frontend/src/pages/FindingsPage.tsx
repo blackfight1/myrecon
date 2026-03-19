@@ -5,30 +5,10 @@ import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { useWorkspace } from "../context/WorkspaceContext";
 import { useVulnsPage, usePatchVulnStatus } from "../hooks/queries";
 import { formatDate } from "../lib/format";
+import { exportToCSV, exportToJSON } from "../lib/export";
+import { type VulnStatus, VULN_STATUS_OPTIONS, vulnStatusLabel, vulnStatusColor } from "../lib/status";
 import type { VulnerabilityRecord } from "../types/models";
 import type { VulnListQuery } from "../api/endpoints";
-
-type VulnStatus = "open" | "triaged" | "confirmed" | "accepted_risk" | "fixed" | "false_positive" | "duplicate";
-
-const STATUS_OPTIONS: { value: VulnStatus; label: string; color: string }[] = [
-  { value: "open", label: "待处理", color: "#ef4444" },
-  { value: "triaged", label: "已分类", color: "#f59e0b" },
-  { value: "confirmed", label: "已确认", color: "#f97316" },
-  { value: "accepted_risk", label: "接受风险", color: "#8b5cf6" },
-  { value: "fixed", label: "已修复", color: "#22c55e" },
-  { value: "false_positive", label: "误报", color: "#64748b" },
-  { value: "duplicate", label: "重复", color: "#94a3b8" }
-];
-
-function statusLabel(s?: string): string {
-  const opt = STATUS_OPTIONS.find((o) => o.value === s);
-  return opt?.label ?? "待处理";
-}
-
-function statusColor(s?: string): string {
-  const opt = STATUS_OPTIONS.find((o) => o.value === s);
-  return opt?.color ?? "#ef4444";
-}
 
 const col = createColumnHelper<VulnerabilityRecord>();
 
@@ -98,6 +78,24 @@ export function FindingsPage() {
     return o;
   }, [items]);
 
+  const handleExportCSV = () => {
+    exportToCSV(items as unknown as Record<string, unknown>[], [
+      { key: "severity", header: "严重等级" },
+      { key: "status", header: "状态" },
+      { key: "rootDomain", header: "根域名" },
+      { key: "templateId", header: "模板ID" },
+      { key: "cve", header: "CVE" },
+      { key: "domain", header: "域名" },
+      { key: "url", header: "URL" },
+      { key: "matchedAt", header: "匹配时间" },
+      { key: "fingerprint", header: "指纹" },
+    ], `vulns-${new Date().toISOString().slice(0, 10)}`);
+  };
+
+  const handleExportJSON = () => {
+    exportToJSON(items, `vulns-${new Date().toISOString().slice(0, 10)}`);
+  };
+
   const handleStatusChange = (vuln: VulnerabilityRecord) => {
     setEditingVuln(vuln);
     setNewStatus((vuln.status as VulnStatus) || "open");
@@ -134,12 +132,12 @@ export function FindingsPage() {
         const st = v.status || "open";
         return (
           <button
-            className="status-badge"
-            style={{ background: statusColor(st) + "22", color: statusColor(st), border: `1px solid ${statusColor(st)}44`, cursor: "pointer", fontSize: 12, padding: "2px 8px", borderRadius: 4 }}
+            className="vuln-status-btn"
+            style={{ background: vulnStatusColor(st) + "22", color: vulnStatusColor(st), borderColor: vulnStatusColor(st) + "44" }}
             onClick={() => handleStatusChange(v)}
             title="点击修改状态"
           >
-            {statusLabel(st)}
+            {vulnStatusLabel(st)}
           </button>
         );
       }
@@ -189,11 +187,13 @@ export function FindingsPage() {
           </select>
           <select className="form-select" value={statusFilter} onChange={handleStatusFilterChange}>
             <option value="all">全部状态</option>
-            {STATUS_OPTIONS.map((o) => (
+            {VULN_STATUS_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
           <input className="form-input" value={search} onChange={handleSearchChange} placeholder="搜索根域名/域名/模板/CVE/URL/指纹..." />
+          <button className="btn btn-sm" onClick={handleExportCSV} disabled={items.length === 0} title="导出CSV">📥 CSV</button>
+          <button className="btn btn-sm" onClick={handleExportJSON} disabled={items.length === 0} title="导出JSON">📥 JSON</button>
           <span className="filter-summary">第 {page} 页，每页 {pageSize} 条</span>
         </div>
       </article>
@@ -242,14 +242,14 @@ export function FindingsPage() {
             </div>
             <div style={{ marginBottom: 12 }}>
               <label style={{ fontSize: 13, color: "#94a3b8", display: "block", marginBottom: 4 }}>当前状态</label>
-              <span style={{ color: statusColor(editingVuln.status || "open"), fontWeight: 600 }}>
-                {statusLabel(editingVuln.status || "open")}
+              <span style={{ color: vulnStatusColor(editingVuln.status || "open"), fontWeight: 600 }}>
+                {vulnStatusLabel(editingVuln.status || "open")}
               </span>
             </div>
             <div style={{ marginBottom: 12 }}>
               <label style={{ fontSize: 13, color: "#94a3b8", display: "block", marginBottom: 4 }}>新状态</label>
               <select className="form-select" value={newStatus} onChange={(e) => setNewStatus(e.target.value as VulnStatus)} style={{ width: "100%" }}>
-                {STATUS_OPTIONS.map((o) => (
+                {VULN_STATUS_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>

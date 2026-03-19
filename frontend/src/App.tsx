@@ -1,34 +1,46 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/layout/AppShell";
-import { AssetsPage } from "./pages/AssetsPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { FindingsPage } from "./pages/FindingsPage";
-import { JobsPage } from "./pages/JobsPage";
-import { JobLogsPage } from "./pages/JobLogsPage";
-import { MonitoringPage } from "./pages/MonitoringPage";
-import { PortsPage } from "./pages/PortsPage";
-import { ProjectsPage } from "./pages/ProjectsPage";
-import { QuickScanPage } from "./pages/QuickScanPage";
-import { ScreenshotsPage } from "./pages/ScreenshotsPage";
-import { AssetDetailPage } from "./pages/AssetDetailPage";
-import { SettingsPage } from "./pages/SettingsPage";
+
+// 路由代码分割 — 每个页面独立 chunk，首屏只加载 DashboardPage
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
+const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
+const QuickScanPage = lazy(() => import("./pages/QuickScanPage").then((m) => ({ default: m.QuickScanPage })));
+const JobsPage = lazy(() => import("./pages/JobsPage").then((m) => ({ default: m.JobsPage })));
+const JobLogsPage = lazy(() => import("./pages/JobLogsPage").then((m) => ({ default: m.JobLogsPage })));
+const AssetsPage = lazy(() => import("./pages/AssetsPage").then((m) => ({ default: m.AssetsPage })));
+const AssetDetailPage = lazy(() => import("./pages/AssetDetailPage").then((m) => ({ default: m.AssetDetailPage })));
+const PortsPage = lazy(() => import("./pages/PortsPage").then((m) => ({ default: m.PortsPage })));
+const FindingsPage = lazy(() => import("./pages/FindingsPage").then((m) => ({ default: m.FindingsPage })));
+const ScreenshotsPage = lazy(() => import("./pages/ScreenshotsPage").then((m) => ({ default: m.ScreenshotsPage })));
+const MonitoringPage = lazy(() => import("./pages/MonitoringPage").then((m) => ({ default: m.MonitoringPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+
+function PageLoading() {
+  return (
+    <div className="page-loading">
+      <div className="page-loading-spinner" />
+      <span>加载中…</span>
+    </div>
+  );
+}
 
 export default function App() {
   return (
     <Routes>
       <Route path="/" element={<AppShell />}>
-        <Route index element={<DashboardPage />} />
-        <Route path="projects" element={<ProjectsPage />} />
-        <Route path="quick-scan" element={<QuickScanPage />} />
-        <Route path="jobs" element={<JobsPage />} />
-        <Route path="jobs/:jobId/logs" element={<JobLogsPage />} />
-        <Route path="assets" element={<AssetsPage />} />
-        <Route path="assets/:id" element={<AssetDetailPage />} />
-        <Route path="ports" element={<PortsPage />} />
-        <Route path="findings" element={<FindingsPage />} />
-        <Route path="screenshots" element={<ScreenshotsPage />} />
-        <Route path="monitoring" element={<MonitoringPage />} />
-        <Route path="settings" element={<SettingsPage />} />
+        <Route index element={<Suspense fallback={<PageLoading />}><DashboardPage /></Suspense>} />
+        <Route path="projects" element={<Suspense fallback={<PageLoading />}><ProjectsPage /></Suspense>} />
+        <Route path="quick-scan" element={<Suspense fallback={<PageLoading />}><QuickScanPage /></Suspense>} />
+        <Route path="jobs" element={<Suspense fallback={<PageLoading />}><JobsPage /></Suspense>} />
+        <Route path="jobs/:jobId/logs" element={<Suspense fallback={<PageLoading />}><JobLogsPage /></Suspense>} />
+        <Route path="assets" element={<Suspense fallback={<PageLoading />}><AssetsPage /></Suspense>} />
+        <Route path="assets/:id" element={<Suspense fallback={<PageLoading />}><AssetDetailPage /></Suspense>} />
+        <Route path="ports" element={<Suspense fallback={<PageLoading />}><PortsPage /></Suspense>} />
+        <Route path="findings" element={<Suspense fallback={<PageLoading />}><FindingsPage /></Suspense>} />
+        <Route path="screenshots" element={<Suspense fallback={<PageLoading />}><ScreenshotsPage /></Suspense>} />
+        <Route path="monitoring" element={<Suspense fallback={<PageLoading />}><MonitoringPage /></Suspense>} />
+        <Route path="settings" element={<Suspense fallback={<PageLoading />}><SettingsPage /></Suspense>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

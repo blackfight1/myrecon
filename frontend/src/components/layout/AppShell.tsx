@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Breadcrumb } from "../ui/Breadcrumb";
 import { useTheme } from "../../context/ThemeContext";
 import { useWorkspace } from "../../context/WorkspaceContext";
 import { GlobalSearch } from "../ui/GlobalSearch";
@@ -110,6 +111,7 @@ export function AppShell() {
         </header>
 
         <main className="content">
+          <Breadcrumb />
           <Outlet />
         </main>
       </div>
