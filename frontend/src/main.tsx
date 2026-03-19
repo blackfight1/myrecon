@@ -6,6 +6,7 @@ import App from "./App";
 import { ThemeProvider } from "./context/ThemeContext";
 import { WorkspaceProvider } from "./context/WorkspaceContext";
 import { AppErrorBoundary } from "./components/ui/AppErrorBoundary";
+import { AuthProvider } from "./context/AuthContext";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -24,7 +25,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <WorkspaceProvider>
           <AppErrorBoundary>
             <BrowserRouter>
-              <App />
+              <AuthProvider>
+                <App />
+              </AuthProvider>
             </BrowserRouter>
           </AppErrorBoundary>
         </WorkspaceProvider>

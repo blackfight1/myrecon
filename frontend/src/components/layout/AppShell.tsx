@@ -2,11 +2,13 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { Breadcrumb } from "../ui/Breadcrumb";
 import { useTheme } from "../../context/ThemeContext";
 import { useWorkspace } from "../../context/WorkspaceContext";
+import { useAuth } from "../../context/AuthContext";
 import { GlobalSearch } from "../ui/GlobalSearch";
 
 export function AppShell() {
   const { projects, activeProject, setActiveProject, loading } = useWorkspace();
   const { theme, themes, setTheme } = useTheme();
+  const { username, logout } = useAuth();
   const navigate = useNavigate();
 
   return (
@@ -57,11 +59,14 @@ export function AppShell() {
 
         <div className="sidebar-footer">
           <div className="sidebar-user">
-            <div className="sidebar-avatar">A</div>
+            <div className="sidebar-avatar">{(username || "A").charAt(0).toUpperCase()}</div>
             <div className="sidebar-user-info">
-              <div className="sidebar-user-name">admin</div>
+              <div className="sidebar-user-name">{username || "admin"}</div>
               <div className="sidebar-user-role">管理员</div>
             </div>
+            <button className="sidebar-logout-btn" title="退出登录" onClick={logout}>
+              ⏻
+            </button>
           </div>
         </div>
       </aside>

@@ -1,6 +1,8 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/layout/AppShell";
+import { useAuth } from "./context/AuthContext";
+import LoginPage from "./pages/LoginPage";
 
 // 路由代码分割 — 每个页面独立 chunk，首屏只加载 DashboardPage
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
@@ -25,10 +27,31 @@ function PageLoading() {
   );
 }
 
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { authenticated, loading } = useAuth();
+  if (loading) return <PageLoading />;
+  if (!authenticated) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
 export default function App() {
+  const { authenticated, loading } = useAuth();
+
   return (
     <Routes>
-      <Route path="/" element={<AppShell />}>
+      <Route
+        path="/login"
+        element={
+          loading ? (
+            <PageLoading />
+          ) : authenticated ? (
+            <Navigate to="/" replace />
+          ) : (
+            <LoginPage />
+          )
+        }
+      />
+      <Route path="/" element={<RequireAuth><AppShell /></RequireAuth>}>
         <Route index element={<Suspense fallback={<PageLoading />}><DashboardPage /></Suspense>} />
         <Route path="projects" element={<Suspense fallback={<PageLoading />}><ProjectsPage /></Suspense>} />
         <Route path="quick-scan" element={<Suspense fallback={<PageLoading />}><QuickScanPage /></Suspense>} />

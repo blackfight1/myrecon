@@ -476,7 +476,8 @@ func NewServer(database *db.Database, screenshotDir string) *Server {
 // Start starts the HTTP API server.
 func (s *Server) Start(addr string) error {
 	log.Printf("[API] server starting on %s", addr)
-	return http.ListenAndServe(addr, s.corsMiddleware(s.mux))
+	handler := s.corsMiddleware(s.authMiddleware(s.mux))
+	return http.ListenAndServe(addr, handler)
 }
 
 // RunWorkers starts background workers for monitor tasks and scan jobs.
@@ -529,6 +530,10 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) registerRoutes() {
+	// Auth routes (login is public, check requires auth)
+	s.mux.HandleFunc("/api/auth/login", s.handleLogin)
+	s.mux.HandleFunc("/api/auth/check", s.handleAuthCheck)
+
 	s.mux.HandleFunc("/api/projects", s.handleProjects)
 	s.mux.HandleFunc("/api/dashboard/summary", s.handleDashboard)
 	s.mux.HandleFunc("/api/jobs", s.handleJobs)
