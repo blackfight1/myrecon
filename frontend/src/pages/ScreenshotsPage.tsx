@@ -3,6 +3,7 @@ import { useWorkspace } from "../context/WorkspaceContext";
 import { useScreenshotDomains, useScreenshots } from "../hooks/queries";
 import { formatDate } from "../lib/format";
 import type { ScreenshotItem } from "../types/models";
+import { getToken } from "../api/client";
 
 function statusCodeClass(code?: number) {
   if (!code) return "badge-neutral";
@@ -14,6 +15,21 @@ function statusCodeClass(code?: number) {
 
 function normalizeText(v?: string): string {
   return (v ?? "").trim();
+}
+
+function withAuthToken(rawUrl?: string | null): string {
+  const token = getToken();
+  if (!rawUrl || !token) return rawUrl ?? "";
+  try {
+    const u = new URL(rawUrl, window.location.origin);
+    if (!u.searchParams.has("token")) {
+      u.searchParams.set("token", token);
+    }
+    return `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    const sep = rawUrl.includes("?") ? "&" : "?";
+    return `${rawUrl}${sep}token=${encodeURIComponent(token)}`;
+  }
 }
 
 export function ScreenshotsPage() {
@@ -206,10 +222,10 @@ export function ScreenshotsPage() {
                         </td>
                         <td>
                           <img
-                            src={item.thumbnailUrl}
+                            src={withAuthToken(item.thumbnailUrl)}
                             alt={item.title || item.url || item.filename}
                             className="screenshot-list-thumb"
-                            onClick={() => setLightboxUrl(item.fullUrl)}
+                            onClick={() => setLightboxUrl(withAuthToken(item.fullUrl))}
                           />
                         </td>
                         <td>{normalizeText(item.title) || <span className="cell-muted">-</span>}</td>
@@ -228,9 +244,9 @@ export function ScreenshotsPage() {
           {!screenshotsQ.isLoading && !screenshotsQ.isError && filtered.length > 0 && viewMode === "grid" && (
             <div className="screenshot-grid">
               {filtered.map((item) => (
-                <div key={item.id} className="screenshot-card" onClick={() => setLightboxUrl(item.fullUrl)}>
+                <div key={item.id} className="screenshot-card" onClick={() => setLightboxUrl(withAuthToken(item.fullUrl))}>
                   <div className="screenshot-thumb">
-                    <img src={item.thumbnailUrl} alt={item.title || item.url || item.filename} loading="lazy" />
+                    <img src={withAuthToken(item.thumbnailUrl)} alt={item.title || item.url || item.filename} loading="lazy" />
                     {item.statusCode && (
                       <span className={`screenshot-status badge ${statusCodeClass(item.statusCode)}`}>{item.statusCode}</span>
                     )}
@@ -252,7 +268,7 @@ export function ScreenshotsPage() {
         <div className="lightbox-overlay" onClick={() => setLightboxUrl(null)}>
           <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
             <button className="lightbox-close" onClick={() => setLightboxUrl(null)}>x</button>
-            <img src={lightboxUrl} alt="截图预览" />
+            <img src={withAuthToken(lightboxUrl)} alt="截图预览" />
           </div>
         </div>
       )}
