@@ -16,7 +16,7 @@
 - Web 存活探测：`httpx`
 - 端口与服务识别：`naabu + nmap`（`service/version/banner`）
 - Web 截图：`gowitness`
-- 漏洞候选：`nuclei` + `cors`（高危 CORS）+ `subzy`（子域名接管）
+- 漏洞候选：`nuclei` + `cors`（高危 CORS）+ `subjack`（子域名接管）
 - 资产、端口、漏洞、任务、监控结果统一落地 PostgreSQL
 - 前端控制台（React + Vite）
 
@@ -113,8 +113,8 @@ go install github.com/sensepost/gowitness@latest
 go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 nuclei -update-templates
 
-# subzy（子域名接管）
-go install -v github.com/PentestPad/subzy@latest
+# subjack（子域名接管）
+go install -v github.com/haccer/subjack@latest
 ```
 
 ### 4) 安装自检
@@ -122,7 +122,7 @@ go install -v github.com/PentestPad/subzy@latest
 Linux/macOS:
 
 ```bash
-for t in subfinder chaos findomain bbot shosubgo dnsx httpx naabu nmap gowitness nuclei subzy; do
+for t in subfinder chaos findomain bbot shosubgo dnsx httpx naabu nmap gowitness nuclei subjack; do
   command -v "$t" >/dev/null 2>&1 && echo "[OK] $t" || echo "[MISS] $t"
 done
 ```
@@ -130,7 +130,7 @@ done
 PowerShell:
 
 ```powershell
-$tools = "subfinder","chaos","findomain","bbot","shosubgo","dnsx","httpx","naabu","nmap","gowitness","nuclei","subzy"
+$tools = "subfinder","chaos","findomain","bbot","shosubgo","dnsx","httpx","naabu","nmap","gowitness","nuclei","subjack"
 foreach ($t in $tools) {
   if (Get-Command $t -ErrorAction SilentlyContinue) { "[OK] $t" } else { "[MISS] $t" }
 }
@@ -184,7 +184,7 @@ NUCLEI_EXCLUDE_SEVERITIES=info,unknown
 # 当任务使用默认模块且启用 nuclei 时，是否自动附带 cors（默认 true）
 # CORS_WITH_NUCLEI=true
 
-# 子域名接管扫描（subzy，可选）
+# 子域名接管扫描（subjack，可选）
 # 是否启用插件（默认 true）
 # SUBTAKEOVER_SCAN_ENABLED=true
 # 单次任务最多检测 host 数（默认 3000）
@@ -195,11 +195,20 @@ NUCLEI_EXCLUDE_SEVERITIES=info,unknown
 # SUBTAKEOVER_TIMEOUT_SEC=10
 # 无协议输入是否默认强制 https（默认 true）
 # SUBTAKEOVER_FORCE_HTTPS=true
-# 是否验证 SSL（默认 false）
-# SUBTAKEOVER_VERIFY_SSL=false
+# 对每个目标发送请求验证（对应 subjack -a，默认 true）
+# SUBTAKEOVER_CHECK_ALL=true
+# Manual 模式（对应 subjack -m，默认 false）
+# SUBTAKEOVER_MANUAL=false
+# 可选扩展检查（默认 false）
+# SUBTAKEOVER_CHECK_NS=false
+# SUBTAKEOVER_CHECK_AR=false
+# SUBTAKEOVER_CHECK_AXFR=false
+# SUBTAKEOVER_CHECK_MAIL=false
+# 自定义解析器列表文件（对应 subjack -r）
+# SUBTAKEOVER_RESOLVER_LIST=/path/to/resolvers.txt
 # 风险级别（默认 high）
 # SUBTAKEOVER_SEVERITY=high
-# 排除指定平台（逗号分隔，按 engine 名过滤）
+# 排除指定平台（逗号分隔，按 service 名过滤）
 # SUBTAKEOVER_EXCLUDE_ENGINES=github,vercel
 ```
 

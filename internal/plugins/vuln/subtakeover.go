@@ -17,15 +17,21 @@ import (
 	"hunter/internal/plugins/common"
 )
 
-const defaultSubTakeoverReference = "https://github.com/PentestPad/subzy"
+const defaultSubTakeoverReference = "https://github.com/haccer/subjack"
 
-// SubTakeoverPlugin detects potential subdomain takeover risks via subzy.
+// SubTakeoverPlugin detects potential subdomain takeover risks via subjack.
 type SubTakeoverPlugin struct {
 	maxTargets     int
 	concurrency    int
 	timeoutSec     int
 	forceHTTPS     bool
-	verifySSL      bool
+	checkAll       bool
+	manualMode     bool
+	checkNS        bool
+	checkAR        bool
+	checkAXFR      bool
+	checkMail      bool
+	resolverList   string
 	severity       string
 	excludeEngines map[string]bool
 }
@@ -35,19 +41,11 @@ type subTakeoverTarget struct {
 	rootDomain string
 }
 
-type subzyResult struct {
-	Subdomain     string   `json:"subdomain"`
-	Status        string   `json:"status"`
-	Engine        string   `json:"engine"`
-	Documentation string   `json:"documentation"`
-	Discussion    string   `json:"discussion"`
-	CICDPass      bool     `json:"cicd_pass"`
-	CName         []string `json:"cname"`
-	Fingerprint   string   `json:"fingerprint"`
-	HTTPStatus    *int     `json:"http_status"`
-	NXDomain      bool     `json:"nxdomain"`
-	Service       string   `json:"service"`
-	Vulnerable    bool     `json:"vulnerable"`
+type subjackResult struct {
+	Subdomain  string `json:"subdomain"`
+	Vulnerable bool   `json:"vulnerable"`
+	Service    string `json:"service,omitempty"`
+	Domain     string `json:"nonexist_domain,omitempty"`
 }
 
 // NewSubTakeoverPlugin creates a subdomain takeover plugin instance.
@@ -72,7 +70,13 @@ func NewSubTakeoverPlugin() *SubTakeoverPlugin {
 		concurrency:    envInt("SUBTAKEOVER_CONCURRENCY", 20, 1, 200),
 		timeoutSec:     envInt("SUBTAKEOVER_TIMEOUT_SEC", 10, 1, 60),
 		forceHTTPS:     envBool("SUBTAKEOVER_FORCE_HTTPS", true),
-		verifySSL:      envBool("SUBTAKEOVER_VERIFY_SSL", false),
+		checkAll:       envBool("SUBTAKEOVER_CHECK_ALL", true),
+		manualMode:     envBool("SUBTAKEOVER_MANUAL", false),
+		checkNS:        envBool("SUBTAKEOVER_CHECK_NS", false),
+		checkAR:        envBool("SUBTAKEOVER_CHECK_AR", false),
+		checkAXFR:      envBool("SUBTAKEOVER_CHECK_AXFR", false),
+		checkMail:      envBool("SUBTAKEOVER_CHECK_MAIL", false),
+		resolverList:   strings.TrimSpace(os.Getenv("SUBTAKEOVER_RESOLVER_LIST")),
 		severity:       severity,
 		excludeEngines: excludedSet,
 	}
@@ -83,14 +87,14 @@ func (s *SubTakeoverPlugin) Name() string {
 	return "SubTakeover"
 }
 
-// Execute runs subzy and converts findings into the unified vulnerability format.
+// Execute runs subjack and converts findings into the unified vulnerability format.
 // Input supports either plain host/domain or "target|rootDomain" style.
 func (s *SubTakeoverPlugin) Execute(input []string) ([]engine.Result, error) {
 	if !envBool("SUBTAKEOVER_SCAN_ENABLED", true) {
 		return []engine.Result{}, nil
 	}
-	if _, err := exec.LookPath("subzy"); err != nil {
-		return nil, fmt.Errorf("subzy not found in PATH. Please install subzy and ensure it's in your PATH")
+	if _, err := exec.LookPath("subjack"); err != nil {
+		return nil, fmt.Errorf("subjack not found in PATH. Please install subjack and ensure it's in your PATH")
 	}
 	if len(input) == 0 {
 		return []engine.Result{}, nil
@@ -117,55 +121,70 @@ func (s *SubTakeoverPlugin) Execute(input []string) ([]engine.Result, error) {
 
 	targetFile, err := common.CreateTempFile("subtakeover_targets_*.txt", hostLines)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create subzy target file: %v", err)
+		return nil, fmt.Errorf("failed to create subjack target file: %v", err)
 	}
 	defer common.RemoveTempFile(targetFile)
 
 	outputFile, err := os.CreateTemp("", "subtakeover_result_*.json")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create subzy output file: %v", err)
+		return nil, fmt.Errorf("failed to create subjack output file: %v", err)
 	}
 	outputPath := outputFile.Name()
 	if err := outputFile.Close(); err != nil {
 		_ = os.Remove(outputPath)
-		return nil, fmt.Errorf("failed to close subzy output file: %v", err)
+		return nil, fmt.Errorf("failed to close subjack output file: %v", err)
 	}
 	defer os.Remove(outputPath)
 
 	args := []string{
-		"run",
-		"--targets", targetFile,
-		"--output", outputPath,
-		"--hide_fails",
-		"--vuln",
-		"--concurrency", strconv.Itoa(s.concurrency),
-		"--timeout", strconv.Itoa(s.timeoutSec),
+		"-w", targetFile,
+		"-o", outputPath,
+		"-t", strconv.Itoa(s.concurrency),
+		"-timeout", strconv.Itoa(s.timeoutSec),
 	}
 	if s.forceHTTPS {
-		args = append(args, "--https")
+		args = append(args, "-ssl")
 	}
-	if s.verifySSL {
-		args = append(args, "--verify_ssl")
+	if s.checkAll {
+		args = append(args, "-a")
+	}
+	if s.manualMode {
+		args = append(args, "-m")
+	}
+	if s.checkNS {
+		args = append(args, "-ns")
+	}
+	if s.checkAR {
+		args = append(args, "-ar")
+	}
+	if s.checkAXFR {
+		args = append(args, "-axfr")
+	}
+	if s.checkMail {
+		args = append(args, "-mail")
+	}
+	if s.resolverList != "" {
+		args = append(args, "-r", s.resolverList)
 	}
 
-	cmd := exec.Command("subzy", args...)
+	cmd := exec.Command("subjack", args...)
 	output, runErr := cmd.CombinedOutput()
 
-	results, parseErr := s.parseSubzyOutput(outputPath, rootHints)
+	results, parseErr := s.parseSubjackOutput(outputPath, rootHints)
 	if parseErr != nil {
 		if runErr != nil {
-			return nil, fmt.Errorf("subzy execution failed: %v; parse output failed: %v", runErr, parseErr)
+			return nil, fmt.Errorf("subjack execution failed: %v; parse output failed: %v", runErr, parseErr)
 		}
-		return nil, fmt.Errorf("failed to parse subzy output: %v", parseErr)
+		return nil, fmt.Errorf("failed to parse subjack output: %v", parseErr)
 	}
 
 	if runErr != nil {
 		if len(results) == 0 {
 			detail := strings.TrimSpace(string(output))
 			if detail == "" {
-				return nil, fmt.Errorf("subzy execution failed: %v", runErr)
+				return nil, fmt.Errorf("subjack execution failed: %v", runErr)
 			}
-			return nil, fmt.Errorf("subzy execution failed: %v | output=%s", runErr, compactLog(detail, 280))
+			return nil, fmt.Errorf("subjack execution failed: %v | output=%s", runErr, compactLog(detail, 280))
 		}
 		fmt.Printf("[SubTakeover] Command finished with warning: %v\n", runErr)
 	}
@@ -174,7 +193,7 @@ func (s *SubTakeoverPlugin) Execute(input []string) ([]engine.Result, error) {
 	return results, nil
 }
 
-func (s *SubTakeoverPlugin) parseSubzyOutput(path string, rootHints map[string]string) ([]engine.Result, error) {
+func (s *SubTakeoverPlugin) parseSubjackOutput(path string, rootHints map[string]string) ([]engine.Result, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -184,8 +203,8 @@ func (s *SubTakeoverPlugin) parseSubzyOutput(path string, rootHints map[string]s
 		return []engine.Result{}, nil
 	}
 
-	var rows []subzyResult
-	if err := json.Unmarshal(raw, &rows); err != nil {
+	rows, err := parseSubjackRows(raw)
+	if err != nil {
 		return nil, err
 	}
 
@@ -197,15 +216,14 @@ func (s *SubTakeoverPlugin) parseSubzyOutput(path string, rootHints map[string]s
 			continue
 		}
 
-		status := strings.ToLower(strings.TrimSpace(row.Status))
-		if status != "vulnerable" && !row.Vulnerable {
+		if !row.Vulnerable {
 			continue
 		}
-		engineName := strings.TrimSpace(row.Engine)
-		if engineName == "" {
-			engineName = strings.TrimSpace(row.Service)
-		}
+		engineName := strings.TrimSpace(row.Service)
 		engineKey := strings.ToLower(engineName)
+		if engineKey == "" && row.Domain != "" {
+			engineKey = "unregistered-domain"
+		}
 		if engineKey != "" && s.excludeEngines[engineKey] {
 			continue
 		}
@@ -235,23 +253,24 @@ func (s *SubTakeoverPlugin) parseSubzyOutput(path string, rootHints map[string]s
 		}
 
 		descriptionParts := []string{
-			"Potential subdomain takeover detected by subzy.",
+			"Potential subdomain takeover detected by subjack.",
 			fmt.Sprintf("host=%s", host),
 		}
 		if strings.TrimSpace(engineName) != "" {
 			descriptionParts = append(descriptionParts, "service="+strings.TrimSpace(engineName))
 		}
-		if strings.TrimSpace(row.Discussion) != "" {
-			descriptionParts = append(descriptionParts, "discussion="+strings.TrimSpace(row.Discussion))
+		if strings.TrimSpace(row.Domain) != "" {
+			descriptionParts = append(descriptionParts, "nonexist_domain="+strings.TrimSpace(row.Domain))
 		}
 		description := strings.Join(descriptionParts, " ")
 
-		reference := strings.TrimSpace(row.Documentation)
-		if reference == "" {
-			reference = defaultSubTakeoverReference
-		}
+		reference := defaultSubTakeoverReference
 
 		rowJSON, _ := json.Marshal(row)
+		matchedURL := "http://" + host
+		if s.forceHTTPS {
+			matchedURL = "https://" + host
+		}
 
 		results = append(results, engine.Result{
 			Type: "vulnerability",
@@ -263,8 +282,8 @@ func (s *SubTakeoverPlugin) parseSubzyOutput(path string, rootHints map[string]s
 				"host":          host,
 				"domain":        host,
 				"root_domain":   rootDomain,
-				"url":           "http://" + host,
-				"matcher_name":  "subzy",
+				"url":           matchedURL,
+				"matcher_name":  "subjack",
 				"description":   description,
 				"reference":     reference,
 				"template_url":  reference,
@@ -274,6 +293,41 @@ func (s *SubTakeoverPlugin) parseSubzyOutput(path string, rootHints map[string]s
 		})
 	}
 	return results, nil
+}
+
+func parseSubjackRows(raw []byte) ([]subjackResult, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || strings.EqualFold(trimmed, "null") {
+		return []subjackResult{}, nil
+	}
+
+	if strings.HasPrefix(trimmed, "[") {
+		var rows []subjackResult
+		if err := json.Unmarshal([]byte(trimmed), &rows); err != nil {
+			return nil, err
+		}
+		return rows, nil
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		var row subjackResult
+		if err := json.Unmarshal([]byte(trimmed), &row); err == nil {
+			return []subjackResult{row}, nil
+		}
+	}
+
+	rows := make([]subjackResult, 0, 32)
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var row subjackResult
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			return nil, err
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }
 
 func normalizeSubTakeoverTargets(input []string) []subTakeoverTarget {
