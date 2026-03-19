@@ -183,7 +183,7 @@ func (p *Pipeline) ExecuteFromSubdomains(subdomains []string) ([]Result, error) 
 func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 	var allResults []Result
 
-	if p.httpxScanner == nil && len(p.portScanners) == 0 {
+	if p.httpxScanner == nil && len(p.portScanners) == 0 && len(p.vulnScanners) == 0 && p.screenshotScanner == nil {
 		return allResults, nil
 	}
 
@@ -293,11 +293,21 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 		}
 	}
 
-	if len(p.vulnScanners) > 0 && len(vulnInputs) > 0 {
+	if len(p.vulnScanners) > 0 {
 		for _, vulnScanner := range p.vulnScanners {
-			fmt.Printf("[Vuln] %s scanning %d live URLs...\n", vulnScanner.Name(), len(vulnInputs))
+			scanInput := vulnInputs
+			// Subdomain takeover checks work on hostnames and should not be
+			// constrained to live httpx URLs.
+			if isSubTakeoverScanner(vulnScanner) {
+				scanInput = input
+			}
+			if len(scanInput) == 0 {
+				allResults = append(allResults, buildPluginStatusResult(vulnScanner.Name(), 0, nil, 0))
+				continue
+			}
+			fmt.Printf("[Vuln] %s scanning %d targets...\n", vulnScanner.Name(), len(scanInput))
 			start := time.Now()
-			vulnResults, err := vulnScanner.Execute(vulnInputs)
+			vulnResults, err := vulnScanner.Execute(scanInput)
 			allResults = append(allResults, buildPluginStatusResult(vulnScanner.Name(), len(vulnResults), err, time.Since(start)))
 			if err != nil {
 				if strings.Contains(err.Error(), "not found in PATH") {
@@ -328,6 +338,14 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 	}
 
 	return allResults, nil
+}
+
+func isSubTakeoverScanner(scanner Scanner) bool {
+	if scanner == nil {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(scanner.Name()))
+	return name == "subtakeover" || name == "sub-takeover"
 }
 
 // extractRootDomain extracts a rough root domain from subdomain.

@@ -46,6 +46,7 @@ export function JobsPage() {
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
   const [enableCors, setEnableCors] = useState(false);
+  const [enableSubtakeover, setEnableSubtakeover] = useState(false);
   const [enableActiveSubs, setEnableActiveSubs] = useState(false);
   const [enableBbotActive, setEnableBbotActive] = useState(false);
   const [enableNotify, setEnableNotify] = useState(true);
@@ -195,9 +196,10 @@ export function JobsPage() {
       ...(enableBbotActive ? ["bbot_active"] : []),
       ...(enableWitness ? ["witness"] : []),
       ...(enableNuclei ? ["nuclei"] : []),
-      ...(enableCors ? ["cors"] : [])
+      ...(enableCors ? ["cors"] : []),
+      ...(enableSubtakeover ? ["subtakeover"] : [])
     ],
-    [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei, enableCors]
+    [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei, enableCors, enableSubtakeover]
   );
 
   const launchScan = async () => {
@@ -213,6 +215,7 @@ export function JobsPage() {
     if (enableWitness) modules.push("witness");
     if (enableNuclei) modules.push("nuclei");
     if (enableCors) modules.push("cors");
+    if (enableSubtakeover) modules.push("subtakeover");
 
     const success: string[] = [];
     const failed: string[] = [];
@@ -275,6 +278,9 @@ export function JobsPage() {
           </button>
           <button className={`btn btn-sm${enableCors ? " btn-primary" : ""}`} onClick={() => setEnableCors((v) => !v)}>
             高危CORS {enableCors ? "开启" : "关闭"}
+          </button>
+          <button className={`btn btn-sm${enableSubtakeover ? " btn-primary" : ""}`} onClick={() => setEnableSubtakeover((v) => !v)}>
+            子域接管 {enableSubtakeover ? "开启" : "关闭"}
           </button>
           <button className={`btn btn-sm${enableActiveSubs ? " btn-primary" : ""}`} onClick={() => setEnableActiveSubs((v) => !v)}>
             主动子域 {enableActiveSubs ? "开启" : "关闭"}

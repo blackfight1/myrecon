@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # Hunter/MyRecon external tools installer.
 # Installs:
-# subfinder, chaos, findomain, bbot, shosubgo, dnsx, httpx, naabu, nmap, gowitness, nuclei
+# subfinder, chaos, findomain, bbot, shosubgo, dnsx, httpx, naabu, nmap, gowitness, nuclei, subzy
 #
 # Usage:
 #   bash scripts/install-tools.sh
@@ -120,7 +120,7 @@ install_nmap() {
 verify_tools() {
   local missing=0
   local tools=(
-    subfinder chaos findomain bbot shosubgo dnsx httpx naabu nmap gowitness nuclei
+    subfinder chaos findomain bbot shosubgo dnsx httpx naabu nmap gowitness nuclei subzy
   )
   echo
   log "Tool check:"
@@ -155,6 +155,7 @@ main() {
   install_nmap
   install_go_tool "gowitness" "github.com/sensepost/gowitness@latest"
   install_go_tool "nuclei" "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
+  install_go_tool "subzy" "github.com/PentestPad/subzy@latest"
 
   if command -v nuclei >/dev/null 2>&1; then
     log "Updating nuclei templates"

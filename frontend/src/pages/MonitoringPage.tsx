@@ -55,6 +55,7 @@ function monitorPolicySummary(t: MonitorTarget): string {
   const engines: string[] = [];
   if (t.enableNuclei) engines.push("Nuclei");
   if (t.enableCors) engines.push("CORS");
+  if (t.enableSubtakeover) engines.push("SubTakeover");
   const triggers: string[] = [];
   if (t.vulnOnNewLive !== false) triggers.push("new_live");
   if (t.vulnOnWebChanged) triggers.push("web_changed");
@@ -80,6 +81,7 @@ export function MonitoringPage() {
   const [newEnableVulnScan, setNewEnableVulnScan] = useState(false);
   const [newEnableNuclei, setNewEnableNuclei] = useState(false);
   const [newEnableCors, setNewEnableCors] = useState(false);
+  const [newEnableSubtakeover, setNewEnableSubtakeover] = useState(false);
   const [newVulnOnNewLive, setNewVulnOnNewLive] = useState(true);
   const [newVulnOnWebChanged, setNewVulnOnWebChanged] = useState(false);
   const [newVulnMaxUrls, setNewVulnMaxUrls] = useState(50);
@@ -139,6 +141,7 @@ export function MonitoringPage() {
     setNewEnableVulnScan(false);
     setNewEnableNuclei(false);
     setNewEnableCors(false);
+    setNewEnableSubtakeover(false);
     setNewVulnOnNewLive(true);
     setNewVulnOnWebChanged(false);
     setNewVulnMaxUrls(50);
@@ -157,6 +160,7 @@ export function MonitoringPage() {
     setNewEnableVulnScan(Boolean(target.enableVulnScan));
     setNewEnableNuclei(Boolean(target.enableNuclei));
     setNewEnableCors(Boolean(target.enableCors));
+    setNewEnableSubtakeover(Boolean(target.enableSubtakeover));
     setNewVulnOnNewLive(target.vulnOnNewLive !== false);
     setNewVulnOnWebChanged(Boolean(target.vulnOnWebChanged));
     setNewVulnMaxUrls(Math.min(1000, Math.max(1, target.vulnMaxUrls ?? 50)));
@@ -179,8 +183,8 @@ export function MonitoringPage() {
       setFeedback({ ok: false, text: "域名不在当前项目范围内" });
       return false;
     }
-    if (newEnableVulnScan && !newEnableNuclei && !newEnableCors) {
-      setFeedback({ ok: false, text: "已开启增量漏扫时，至少选择一个扫描引擎（Nuclei/CORS）" });
+    if (newEnableVulnScan && !newEnableNuclei && !newEnableCors && !newEnableSubtakeover) {
+      setFeedback({ ok: false, text: "已开启增量漏扫时，至少选择一个扫描引擎（Nuclei/CORS/SubTakeover）" });
       return false;
     }
     if (newEnableVulnScan && !newVulnOnNewLive && !newVulnOnWebChanged) {
@@ -197,6 +201,7 @@ export function MonitoringPage() {
       enableVulnScan: newEnableVulnScan,
       enableNuclei: newEnableVulnScan ? newEnableNuclei : false,
       enableCors: newEnableVulnScan ? newEnableCors : false,
+      enableSubtakeover: newEnableVulnScan ? newEnableSubtakeover : false,
       vulnOnNewLive: newEnableVulnScan ? newVulnOnNewLive : true,
       vulnOnWebChanged: newEnableVulnScan ? newVulnOnWebChanged : false,
       vulnMaxUrls: newEnableVulnScan ? safeVulnMaxUrls : 50,
@@ -297,7 +302,7 @@ export function MonitoringPage() {
     <section className="page">
       <div className="page-header">
         <h1 className="page-title">变更监控</h1>
-        <p className="page-desc">监控新资产与端口变化，并支持对增量 URL 自动触发 Nuclei/CORS 漏扫。</p>
+        <p className="page-desc">监控新资产与端口变化，并支持对增量 URL 自动触发 Nuclei/CORS/SubTakeover 漏扫。</p>
       </div>
 
       <ProjectScopeBanner title="监控范围" hint="按当前项目根域名过滤显示。" />
@@ -574,6 +579,10 @@ export function MonitoringPage() {
                       <label className="form-checkbox">
                         <input type="checkbox" checked={newEnableCors} onChange={(e) => setNewEnableCors(e.target.checked)} />
                         High-risk CORS
+                      </label>
+                      <label className="form-checkbox">
+                        <input type="checkbox" checked={newEnableSubtakeover} onChange={(e) => setNewEnableSubtakeover(e.target.checked)} />
+                        SubTakeover
                       </label>
                     </div>
 

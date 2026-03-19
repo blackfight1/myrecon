@@ -144,6 +144,7 @@ export interface MonitorTarget {
   enableVulnScan?: boolean;
   enableNuclei?: boolean;
   enableCors?: boolean;
+  enableSubtakeover?: boolean;
   vulnOnNewLive?: boolean;
   vulnOnWebChanged?: boolean;
   vulnMaxUrls?: number;

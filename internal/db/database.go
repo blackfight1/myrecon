@@ -38,13 +38,14 @@ const (
 )
 
 type MonitorTargetOptions struct {
-	EnableVulnScan   *bool
-	EnableNuclei     *bool
-	EnableCors       *bool
-	VulnOnNewLive    *bool
-	VulnOnWebChanged *bool
-	VulnMaxURLs      *int
-	VulnCooldownMin  *int
+	EnableVulnScan    *bool
+	EnableNuclei      *bool
+	EnableCors        *bool
+	EnableSubtakeover *bool
+	VulnOnNewLive     *bool
+	VulnOnWebChanged  *bool
+	VulnMaxURLs       *int
+	VulnCooldownMin   *int
 }
 
 // NewDatabase creates database connection.
@@ -747,17 +748,18 @@ func (d *Database) GetOrCreateMonitorTarget(projectID, rootDomain string) (*Moni
 	result := d.DB.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).First(&target)
 	if result.Error == gorm.ErrRecordNotFound {
 		target = MonitorTarget{
-			ProjectID:        projectID,
-			RootDomain:       rootDomain,
-			Enabled:          true,
-			EnableVulnScan:   false,
-			EnableNuclei:     false,
-			EnableCors:       false,
-			VulnOnNewLive:    true,
-			VulnOnWebChanged: false,
-			VulnMaxURLs:      defaultMonitorVulnMaxURLs,
-			VulnCooldownMin:  defaultMonitorVulnCooldownMin,
-			BaselineDone:     false,
+			ProjectID:         projectID,
+			RootDomain:        rootDomain,
+			Enabled:           true,
+			EnableVulnScan:    false,
+			EnableNuclei:      false,
+			EnableCors:        false,
+			EnableSubtakeover: false,
+			VulnOnNewLive:     true,
+			VulnOnWebChanged:  false,
+			VulnMaxURLs:       defaultMonitorVulnMaxURLs,
+			VulnCooldownMin:   defaultMonitorVulnCooldownMin,
+			BaselineDone:      false,
 		}
 		if err := d.DB.Create(&target).Error; err != nil {
 			return nil, err
@@ -941,6 +943,9 @@ func applyMonitorTargetOptionsToStruct(target *MonitorTarget, opts *MonitorTarge
 	if opts.EnableCors != nil {
 		target.EnableCors = *opts.EnableCors
 	}
+	if opts.EnableSubtakeover != nil {
+		target.EnableSubtakeover = *opts.EnableSubtakeover
+	}
 	if opts.VulnOnNewLive != nil {
 		target.VulnOnNewLive = *opts.VulnOnNewLive
 	}
@@ -959,7 +964,7 @@ func monitorTargetOptionUpdates(opts *MonitorTargetOptions) map[string]interface
 	if opts == nil {
 		return nil
 	}
-	updates := make(map[string]interface{}, 7)
+	updates := make(map[string]interface{}, 8)
 	if opts.EnableVulnScan != nil {
 		updates["enable_vuln_scan"] = *opts.EnableVulnScan
 	}
@@ -968,6 +973,9 @@ func monitorTargetOptionUpdates(opts *MonitorTargetOptions) map[string]interface
 	}
 	if opts.EnableCors != nil {
 		updates["enable_cors"] = *opts.EnableCors
+	}
+	if opts.EnableSubtakeover != nil {
+		updates["enable_subtakeover"] = *opts.EnableSubtakeover
 	}
 	if opts.VulnOnNewLive != nil {
 		updates["vuln_on_new_live"] = *opts.VulnOnNewLive
@@ -999,17 +1007,18 @@ func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec
 		result := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).First(&target)
 		if result.Error == gorm.ErrRecordNotFound {
 			target = MonitorTarget{
-				ProjectID:        projectID,
-				RootDomain:       rootDomain,
-				Enabled:          true,
-				EnableVulnScan:   false,
-				EnableNuclei:     false,
-				EnableCors:       false,
-				VulnOnNewLive:    true,
-				VulnOnWebChanged: false,
-				VulnMaxURLs:      defaultMonitorVulnMaxURLs,
-				VulnCooldownMin:  defaultMonitorVulnCooldownMin,
-				BaselineDone:     false,
+				ProjectID:         projectID,
+				RootDomain:        rootDomain,
+				Enabled:           true,
+				EnableVulnScan:    false,
+				EnableNuclei:      false,
+				EnableCors:        false,
+				EnableSubtakeover: false,
+				VulnOnNewLive:     true,
+				VulnOnWebChanged:  false,
+				VulnMaxURLs:       defaultMonitorVulnMaxURLs,
+				VulnCooldownMin:   defaultMonitorVulnCooldownMin,
+				BaselineDone:      false,
 			}
 			applyMonitorTargetOptionsToStruct(&target, opts)
 			if err := tx.Create(&target).Error; err != nil {

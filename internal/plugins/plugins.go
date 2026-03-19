@@ -68,6 +68,10 @@ func NewCorsPlugin() engine.Scanner {
 	return vuln.NewCorsPlugin()
 }
 
+func NewSubTakeoverPlugin() engine.Scanner {
+	return vuln.NewSubTakeoverPlugin()
+}
+
 func StartReportServer(baseDir, rootDomain, host string, port int) error {
 	return web.StartReportServer(baseDir, rootDomain, host, port)
 }

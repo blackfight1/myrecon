@@ -54,6 +54,7 @@ export interface CreateMonitorTargetRequest {
   enableVulnScan?: boolean;
   enableNuclei?: boolean;
   enableCors?: boolean;
+  enableSubtakeover?: boolean;
   vulnOnNewLive?: boolean;
   vulnOnWebChanged?: boolean;
   vulnMaxUrls?: number;
@@ -66,6 +67,7 @@ export interface UpdateMonitorTargetRequest {
   enableVulnScan?: boolean;
   enableNuclei?: boolean;
   enableCors?: boolean;
+  enableSubtakeover?: boolean;
   vulnOnNewLive?: boolean;
   vulnOnWebChanged?: boolean;
   vulnMaxUrls?: number;

@@ -16,6 +16,7 @@ export function QuickScanPage() {
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
   const [enableCors, setEnableCors] = useState(false);
+  const [enableSubtakeover, setEnableSubtakeover] = useState(false);
   const [enableActiveSubs, setEnableActiveSubs] = useState(false);
   const [enableBbotActive, setEnableBbotActive] = useState(false);
   const [enableNotify, setEnableNotify] = useState(true);
@@ -29,9 +30,10 @@ export function QuickScanPage() {
       ...(enableBbotActive ? ["bbot_active"] : []),
       ...(enableWitness ? ["witness"] : []),
       ...(enableNuclei ? ["nuclei"] : []),
-      ...(enableCors ? ["cors"] : [])
+      ...(enableCors ? ["cors"] : []),
+      ...(enableSubtakeover ? ["subtakeover"] : [])
     ],
-    [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei, enableCors]
+    [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei, enableCors, enableSubtakeover]
   );
 
   useEffect(() => {
@@ -64,6 +66,7 @@ export function QuickScanPage() {
     if (enableWitness) modules.push("witness");
     if (enableNuclei) modules.push("nuclei");
     if (enableCors) modules.push("cors");
+    if (enableSubtakeover) modules.push("subtakeover");
 
     try {
       const job = await createJob.mutateAsync({
@@ -139,6 +142,9 @@ export function QuickScanPage() {
             </button>
             <button className={`module-chip ${enableCors ? "active" : ""}`} onClick={() => setEnableCors((v) => !v)}>
               高危CORS {enableCors ? "ON" : "OFF"}
+            </button>
+            <button className={`module-chip ${enableSubtakeover ? "active" : ""}`} onClick={() => setEnableSubtakeover((v) => !v)}>
+              子域接管 {enableSubtakeover ? "ON" : "OFF"}
             </button>
             <button className={`module-chip ${enableActiveSubs ? "active" : ""}`} onClick={() => setEnableActiveSubs((v) => !v)}>
               主动子域 {enableActiveSubs ? "ON" : "OFF"}

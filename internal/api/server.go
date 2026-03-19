@@ -237,24 +237,25 @@ type vulnerabilityResponse struct {
 }
 
 type monitorTargetResponse struct {
-	ID               int    `json:"id"`
-	ProjectID        string `json:"projectId,omitempty"`
-	RootDomain       string `json:"rootDomain"`
-	Enabled          bool   `json:"enabled"`
-	EnableVulnScan   bool   `json:"enableVulnScan"`
-	EnableNuclei     bool   `json:"enableNuclei"`
-	EnableCors       bool   `json:"enableCors"`
-	VulnOnNewLive    bool   `json:"vulnOnNewLive"`
-	VulnOnWebChanged bool   `json:"vulnOnWebChanged"`
-	VulnMaxURLs      int    `json:"vulnMaxUrls"`
-	VulnCooldownMin  int    `json:"vulnCooldownMin"`
-	LastVulnScanAt   string `json:"lastVulnScanAt,omitempty"`
-	BaselineDone     bool   `json:"baselineDone"`
-	BaselineVersion  int    `json:"baselineVersion"`
-	BaselineAt       string `json:"baselineAt,omitempty"`
-	LastRunAt        string `json:"lastRunAt,omitempty"`
-	CreatedAt        string `json:"createdAt,omitempty"`
-	UpdatedAt        string `json:"updatedAt,omitempty"`
+	ID                int    `json:"id"`
+	ProjectID         string `json:"projectId,omitempty"`
+	RootDomain        string `json:"rootDomain"`
+	Enabled           bool   `json:"enabled"`
+	EnableVulnScan    bool   `json:"enableVulnScan"`
+	EnableNuclei      bool   `json:"enableNuclei"`
+	EnableCors        bool   `json:"enableCors"`
+	EnableSubtakeover bool   `json:"enableSubtakeover"`
+	VulnOnNewLive     bool   `json:"vulnOnNewLive"`
+	VulnOnWebChanged  bool   `json:"vulnOnWebChanged"`
+	VulnMaxURLs       int    `json:"vulnMaxUrls"`
+	VulnCooldownMin   int    `json:"vulnCooldownMin"`
+	LastVulnScanAt    string `json:"lastVulnScanAt,omitempty"`
+	BaselineDone      bool   `json:"baselineDone"`
+	BaselineVersion   int    `json:"baselineVersion"`
+	BaselineAt        string `json:"baselineAt,omitempty"`
+	LastRunAt         string `json:"lastRunAt,omitempty"`
+	CreatedAt         string `json:"createdAt,omitempty"`
+	UpdatedAt         string `json:"updatedAt,omitempty"`
 }
 
 type monitorRunResponse struct {
@@ -387,16 +388,17 @@ type monitorChangeSortItem struct {
 }
 
 type createMonitorRequest struct {
-	ProjectID        string `json:"projectId"`
-	Domain           string `json:"domain"`
-	IntervalSec      int    `json:"intervalSec"`
-	EnableVulnScan   *bool  `json:"enableVulnScan"`
-	EnableNuclei     *bool  `json:"enableNuclei"`
-	EnableCors       *bool  `json:"enableCors"`
-	VulnOnNewLive    *bool  `json:"vulnOnNewLive"`
-	VulnOnWebChanged *bool  `json:"vulnOnWebChanged"`
-	VulnMaxURLs      *int   `json:"vulnMaxUrls"`
-	VulnCooldownMin  *int   `json:"vulnCooldownMin"`
+	ProjectID         string `json:"projectId"`
+	Domain            string `json:"domain"`
+	IntervalSec       int    `json:"intervalSec"`
+	EnableVulnScan    *bool  `json:"enableVulnScan"`
+	EnableNuclei      *bool  `json:"enableNuclei"`
+	EnableCors        *bool  `json:"enableCors"`
+	EnableSubtakeover *bool  `json:"enableSubtakeover"`
+	VulnOnNewLive     *bool  `json:"vulnOnNewLive"`
+	VulnOnWebChanged  *bool  `json:"vulnOnWebChanged"`
+	VulnMaxURLs       *int   `json:"vulnMaxUrls"`
+	VulnCooldownMin   *int   `json:"vulnCooldownMin"`
 }
 
 type projectResponse struct {
@@ -1015,7 +1017,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 
 	// Run network pipeline (httpx + ports)
 	s.appendJobLogf(task.ProjectID, jobID, "info", "阶段开始: 网络探测 (targets=%d)", len(subdomains))
-	networkResults, err := s.runNetworkPipeline(subdomains, true, true, false, false, false, s.screenshotDir)
+	networkResults, err := s.runNetworkPipeline(subdomains, true, true, false, false, false, false, s.screenshotDir)
 	if err != nil {
 		log.Printf("[Scheduler] network pipeline warning for %s: %v", rootDomain, err)
 		s.appendJobLogf(task.ProjectID, jobID, "warn", "网络探测告警: %v", err)
@@ -1037,7 +1039,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 	// Optional: run vulnerability scan for incremental monitor changes.
 	policy := monitorVulnPolicyFromTarget(target)
 	monitorVulnCount := 0
-	if policy.EnableVulnScan && (policy.EnableNuclei || policy.EnableCors) {
+	if policy.EnableVulnScan && (policy.EnableNuclei || policy.EnableCors || policy.EnableSubtakeover) {
 		cooldown := time.Duration(policy.VulnCooldownMin) * time.Minute
 		if target.LastVulnScanAt != nil && cooldown > 0 && time.Since(*target.LastVulnScanAt) < cooldown {
 			nextAt := target.LastVulnScanAt.Add(cooldown)
@@ -1049,8 +1051,8 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 			} else if len(vulnTargets) == 0 {
 				s.appendJobLog(task.ProjectID, jobID, "info", "监控增量漏扫跳过：本轮无符合策略的增量 URL")
 			} else {
-				s.appendJobLogf(task.ProjectID, jobID, "info", "阶段开始: 增量漏洞扫描 (urls=%d nuclei=%v cors=%v)", len(vulnTargets), policy.EnableNuclei, policy.EnableCors)
-				vulnResults, vulnErr := s.runMonitorVulnPipeline(task.ProjectID, rootDomain, run.ID, vulnTargets, policy.EnableNuclei, policy.EnableCors)
+				s.appendJobLogf(task.ProjectID, jobID, "info", "阶段开始: 增量漏洞扫描 (urls=%d nuclei=%v cors=%v subtakeover=%v)", len(vulnTargets), policy.EnableNuclei, policy.EnableCors, policy.EnableSubtakeover)
+				vulnResults, vulnErr := s.runMonitorVulnPipeline(task.ProjectID, rootDomain, run.ID, vulnTargets, policy.EnableNuclei, policy.EnableCors, policy.EnableSubtakeover)
 				if vulnErr != nil {
 					s.appendJobLogf(task.ProjectID, jobID, "warn", "监控增量漏扫告警: %v", vulnErr)
 				}
@@ -1202,7 +1204,7 @@ func (s *Server) collectMonitorVulnTargets(projectID string, runID uint, include
 	return urls, nil
 }
 
-func (s *Server) runMonitorVulnPipeline(projectID, rootDomain string, runID uint, urls []string, enableNuclei, enableCors bool) ([]engine.Result, error) {
+func (s *Server) runMonitorVulnPipeline(projectID, rootDomain string, runID uint, urls []string, enableNuclei, enableCors, enableSubtakeover bool) ([]engine.Result, error) {
 	if len(urls) == 0 {
 		return []engine.Result{}, nil
 	}
@@ -1235,6 +1237,13 @@ func (s *Server) runMonitorVulnPipeline(projectID, rootDomain string, runID uint
 			firstErr = err
 		}
 		allResults = append(allResults, corsResults...)
+	}
+	if enableSubtakeover {
+		subtakeoverResults, err := plugins.NewSubTakeoverPlugin().Execute(inputs)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		allResults = append(allResults, subtakeoverResults...)
 	}
 
 	if len(allResults) > 0 {
@@ -2980,7 +2989,9 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	hasWitness := containsAnyModule(modules, "witness", "gowitness")
 	hasNuclei := enableNuclei || containsAnyModule(modules, "nuclei")
 	hasCors := containsAnyModule(modules, "cors")
-	// Nuclei/Cors/Witness all depend on live HTTP targets from httpx.
+	hasSubTakeover := containsAnyModule(modules, "subtakeover")
+	// Nuclei/Cors/Witness depend on live HTTP targets from httpx.
+	// SubTakeover scans hostnames directly and does not require httpx.
 	hasHttpx := containsAnyModule(modules, "httpx") || hasNuclei || hasCors || hasWitness
 
 	s.settingsMu.RLock()
@@ -2994,8 +3005,8 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	s.settingsMu.RUnlock()
 
 	dictSize = clampDictSize(dictSize)
-	s.appendJobLogf(projectID, jobID, "debug", "执行参数: hasSubs=%v hasBbotActive=%v hasActiveSubs=%v hasHttpx=%v hasPorts=%v hasNuclei=%v hasCors=%v hasWitness=%v dictSize=%d",
-		hasSubs, hasBbotActive, hasActiveSubs, hasHttpx, hasPorts, hasNuclei, hasCors, hasWitness, dictSize)
+	s.appendJobLogf(projectID, jobID, "debug", "执行参数: hasSubs=%v hasBbotActive=%v hasActiveSubs=%v hasHttpx=%v hasPorts=%v hasNuclei=%v hasCors=%v hasSubTakeover=%v hasWitness=%v dictSize=%d",
+		hasSubs, hasBbotActive, hasActiveSubs, hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness, dictSize)
 
 	var allResults []engine.Result
 	var scanErr error
@@ -3062,10 +3073,10 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 			}
 		}
 
-		if hasPorts || hasHttpx {
-			s.appendJobLogf(projectID, jobID, "info", "阶段开始: 网络探测 (targets=%d httpx=%v ports=%v nuclei=%v cors=%v witness=%v)",
-				len(subdomains), hasHttpx, hasPorts, hasNuclei, hasCors, hasWitness)
-			networkResults, err := s.runNetworkPipeline(subdomains, hasHttpx, hasPorts, hasNuclei, hasCors, hasWitness, screenshotDir)
+		if hasPorts || hasHttpx || hasSubTakeover {
+			s.appendJobLogf(projectID, jobID, "info", "阶段开始: 网络探测 (targets=%d httpx=%v ports=%v nuclei=%v cors=%v subtakeover=%v witness=%v)",
+				len(subdomains), hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness)
+			networkResults, err := s.runNetworkPipeline(subdomains, hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness, screenshotDir)
 			allResults = append(allResults, networkResults...)
 			if err != nil {
 				scanErr = fmt.Errorf("network stage failed: %v", err)
@@ -3080,10 +3091,10 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 				return
 			}
 		}
-	} else if hasPorts || hasHttpx {
-		s.appendJobLogf(projectID, jobID, "info", "阶段开始: 网络探测 (targets=%d httpx=%v ports=%v nuclei=%v cors=%v witness=%v)",
-			len(domains), hasHttpx, hasPorts, hasNuclei, hasCors, hasWitness)
-		networkResults, err := s.runNetworkPipeline(domains, hasHttpx, hasPorts, hasNuclei, hasCors, hasWitness, screenshotDir)
+	} else if hasPorts || hasHttpx || hasSubTakeover {
+		s.appendJobLogf(projectID, jobID, "info", "阶段开始: 网络探测 (targets=%d httpx=%v ports=%v nuclei=%v cors=%v subtakeover=%v witness=%v)",
+			len(domains), hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness)
+		networkResults, err := s.runNetworkPipeline(domains, hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness, screenshotDir)
 		allResults = append(allResults, networkResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("network stage failed: %v", err)
@@ -3245,7 +3256,7 @@ func (s *Server) expandActiveSubdomains(rootDomains, passiveSubdomains []string,
 	return allResults, extractDomains(bruteResults), nil
 }
 
-func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, enableNuclei, enableCors, enableWitness bool, screenshotDir string) ([]engine.Result, error) {
+func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, enableNuclei, enableCors, enableSubTakeover, enableWitness bool, screenshotDir string) ([]engine.Result, error) {
 	pipeline := engine.NewPipeline()
 	if enableHTTPX {
 		pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
@@ -3259,6 +3270,9 @@ func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, 
 	}
 	if enableCors {
 		pipeline.AddVulnScanner(plugins.NewCorsPlugin())
+	}
+	if enableSubTakeover {
+		pipeline.AddVulnScanner(plugins.NewSubTakeoverPlugin())
 	}
 	if enableWitness {
 		pipeline.SetScreenshotScanner(plugins.NewGowitnessPlugin(screenshotDir))
@@ -3488,24 +3502,25 @@ func (s *Server) handleListMonitorTargets(w http.ResponseWriter, r *http.Request
 	for _, t := range targets {
 		policy := monitorVulnPolicyFromTarget(&t)
 		resp = append(resp, monitorTargetResponse{
-			ID:               int(t.ID),
-			ProjectID:        t.ProjectID,
-			RootDomain:       t.RootDomain,
-			Enabled:          t.Enabled,
-			EnableVulnScan:   policy.EnableVulnScan,
-			EnableNuclei:     policy.EnableNuclei,
-			EnableCors:       policy.EnableCors,
-			VulnOnNewLive:    policy.VulnOnNewLive,
-			VulnOnWebChanged: policy.VulnOnWebChanged,
-			VulnMaxURLs:      policy.VulnMaxURLs,
-			VulnCooldownMin:  policy.VulnCooldownMin,
-			LastVulnScanAt:   timePtrToISO(t.LastVulnScanAt),
-			BaselineDone:     t.BaselineDone,
-			BaselineVersion:  t.BaselineVersion,
-			BaselineAt:       timePtrToISO(t.BaselineAt),
-			LastRunAt:        timePtrToISO(t.LastRunAt),
-			CreatedAt:        timeToISO(t.CreatedAt),
-			UpdatedAt:        timeToISO(t.UpdatedAt),
+			ID:                int(t.ID),
+			ProjectID:         t.ProjectID,
+			RootDomain:        t.RootDomain,
+			Enabled:           t.Enabled,
+			EnableVulnScan:    policy.EnableVulnScan,
+			EnableNuclei:      policy.EnableNuclei,
+			EnableCors:        policy.EnableCors,
+			EnableSubtakeover: policy.EnableSubtakeover,
+			VulnOnNewLive:     policy.VulnOnNewLive,
+			VulnOnWebChanged:  policy.VulnOnWebChanged,
+			VulnMaxURLs:       policy.VulnMaxURLs,
+			VulnCooldownMin:   policy.VulnCooldownMin,
+			LastVulnScanAt:    timePtrToISO(t.LastVulnScanAt),
+			BaselineDone:      t.BaselineDone,
+			BaselineVersion:   t.BaselineVersion,
+			BaselineAt:        timePtrToISO(t.BaselineAt),
+			LastRunAt:         timePtrToISO(t.LastRunAt),
+			CreatedAt:         timeToISO(t.CreatedAt),
+			UpdatedAt:         timeToISO(t.UpdatedAt),
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -4278,7 +4293,7 @@ func sanitizeModules(raw []string) []string {
 		"bbot_active": true, "chaos": true,
 		"dictgen": true, "dnsx_bruteforce": true,
 		"naabu": true, "nmap": true,
-		"httpx": true, "gowitness": true, "nuclei": true, "cors": true,
+		"httpx": true, "gowitness": true, "nuclei": true, "cors": true, "subtakeover": true,
 		"subs": true, "ports": true, "monitor": true, "witness": true,
 	}
 	var out []string
@@ -4302,13 +4317,14 @@ func clampDictSize(n int) int {
 }
 
 type monitorVulnPolicy struct {
-	EnableVulnScan   bool
-	EnableNuclei     bool
-	EnableCors       bool
-	VulnOnNewLive    bool
-	VulnOnWebChanged bool
-	VulnMaxURLs      int
-	VulnCooldownMin  int
+	EnableVulnScan    bool
+	EnableNuclei      bool
+	EnableCors        bool
+	EnableSubtakeover bool
+	VulnOnNewLive     bool
+	VulnOnWebChanged  bool
+	VulnMaxURLs       int
+	VulnCooldownMin   int
 }
 
 func clampMonitorVulnMaxURLs(n int) int {
@@ -4333,13 +4349,14 @@ func clampMonitorVulnCooldownMin(n int) int {
 
 func monitorVulnPolicyFromTarget(target *db.MonitorTarget) monitorVulnPolicy {
 	policy := monitorVulnPolicy{
-		EnableVulnScan:   false,
-		EnableNuclei:     false,
-		EnableCors:       false,
-		VulnOnNewLive:    true,
-		VulnOnWebChanged: false,
-		VulnMaxURLs:      defaultMonitorVulnMaxURLs,
-		VulnCooldownMin:  defaultMonitorVulnCooldown,
+		EnableVulnScan:    false,
+		EnableNuclei:      false,
+		EnableCors:        false,
+		EnableSubtakeover: false,
+		VulnOnNewLive:     true,
+		VulnOnWebChanged:  false,
+		VulnMaxURLs:       defaultMonitorVulnMaxURLs,
+		VulnCooldownMin:   defaultMonitorVulnCooldown,
 	}
 	if target == nil {
 		return policy
@@ -4347,6 +4364,7 @@ func monitorVulnPolicyFromTarget(target *db.MonitorTarget) monitorVulnPolicy {
 	policy.EnableVulnScan = target.EnableVulnScan
 	policy.EnableNuclei = target.EnableNuclei
 	policy.EnableCors = target.EnableCors
+	policy.EnableSubtakeover = target.EnableSubtakeover
 	policy.VulnOnNewLive = target.VulnOnNewLive
 	policy.VulnOnWebChanged = target.VulnOnWebChanged
 	policy.VulnMaxURLs = clampMonitorVulnMaxURLs(target.VulnMaxURLs)
@@ -4362,6 +4380,7 @@ func buildMonitorTargetOptions(req createMonitorRequest) *db.MonitorTargetOption
 	if req.EnableVulnScan == nil &&
 		req.EnableNuclei == nil &&
 		req.EnableCors == nil &&
+		req.EnableSubtakeover == nil &&
 		req.VulnOnNewLive == nil &&
 		req.VulnOnWebChanged == nil &&
 		req.VulnMaxURLs == nil &&
@@ -4369,13 +4388,14 @@ func buildMonitorTargetOptions(req createMonitorRequest) *db.MonitorTargetOption
 		return nil
 	}
 	opts := &db.MonitorTargetOptions{
-		EnableVulnScan:   req.EnableVulnScan,
-		EnableNuclei:     req.EnableNuclei,
-		EnableCors:       req.EnableCors,
-		VulnOnNewLive:    req.VulnOnNewLive,
-		VulnOnWebChanged: req.VulnOnWebChanged,
-		VulnMaxURLs:      req.VulnMaxURLs,
-		VulnCooldownMin:  req.VulnCooldownMin,
+		EnableVulnScan:    req.EnableVulnScan,
+		EnableNuclei:      req.EnableNuclei,
+		EnableCors:        req.EnableCors,
+		EnableSubtakeover: req.EnableSubtakeover,
+		VulnOnNewLive:     req.VulnOnNewLive,
+		VulnOnWebChanged:  req.VulnOnWebChanged,
+		VulnMaxURLs:       req.VulnMaxURLs,
+		VulnCooldownMin:   req.VulnCooldownMin,
 	}
 	return opts
 }

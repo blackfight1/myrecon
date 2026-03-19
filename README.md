@@ -16,7 +16,7 @@
 - Web 存活探测：`httpx`
 - 端口与服务识别：`naabu + nmap`（`service/version/banner`）
 - Web 截图：`gowitness`
-- 漏洞候选：`nuclei` + `cors`（高危 CORS）
+- 漏洞候选：`nuclei` + `cors`（高危 CORS）+ `subzy`（子域名接管）
 - 资产、端口、漏洞、任务、监控结果统一落地 PostgreSQL
 - 前端控制台（React + Vite）
 
@@ -112,6 +112,9 @@ go install github.com/sensepost/gowitness@latest
 # nuclei
 go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 nuclei -update-templates
+
+# subzy（子域名接管）
+go install -v github.com/PentestPad/subzy@latest
 ```
 
 ### 4) 安装自检
@@ -119,7 +122,7 @@ nuclei -update-templates
 Linux/macOS:
 
 ```bash
-for t in subfinder chaos findomain bbot shosubgo dnsx httpx naabu nmap gowitness nuclei; do
+for t in subfinder chaos findomain bbot shosubgo dnsx httpx naabu nmap gowitness nuclei subzy; do
   command -v "$t" >/dev/null 2>&1 && echo "[OK] $t" || echo "[MISS] $t"
 done
 ```
@@ -127,7 +130,7 @@ done
 PowerShell:
 
 ```powershell
-$tools = "subfinder","chaos","findomain","bbot","shosubgo","dnsx","httpx","naabu","nmap","gowitness","nuclei"
+$tools = "subfinder","chaos","findomain","bbot","shosubgo","dnsx","httpx","naabu","nmap","gowitness","nuclei","subzy"
 foreach ($t in $tools) {
   if (Get-Command $t -ErrorAction SilentlyContinue) { "[OK] $t" } else { "[MISS] $t" }
 }
@@ -180,6 +183,24 @@ NUCLEI_EXCLUDE_SEVERITIES=info,unknown
 # CORS_USER_AGENT=myrecon-cors/1.0
 # 当任务使用默认模块且启用 nuclei 时，是否自动附带 cors（默认 true）
 # CORS_WITH_NUCLEI=true
+
+# 子域名接管扫描（subzy，可选）
+# 是否启用插件（默认 true）
+# SUBTAKEOVER_SCAN_ENABLED=true
+# 单次任务最多检测 host 数（默认 3000）
+# SUBTAKEOVER_MAX_TARGETS=3000
+# 并发（默认 20）
+# SUBTAKEOVER_CONCURRENCY=20
+# 每个请求超时秒数（默认 10）
+# SUBTAKEOVER_TIMEOUT_SEC=10
+# 无协议输入是否默认强制 https（默认 true）
+# SUBTAKEOVER_FORCE_HTTPS=true
+# 是否验证 SSL（默认 false）
+# SUBTAKEOVER_VERIFY_SSL=false
+# 风险级别（默认 high）
+# SUBTAKEOVER_SEVERITY=high
+# 排除指定平台（逗号分隔，按 engine 名过滤）
+# SUBTAKEOVER_EXCLUDE_ENGINES=github,vercel
 ```
 
 PowerShell 示例：
@@ -310,7 +331,7 @@ go run . -mode scan -scan-delete-domain example.com
 | `-d` | 单个根域名 |
 | `-dL` | 根域名文件 |
 | `-i` | 输入文件（ports/witness） |
-| `-m` | 模块：`subs,httpx,ports,witness,nuclei,cors,dnsx_bruteforce,bbot_active` |
+| `-m` | 模块：`subs,httpx,ports,witness,nuclei,cors,subtakeover,dnsx_bruteforce,bbot_active` |
 | `-dry-run` | 只执行不入库 |
 | `-nuclei` | 启用 nuclei |
 | `-active-subs` | 启用主动子域名扩展 |
