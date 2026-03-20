@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -28,8 +29,9 @@ func (n *NmapPlugin) Name() string {
 // Execute runs nmap service detection.
 // Expected input format: "ip:port:host" or "ip:port".
 func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
-	if _, err := exec.LookPath("nmap"); err != nil {
-		return nil, fmt.Errorf("nmap not found in PATH. Please install nmap and ensure it's in your PATH")
+	nmapBin, err := resolveNmapBinary()
+	if err != nil {
+		return nil, err
 	}
 
 	if len(input) == 0 {
@@ -84,7 +86,7 @@ func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
 
 		fmt.Printf("[Nmap] (%d/%d) Scanning %s on %d ports...\n", scannedCount, len(ipPorts), ip, len(ports))
 
-		cmd := exec.Command("nmap",
+		cmd := exec.Command(nmapBin,
 			"-sV",
 			"-Pn",
 			"-T4",
@@ -116,6 +118,26 @@ func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
 
 	fmt.Printf("[Nmap] Service detection finished, identified %d services\n", len(results))
 	return results, nil
+}
+
+func resolveNmapBinary() (string, error) {
+	if p, err := exec.LookPath("nmap"); err == nil && strings.TrimSpace(p) != "" {
+		return p, nil
+	}
+	// snap-installed nmap is commonly located here and may be missing from service PATH.
+	fallbacks := []string{
+		"/snap/bin/nmap",
+		"/usr/bin/nmap",
+		"/usr/local/bin/nmap",
+	}
+	for _, p := range fallbacks {
+		st, err := os.Stat(p)
+		if err != nil || st.IsDir() {
+			continue
+		}
+		return p, nil
+	}
+	return "", fmt.Errorf("nmap not found in PATH (also checked /snap/bin/nmap, /usr/bin/nmap, /usr/local/bin/nmap)")
 }
 
 type nmapRun struct {

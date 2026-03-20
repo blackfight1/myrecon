@@ -4206,23 +4206,42 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func ensureCommonToolPaths() {
-	extra := "/root/go/bin"
-	st, err := os.Stat(extra)
-	if err != nil || !st.IsDir() {
-		return
+	cur := os.Getenv("PATH")
+	existing := make(map[string]bool)
+	for _, item := range filepath.SplitList(cur) {
+		cleaned := filepath.Clean(item)
+		if cleaned == "" || cleaned == "." {
+			continue
+		}
+		existing[cleaned] = true
 	}
 
-	cur := os.Getenv("PATH")
-	for _, item := range filepath.SplitList(cur) {
-		if filepath.Clean(item) == filepath.Clean(extra) {
-			return
-		}
+	candidates := []string{
+		"/root/go/bin",
+		"/snap/bin",
 	}
-	if cur == "" {
-		_ = os.Setenv("PATH", extra)
+	toAppend := make([]string, 0, len(candidates))
+	for _, path := range candidates {
+		st, err := os.Stat(path)
+		if err != nil || !st.IsDir() {
+			continue
+		}
+		cleaned := filepath.Clean(path)
+		if existing[cleaned] {
+			continue
+		}
+		existing[cleaned] = true
+		toAppend = append(toAppend, cleaned)
+	}
+
+	if len(toAppend) == 0 {
 		return
 	}
-	_ = os.Setenv("PATH", cur+string(os.PathListSeparator)+extra)
+	if strings.TrimSpace(cur) == "" {
+		_ = os.Setenv("PATH", strings.Join(toAppend, string(os.PathListSeparator)))
+		return
+	}
+	_ = os.Setenv("PATH", cur+string(os.PathListSeparator)+strings.Join(toAppend, string(os.PathListSeparator)))
 }
 
 func (s *Server) handleTestNotify(w http.ResponseWriter, r *http.Request) {
