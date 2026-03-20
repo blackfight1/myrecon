@@ -218,6 +218,34 @@ export interface MonitorEvent {
   lastRunId?: number;
 }
 
+export interface MonitorSnapshot {
+  id: number;
+  projectId?: string;
+  rootDomain: string;
+  runId: number;
+  assetCount: number;
+  portCount: number;
+  openEventCount: number;
+  summary?: Record<string, unknown>;
+  createdAt?: string;
+}
+
+export interface MonitorDiff {
+  projectId?: string;
+  rootDomain: string;
+  runId: number;
+  prevRunId?: number;
+  snapshot: MonitorSnapshot;
+  previous?: MonitorSnapshot;
+  delta: {
+    assetCount: number;
+    portCount: number;
+    openEventCount: number;
+  };
+  assetChanges: MonitorChange[];
+  portChanges: MonitorChange[];
+}
+
 export interface ProjectRecord {
   id: string;
   name: string;

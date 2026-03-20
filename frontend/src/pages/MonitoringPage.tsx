@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { StatCard } from "../components/ui/StatCard";
 import { StatusBadge } from "../components/ui/StatusBadge";
@@ -8,6 +8,7 @@ import {
   useCreateMonitorTarget,
   useDeleteMonitorTarget,
   useMonitorChanges,
+  useMonitorDiff,
   useMonitorEvents,
   useMonitorRuns,
   useMonitorTargets,
@@ -72,6 +73,7 @@ export function MonitoringPage() {
   const [eventTab, setEventTab] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState("");
   const [searchQ, setSearchQ] = useState("");
+  const [diffRunID, setDiffRunID] = useState<number | undefined>(undefined);
 
   const [showPolicyModal, setShowPolicyModal] = useState(false);
   const [editingTarget, setEditingTarget] = useState<MonitorTarget | null>(null);
@@ -96,6 +98,7 @@ export function MonitoringPage() {
 
   const targetsQ = useMonitorTargets(projectId);
   const runsQ = useMonitorRuns(projectId);
+  const diffQ = useMonitorDiff(projectId, diffRunID, undefined, 200);
   const changesQ = useMonitorChanges(projectId);
   const eventsQ = useMonitorEvents(projectId, undefined, statusParam, eventTypeParam, searchParam);
 
@@ -114,6 +117,15 @@ export function MonitoringPage() {
     () => (runsQ.data ?? []).filter((r: MonitorRun) => matchesProjectDomain(r.rootDomain, rootDomains)),
     [runsQ.data, rootDomains]
   );
+  useEffect(() => {
+    if (runs.length === 0) {
+      setDiffRunID(undefined);
+      return;
+    }
+    if (!diffRunID || !runs.some((r) => r.id === diffRunID)) {
+      setDiffRunID(runs[0].id);
+    }
+  }, [runs, diffRunID]);
   const changes = useMemo(
     () => (changesQ.data ?? []).filter((c: MonitorChange) => matchesProjectDomain(c.rootDomain, rootDomains)),
     [changesQ.data, rootDomains]
@@ -427,6 +439,136 @@ export function MonitoringPage() {
             </tbody>
           </table>
         </div>
+      </article>
+
+      <article className="panel monitor-section">
+        <header className="panel-header">
+          <h2>运行差分审计</h2>
+          <div className="toolbar-group">
+            <select
+              className="form-select"
+              value={diffRunID ?? ""}
+              onChange={(e) => setDiffRunID(e.target.value ? Number(e.target.value) : undefined)}
+              style={{ minWidth: 180 }}
+            >
+              <option value="">选择运行记录</option>
+              {runs.slice(0, 100).map((run) => (
+                <option key={run.id} value={run.id}>
+                  #{run.id} | {run.rootDomain}
+                </option>
+              ))}
+            </select>
+            <span className="panel-meta">
+              {diffQ.data?.prevRunId ? `对比 #${diffQ.data.runId} vs #${diffQ.data.prevRunId}` : diffQ.data?.runId ? `运行 #${diffQ.data.runId}` : "暂无差分数据"}
+            </span>
+          </div>
+        </header>
+
+        {diffQ.isLoading && <div className="empty-state">正在加载差分...</div>}
+        {!diffQ.isLoading && !diffQ.data?.runId && <div className="empty-state">暂无可对比的运行记录。</div>}
+
+        {!diffQ.isLoading && diffQ.data?.runId && (
+          <div className="panel-body">
+            <div className="stats-row" style={{ marginTop: 0 }}>
+              <StatCard label="资产总量" value={`${diffQ.data.snapshot.assetCount} (${diffQ.data.delta.assetCount >= 0 ? "+" : ""}${diffQ.data.delta.assetCount})`} />
+              <StatCard label="端口总量" value={`${diffQ.data.snapshot.portCount} (${diffQ.data.delta.portCount >= 0 ? "+" : ""}${diffQ.data.delta.portCount})`} />
+              <StatCard label="Open 事件" value={`${diffQ.data.snapshot.openEventCount} (${diffQ.data.delta.openEventCount >= 0 ? "+" : ""}${diffQ.data.delta.openEventCount})`} />
+            </div>
+
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>指标</th>
+                    <th>当前</th>
+                    <th>上一轮</th>
+                    <th>变化</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Assets</td>
+                    <td>{diffQ.data.snapshot.assetCount}</td>
+                    <td>{diffQ.data.previous?.assetCount ?? "-"}</td>
+                    <td>{diffQ.data.delta.assetCount >= 0 ? "+" : ""}{diffQ.data.delta.assetCount}</td>
+                  </tr>
+                  <tr>
+                    <td>Ports</td>
+                    <td>{diffQ.data.snapshot.portCount}</td>
+                    <td>{diffQ.data.previous?.portCount ?? "-"}</td>
+                    <td>{diffQ.data.delta.portCount >= 0 ? "+" : ""}{diffQ.data.delta.portCount}</td>
+                  </tr>
+                  <tr>
+                    <td>Open Events</td>
+                    <td>{diffQ.data.snapshot.openEventCount}</td>
+                    <td>{diffQ.data.previous?.openEventCount ?? "-"}</td>
+                    <td>{diffQ.data.delta.openEventCount >= 0 ? "+" : ""}{diffQ.data.delta.openEventCount}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="table-wrap" style={{ marginTop: 12 }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>资产变化</th>
+                    <th>Domain</th>
+                    <th>IP</th>
+                    <th>Port</th>
+                    <th>状态码</th>
+                    <th>时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(diffQ.data.assetChanges ?? []).slice(0, 20).map((ch, idx) => (
+                    <tr key={`ad-${idx}`}>
+                      <td>{changeTypeLabel(ch.changeType)}</td>
+                      <td>{ch.domain || "-"}</td>
+                      <td className="cell-mono">{ch.ip || "-"}</td>
+                      <td>{ch.port || "-"}</td>
+                      <td>{ch.statusCode || "-"}</td>
+                      <td className="cell-muted">{formatDate(ch.createdAt)}</td>
+                    </tr>
+                  ))}
+                  {(diffQ.data.assetChanges ?? []).length === 0 && (
+                    <tr><td colSpan={6} style={{ textAlign: "center", color: "#94a3b8" }}>该运行无资产变化</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="table-wrap" style={{ marginTop: 12 }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>端口变化</th>
+                    <th>Domain</th>
+                    <th>IP</th>
+                    <th>Port</th>
+                    <th>服务</th>
+                    <th>时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(diffQ.data.portChanges ?? []).slice(0, 20).map((ch, idx) => (
+                    <tr key={`pd-${idx}`}>
+                      <td>{changeTypeLabel(ch.changeType)}</td>
+                      <td>{ch.domain || "-"}</td>
+                      <td className="cell-mono">{ch.ip || "-"}</td>
+                      <td>{ch.port || "-"}</td>
+                      <td>{ch.title || "-"}</td>
+                      <td className="cell-muted">{formatDate(ch.createdAt)}</td>
+                    </tr>
+                  ))}
+                  {(diffQ.data.portChanges ?? []).length === 0 && (
+                    <tr><td colSpan={6} style={{ textAlign: "center", color: "#94a3b8" }}>该运行无端口变化</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </article>
 
       <article className="panel monitor-section">

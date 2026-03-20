@@ -168,6 +168,8 @@ export function useCreateMonitorTarget() {
     mutationFn: (body: CreateMonitorTargetRequest) => endpoints.createMonitorTarget(body),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-snapshots"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-diff"] });
       await qc.invalidateQueries({ queryKey: ["jobs"] });
       await qc.invalidateQueries({ queryKey: ["jobs-page"] });
     }
@@ -181,6 +183,8 @@ export function useUpdateMonitorTarget() {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
       await qc.invalidateQueries({ queryKey: ["monitor-runs"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-snapshots"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-diff"] });
       await qc.invalidateQueries({ queryKey: ["monitor-events"] });
     }
   });
@@ -193,6 +197,8 @@ export function useStopMonitorTarget() {
       endpoints.stopMonitorTarget(projectId, domain),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-snapshots"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-diff"] });
       await qc.invalidateQueries({ queryKey: ["jobs"] });
       await qc.invalidateQueries({ queryKey: ["jobs-page"] });
     }
@@ -207,6 +213,8 @@ export function useDeleteMonitorTarget() {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["monitor-targets"] });
       await qc.invalidateQueries({ queryKey: ["monitor-runs"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-snapshots"] });
+      await qc.invalidateQueries({ queryKey: ["monitor-diff"] });
       await qc.invalidateQueries({ queryKey: ["monitor-changes"] });
       await qc.invalidateQueries({ queryKey: ["monitor-events"] });
       await qc.invalidateQueries({ queryKey: ["jobs"] });
@@ -219,6 +227,24 @@ export function useMonitorRuns(projectId?: string, rootDomain?: string) {
   return useQuery({
     queryKey: ["monitor-runs", projectId ?? "", rootDomain ?? ""],
     queryFn: () => endpoints.getMonitorRuns(projectId, rootDomain),
+    enabled: !!projectId,
+    refetchInterval: 10000
+  });
+}
+
+export function useMonitorSnapshots(projectId?: string, rootDomain?: string, limit?: number) {
+  return useQuery({
+    queryKey: ["monitor-snapshots", projectId ?? "", rootDomain ?? "", String(limit ?? 60)],
+    queryFn: () => endpoints.getMonitorSnapshots(projectId, rootDomain, limit),
+    enabled: !!projectId,
+    refetchInterval: 10000
+  });
+}
+
+export function useMonitorDiff(projectId?: string, runId?: number, rootDomain?: string, limit?: number) {
+  return useQuery({
+    queryKey: ["monitor-diff", projectId ?? "", String(runId ?? 0), rootDomain ?? "", String(limit ?? 200)],
+    queryFn: () => endpoints.getMonitorDiff(projectId, runId, rootDomain, limit),
     enabled: !!projectId,
     refetchInterval: 10000
   });

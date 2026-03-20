@@ -60,7 +60,7 @@ func NewDatabase(dsn string) (*Database, error) {
 	if err := database.AutoMigrate(
 		&Project{}, &ProjectScope{},
 		&Asset{}, &AssetCandidate{}, &Port{}, &Vulnerability{}, &VulnEvent{},
-		&MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorEvent{}, &MonitorTarget{}, &MonitorTask{},
+		&MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorEvent{}, &MonitorSnapshot{}, &MonitorTarget{}, &MonitorTask{},
 		&ScanJob{}, &ScanStage{}, &ScanArtifact{}, &JobLog{}, &AssetEdge{}, &AuditLog{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %v", err)
@@ -83,6 +83,7 @@ func ensureProjectScopedSchema(database *gorm.DB) error {
 			"UPDATE monitor_tasks SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE monitor_runs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE monitor_events SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE monitor_snapshots SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE scan_jobs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE scan_stages SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE scan_artifacts SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
@@ -121,6 +122,7 @@ func ensureProjectScopedSchema(database *gorm.DB) error {
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_project_fingerprint ON vulnerabilities (project_id, fingerprint)",
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_target_project_root ON monitor_targets (project_id, root_domain)",
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_event_project_key ON monitor_events (project_id, event_key)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_snapshot_project_root_run ON monitor_snapshots (project_id, root_domain, run_id)",
 			"CREATE INDEX IF NOT EXISTS idx_job_logs_project_job_id ON job_logs (project_id, job_id, id)",
 		}
 		for _, stmt := range createStatements {
@@ -705,6 +707,36 @@ func (d *Database) CompleteMonitorRun(runID uint, status string, errMsg string, 
 	return d.DB.Model(&MonitorRun{}).Where("id = ?", runID).Updates(updates).Error
 }
 
+// SaveMonitorSnapshot creates or updates one monitor snapshot for a run.
+func (d *Database) SaveMonitorSnapshot(snapshot *MonitorSnapshot) error {
+	if snapshot == nil {
+		return fmt.Errorf("snapshot is nil")
+	}
+	if strings.TrimSpace(snapshot.ProjectID) == "" {
+		snapshot.ProjectID = "default"
+	}
+	if strings.TrimSpace(snapshot.RootDomain) == "" {
+		return fmt.Errorf("rootDomain is required")
+	}
+	if snapshot.RunID == 0 {
+		return fmt.Errorf("runID is required")
+	}
+	return d.DB.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "project_id"},
+			{Name: "root_domain"},
+			{Name: "run_id"},
+		},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"asset_count":      snapshot.AssetCount,
+			"port_count":       snapshot.PortCount,
+			"open_event_count": snapshot.OpenEventCount,
+			"summary":          snapshot.Summary,
+			"updated_at":       time.Now(),
+		}),
+	}).Create(snapshot).Error
+}
+
 // GetLiveAssetsByRootDomain returns live web assets by root domain.
 func (d *Database) GetLiveAssetsByRootDomain(projectID, rootDomain string) ([]Asset, error) {
 	var assets []Asset
@@ -884,6 +916,9 @@ func (d *Database) DeleteMonitorDataByRootDomain(projectID, rootDomain string) e
 			return err
 		}
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorEvent{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorSnapshot{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorRun{}).Error; err != nil {
@@ -1181,6 +1216,9 @@ func (d *Database) DeleteProjectAndData(projectID string) error {
 			return err
 		}
 		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&MonitorEvent{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&MonitorSnapshot{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&MonitorRun{}).Error; err != nil {
@@ -1543,6 +1581,9 @@ func (d *Database) DeleteAllDataByRootDomain(projectID, rootDomain string) error
 			return err
 		}
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorEvent{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorSnapshot{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).Delete(&MonitorRun{}).Error; err != nil {

@@ -256,6 +256,8 @@ type MonitorEvent struct {
 	LastSeenAt      time.Time      `json:"last_seen_at"`
 	LastChangedAt   time.Time      `json:"last_changed_at"`
 	ResolvedAt      *time.Time     `json:"resolved_at"`
+	LastNotifiedAt  *time.Time     `gorm:"index" json:"last_notified_at"`
+	NotifyCount     int            `gorm:"default:0" json:"notify_count"`
 	OccurrenceCount int            `json:"occurrence_count"`
 	LastRunID       uint           `gorm:"index" json:"last_run_id"`
 	CreatedAt       time.Time      `json:"created_at"`
@@ -265,6 +267,25 @@ type MonitorEvent struct {
 
 func (MonitorEvent) TableName() string {
 	return "monitor_events"
+}
+
+// MonitorSnapshot stores a compact baseline snapshot for one monitor run.
+type MonitorSnapshot struct {
+	ID             uint           `gorm:"primarykey" json:"id"`
+	ProjectID      string         `gorm:"index:idx_monitor_snapshot_project_root_run,priority:1;not null;default:'default'" json:"project_id"`
+	RootDomain     string         `gorm:"index:idx_monitor_snapshot_project_root_run,priority:2;not null" json:"root_domain"`
+	RunID          uint           `gorm:"index:idx_monitor_snapshot_project_root_run,unique,priority:3;not null;index" json:"run_id"`
+	AssetCount     int            `json:"asset_count"`
+	PortCount      int            `json:"port_count"`
+	OpenEventCount int            `json:"open_event_count"`
+	Summary        JSONB          `gorm:"type:jsonb" json:"summary"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (MonitorSnapshot) TableName() string {
+	return "monitor_snapshots"
 }
 
 // MonitorTarget stores monitor target baseline state.

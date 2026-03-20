@@ -24,20 +24,20 @@ import (
 )
 
 const (
-	defaultMonitorIntervalSec   = 6 * 3600
-	defaultMonitorVulnMaxURLs   = 50
-	defaultMonitorVulnCooldown  = 30
-	maxMonitorVulnMaxURLs       = 1000
-	maxMonitorVulnCooldownMin   = 24 * 60
-	maxListRows                 = 5000
-	schedulerPollInterval       = 15 * time.Second
-	scanWorkerPollInterval      = 3 * time.Second
-	scanJobStaleAfter           = 6 * time.Hour
-	monitorChangeNotifyCooldown = 10 * time.Minute
-	monitorNotifyMaxAssets      = 10
-	monitorNotifyMaxPorts       = 12
-	monitorEventStatusOpen      = "open"
-	monitorEventStatusResolved  = "resolved"
+	defaultMonitorIntervalSec  = 6 * 3600
+	defaultMonitorVulnMaxURLs  = 50
+	defaultMonitorVulnCooldown = 30
+	maxMonitorVulnMaxURLs      = 1000
+	maxMonitorVulnCooldownMin  = 24 * 60
+	maxListRows                = 5000
+	schedulerPollInterval      = 15 * time.Second
+	scanWorkerPollInterval     = 3 * time.Second
+	scanJobStaleAfter          = 6 * time.Hour
+	monitorEventNotifyWindow   = 30 * time.Minute
+	monitorNotifyMaxAssets     = 10
+	monitorNotifyMaxPorts      = 12
+	monitorEventStatusOpen     = "open"
+	monitorEventStatusResolved = "resolved"
 )
 
 var errScanCanceled = errors.New("scan canceled")
@@ -318,6 +318,34 @@ type monitorEventResponse struct {
 	LastRunID       int    `json:"lastRunId,omitempty"`
 }
 
+type monitorSnapshotResponse struct {
+	ID             int                    `json:"id"`
+	ProjectID      string                 `json:"projectId,omitempty"`
+	RootDomain     string                 `json:"rootDomain"`
+	RunID          int                    `json:"runId"`
+	AssetCount     int                    `json:"assetCount"`
+	PortCount      int                    `json:"portCount"`
+	OpenEventCount int                    `json:"openEventCount"`
+	Summary        map[string]interface{} `json:"summary,omitempty"`
+	CreatedAt      string                 `json:"createdAt,omitempty"`
+}
+
+type monitorDiffResponse struct {
+	ProjectID  string                   `json:"projectId,omitempty"`
+	RootDomain string                   `json:"rootDomain"`
+	RunID      int                      `json:"runId"`
+	PrevRunID  int                      `json:"prevRunId,omitempty"`
+	Snapshot   monitorSnapshotResponse  `json:"snapshot"`
+	Previous   *monitorSnapshotResponse `json:"previous,omitempty"`
+	Delta      struct {
+		AssetCount     int `json:"assetCount"`
+		PortCount      int `json:"portCount"`
+		OpenEventCount int `json:"openEventCount"`
+	} `json:"delta"`
+	AssetChanges []monitorChangeResponse `json:"assetChanges"`
+	PortChanges  []monitorChangeResponse `json:"portChanges"`
+}
+
 type screenshotDomainResponse struct {
 	ProjectID       string `json:"projectId,omitempty"`
 	RootDomain      string `json:"rootDomain"`
@@ -586,6 +614,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/graph/relations", s.handleRelations)
 	s.mux.HandleFunc("/api/monitor/targets", s.handleMonitorTargets)
 	s.mux.HandleFunc("/api/monitor/runs", s.handleMonitorRuns)
+	s.mux.HandleFunc("/api/monitor/snapshots", s.handleMonitorSnapshots)
+	s.mux.HandleFunc("/api/monitor/diff", s.handleMonitorDiff)
 	s.mux.HandleFunc("/api/monitor/changes", s.handleMonitorChanges)
 	s.mux.HandleFunc("/api/monitor/events", s.handleMonitorEvents)
 	s.mux.HandleFunc("/api/monitor/events/status", s.handleMonitorEventStatus)
@@ -1070,6 +1100,9 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 
 	// Detect changes
 	newLive, webChanged, portOpened, portClosed, svcChanged := s.detectChanges(task.ProjectID, rootDomain, run.ID, target)
+	if snapErr := s.createMonitorSnapshot(task.ProjectID, rootDomain, run.ID); snapErr != nil {
+		s.appendJobLogf(task.ProjectID, jobID, "warn", "监控快照写入失败: %v", snapErr)
+	}
 
 	// Optional: run vulnerability scan for incremental monitor changes.
 	policy := monitorVulnPolicyFromTarget(target)
@@ -1122,24 +1155,13 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 		if notifyEnabled {
 			notifier := plugins.NewDingTalkNotifierFromEnv(true)
 			if notifier.Enabled() {
-				shouldNotify := true
-				highSignal := newLive > 0 || portOpened > 0
-				if !highSignal {
-					recent, err := s.db.HasRecentChangeRun(task.ProjectID, rootDomain, run.ID, time.Now().Add(-monitorChangeNotifyCooldown))
-					if err != nil {
-						s.appendJobLogf(task.ProjectID, jobID, "warn", "通知降噪检查失败，继续发送: %v", err)
-					} else if recent {
-						shouldNotify = false
-						s.appendJobLogf(task.ProjectID, jobID, "info", "监控通知已降噪抑制: root=%s cooldown=%s", rootDomain, monitorChangeNotifyCooldown)
-					}
-				}
-				if !shouldNotify {
-					return
-				}
-
-				assetLines, omittedAssets, portLines, omittedPorts, detailErr := s.buildMonitorNotifyDetails(task.ProjectID, run.ID)
+				assetLines, omittedAssets, portLines, omittedPorts, notifiedEventIDs, suppressedByWindow, detailErr := s.buildMonitorNotifyDetails(task.ProjectID, run.ID, monitorEventNotifyWindow)
 				if detailErr != nil {
 					s.appendJobLogf(task.ProjectID, jobID, "warn", "监控通知详情构建失败，降级为摘要通知: %v", detailErr)
+				}
+				if len(assetLines) == 0 && len(portLines) == 0 {
+					s.appendJobLogf(task.ProjectID, jobID, "info", "监控通知被窗口抑制: root=%s window=%s suppressed=%d", rootDomain, monitorEventNotifyWindow, suppressedByWindow)
+					return
 				}
 				stats := map[string]int{
 					"new_live": newLive, "web_changed": webChanged,
@@ -1159,7 +1181,19 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 				); err != nil {
 					s.appendJobLogf(task.ProjectID, jobID, "warn", "通知发送失败: %v", err)
 				} else {
-					s.appendJobLogf(task.ProjectID, jobID, "info", "监控通知已发送: run=%d assets=%d ports=%d", run.ID, len(assetLines), len(portLines))
+					now := time.Now()
+					if len(notifiedEventIDs) > 0 {
+						if err := s.db.DB.Model(&db.MonitorEvent{}).
+							Where("project_id = ? AND id IN ?", task.ProjectID, notifiedEventIDs).
+							Updates(map[string]interface{}{
+								"last_notified_at": now,
+								"notify_count":     gorm.Expr("COALESCE(notify_count, 0) + 1"),
+							}).Error; err != nil {
+							s.appendJobLogf(task.ProjectID, jobID, "warn", "通知状态回写失败: %v", err)
+						}
+					}
+					s.appendJobLogf(task.ProjectID, jobID, "info", "监控通知已发送: run=%d assets=%d ports=%d notified=%d suppressed=%d",
+						run.ID, len(assetLines), len(portLines), len(notifiedEventIDs), suppressedByWindow)
 				}
 			}
 		}
@@ -1188,6 +1222,80 @@ func (s *Server) detectChanges(projectID, rootDomain string, runID uint, target 
 	portOpened, portClosed, svcChanged = s.syncPortMonitorEvents(projectID, rootDomain, runID, currentPorts)
 
 	return newLive, webChanged, portOpened, portClosed, svcChanged
+}
+
+func (s *Server) createMonitorSnapshot(projectID, rootDomain string, runID uint) error {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		projectID = "default"
+	}
+	rootDomain = normalizeRootDomain(rootDomain)
+	if rootDomain == "" || runID == 0 {
+		return nil
+	}
+	pattern := "%." + rootDomain
+
+	var assetCount int64
+	if err := s.db.DB.Model(&db.Asset{}).
+		Where("project_id = ? AND (root_domain = ? OR domain = ? OR domain LIKE ?) AND status_code > 0 AND BTRIM(COALESCE(url, '')) <> ''",
+			projectID, rootDomain, rootDomain, pattern).
+		Count(&assetCount).Error; err != nil {
+		return err
+	}
+
+	var portCount int64
+	if err := s.db.DB.Model(&db.Port{}).
+		Where("project_id = ? AND (root_domain = ? OR domain = ? OR domain LIKE ?)", projectID, rootDomain, rootDomain, pattern).
+		Count(&portCount).Error; err != nil {
+		return err
+	}
+
+	var openEventCount int64
+	if err := s.db.DB.Model(&db.MonitorEvent{}).
+		Where("project_id = ? AND root_domain = ? AND status = ?", projectID, rootDomain, monitorEventStatusOpen).
+		Count(&openEventCount).Error; err != nil {
+		return err
+	}
+
+	type serviceAggRow struct {
+		Name  string `gorm:"column:name"`
+		Count int    `gorm:"column:count"`
+	}
+	serviceRows := make([]serviceAggRow, 0, 10)
+	if err := s.db.DB.Raw(`
+		SELECT
+			COALESCE(NULLIF(BTRIM(service), ''), 'unknown') AS name,
+			COUNT(1) AS count
+		FROM ports
+		WHERE project_id = ? AND (root_domain = ? OR domain = ? OR domain LIKE ?) AND deleted_at IS NULL
+		GROUP BY 1
+		ORDER BY count DESC
+		LIMIT 10
+	`, projectID, rootDomain, rootDomain, pattern).Scan(&serviceRows).Error; err != nil {
+		return err
+	}
+	serviceDist := make([]dashboardCountItemResponse, 0, len(serviceRows))
+	for _, row := range serviceRows {
+		name := strings.TrimSpace(row.Name)
+		if name == "" {
+			name = "unknown"
+		}
+		serviceDist = append(serviceDist, dashboardCountItemResponse{Name: name, Value: row.Count})
+	}
+
+	summaryJSON, _ := json.Marshal(map[string]interface{}{
+		"serviceDistribution": serviceDist,
+		"generatedAt":         timeToISO(time.Now()),
+	})
+	return s.db.SaveMonitorSnapshot(&db.MonitorSnapshot{
+		ProjectID:      projectID,
+		RootDomain:     rootDomain,
+		RunID:          runID,
+		AssetCount:     int(assetCount),
+		PortCount:      int(portCount),
+		OpenEventCount: int(openEventCount),
+		Summary:        db.JSONB(summaryJSON),
+	})
 }
 
 func (s *Server) collectMonitorVulnTargets(projectID string, runID uint, includeNewLive, includeWebChanged bool, limit int) ([]string, error) {
@@ -1639,13 +1747,18 @@ func (s *Server) syncPortMonitorEvents(projectID, rootDomain string, runID uint,
 	return opened, closed, serviceChanged
 }
 
-func (s *Server) buildMonitorNotifyDetails(projectID string, runID uint) (assetLines []string, omittedAssets int, portLines []string, omittedPorts int, err error) {
+func (s *Server) buildMonitorNotifyDetails(projectID string, runID uint, window time.Duration) (assetLines []string, omittedAssets int, portLines []string, omittedPorts int, notifiedEventIDs []uint, suppressedByWindow int, err error) {
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		projectID = "default"
 	}
 	if runID == 0 {
-		return nil, 0, nil, 0, nil
+		return nil, 0, nil, 0, nil, 0, nil
+	}
+
+	type notifyItem struct {
+		eventKey string
+		line     string
 	}
 
 	var assetChanges []db.AssetChange
@@ -1654,27 +1767,27 @@ func (s *Server) buildMonitorNotifyDetails(projectID string, runID uint) (assetL
 		Order("id desc").
 		Limit(300).
 		Find(&assetChanges).Error; err != nil {
-		return nil, 0, nil, 0, err
+		return nil, 0, nil, 0, nil, 0, err
 	}
 
+	assetItems := make([]notifyItem, 0, len(assetChanges))
 	assetSeen := make(map[string]bool, len(assetChanges))
-	totalAssets := 0
-	assetLines = make([]string, 0, monitorNotifyMaxAssets)
+	allKeys := make([]string, 0, len(assetChanges))
 	for _, ch := range assetChanges {
-		key := strings.ToLower(strings.TrimSpace(ch.URL))
+		key := buildMonitorLiveEventKey(ch.Domain, ch.IP, ch.Port)
 		if key == "" {
-			key = fmt.Sprintf("%s|%s|%d", strings.ToLower(strings.TrimSpace(ch.Domain)), strings.TrimSpace(ch.IP), ch.Port)
+			key = strings.ToLower(strings.TrimSpace(ch.URL))
+		}
+		if key == "" {
+			key = fmt.Sprintf("new_live|%s|%s|%d", strings.ToLower(strings.TrimSpace(ch.Domain)), strings.TrimSpace(ch.IP), ch.Port)
 		}
 		if key == "" || assetSeen[key] {
 			continue
 		}
 		assetSeen[key] = true
-		totalAssets++
-		if len(assetLines) < monitorNotifyMaxAssets {
-			assetLines = append(assetLines, formatMonitorAssetNotifyLine(ch))
-		}
+		assetItems = append(assetItems, notifyItem{eventKey: key, line: formatMonitorAssetNotifyLine(ch)})
+		allKeys = append(allKeys, key)
 	}
-	omittedAssets = totalAssets - len(assetLines)
 
 	var portChanges []db.PortChange
 	if err := s.db.DB.
@@ -1682,7 +1795,7 @@ func (s *Server) buildMonitorNotifyDetails(projectID string, runID uint) (assetL
 		Order("id desc").
 		Limit(400).
 		Find(&portChanges).Error; err != nil {
-		return assetLines, omittedAssets, nil, 0, err
+		return nil, 0, nil, 0, nil, 0, err
 	}
 
 	sort.SliceStable(portChanges, func(i, j int) bool {
@@ -1694,23 +1807,70 @@ func (s *Server) buildMonitorNotifyDetails(projectID string, runID uint) (assetL
 		return portChanges[i].ID > portChanges[j].ID
 	})
 
+	portItems := make([]notifyItem, 0, len(portChanges))
 	portSeen := make(map[string]bool, len(portChanges))
-	totalPorts := 0
-	portLines = make([]string, 0, monitorNotifyMaxPorts)
 	for _, ch := range portChanges {
-		proto := strings.ToLower(strings.TrimSpace(ch.Protocol))
-		key := fmt.Sprintf("%s|%s|%d|%s", strings.ToLower(strings.TrimSpace(ch.ChangeType)), strings.TrimSpace(ch.IP), ch.Port, proto)
+		key := buildMonitorPortEventKey(ch.Domain, ch.IP, ch.Port, ch.Protocol)
+		if key == "" {
+			proto := strings.ToLower(strings.TrimSpace(ch.Protocol))
+			key = fmt.Sprintf("port_opened|%s|%s|%d|%s", strings.TrimSpace(ch.Domain), strings.TrimSpace(ch.IP), ch.Port, proto)
+		}
 		if portSeen[key] {
 			continue
 		}
 		portSeen[key] = true
-		totalPorts++
-		if len(portLines) < monitorNotifyMaxPorts {
-			portLines = append(portLines, formatMonitorPortNotifyLine(ch))
+		portItems = append(portItems, notifyItem{eventKey: key, line: formatMonitorPortNotifyLine(ch)})
+		allKeys = append(allKeys, key)
+	}
+
+	eventByKey := map[string]db.MonitorEvent{}
+	if len(allKeys) > 0 {
+		var events []db.MonitorEvent
+		if err := s.db.DB.Where("project_id = ? AND event_key IN ?", projectID, dedupTrimmed(allKeys)).Find(&events).Error; err != nil {
+			return nil, 0, nil, 0, nil, 0, err
+		}
+		for _, e := range events {
+			eventByKey[e.EventKey] = e
 		}
 	}
-	omittedPorts = totalPorts - len(portLines)
-	return assetLines, omittedAssets, portLines, omittedPorts, nil
+
+	now := time.Now()
+	cutoff := time.Time{}
+	if window > 0 {
+		cutoff = now.Add(-window)
+	}
+	notifiedSet := map[uint]bool{}
+
+	appendAllowed := func(items []notifyItem, limit int) (lines []string, omitted int) {
+		lines = make([]string, 0, limit)
+		totalAllowed := 0
+		for _, item := range items {
+			if evt, ok := eventByKey[item.eventKey]; ok {
+				if !cutoff.IsZero() && evt.LastNotifiedAt != nil && evt.LastNotifiedAt.After(cutoff) {
+					suppressedByWindow++
+					continue
+				}
+				notifiedSet[evt.ID] = true
+			}
+			totalAllowed++
+			if len(lines) < limit {
+				lines = append(lines, item.line)
+			}
+		}
+		omitted = totalAllowed - len(lines)
+		return lines, omitted
+	}
+
+	assetLines, omittedAssets = appendAllowed(assetItems, monitorNotifyMaxAssets)
+	portLines, omittedPorts = appendAllowed(portItems, monitorNotifyMaxPorts)
+
+	notifiedEventIDs = make([]uint, 0, len(notifiedSet))
+	for id := range notifiedSet {
+		notifiedEventIDs = append(notifiedEventIDs, id)
+	}
+	sort.Slice(notifiedEventIDs, func(i, j int) bool { return notifiedEventIDs[i] < notifiedEventIDs[j] })
+
+	return assetLines, omittedAssets, portLines, omittedPorts, notifiedEventIDs, suppressedByWindow, nil
 }
 
 func monitorPortChangePriority(changeType string) int {
@@ -3803,6 +3963,166 @@ func (s *Server) handleMonitorRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) handleMonitorSnapshots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
+	limit := parseBoundedInt(r.URL.Query().Get("limit"), 60, 1, 300)
+
+	query := s.db.DB.Model(&db.MonitorSnapshot{}).Where("project_id = ?", projectID).Order("run_id desc").Limit(limit)
+	if rd := normalizeRootDomain(r.URL.Query().Get("root_domain")); rd != "" {
+		query = query.Where("root_domain = ?", rd)
+	}
+	var snapshots []db.MonitorSnapshot
+	if err := query.Find(&snapshots).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := make([]monitorSnapshotResponse, 0, len(snapshots))
+	for _, snap := range snapshots {
+		resp = append(resp, toMonitorSnapshotResponse(snap))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleMonitorDiff(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return
+	}
+	rootFilter := normalizeRootDomain(r.URL.Query().Get("root_domain"))
+	runIDRaw := parseBoundedInt(r.URL.Query().Get("run_id"), 0, 0, 1_000_000_000)
+
+	runQuery := s.db.DB.Model(&db.MonitorRun{}).Where("project_id = ?", projectID)
+	if rootFilter != "" {
+		runQuery = runQuery.Where("root_domain = ?", rootFilter)
+	}
+	var currentRun db.MonitorRun
+	var err error
+	if runIDRaw > 0 {
+		err = runQuery.Where("id = ?", runIDRaw).First(&currentRun).Error
+	} else {
+		err = runQuery.Where("status = ?", "success").Order("id desc").First(&currentRun).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			err = runQuery.Order("id desc").First(&currentRun).Error
+		}
+	}
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeJSON(w, http.StatusOK, monitorDiffResponse{})
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if snapErr := s.createMonitorSnapshot(projectID, currentRun.RootDomain, currentRun.ID); snapErr != nil {
+		log.Printf("[Monitor] create snapshot on demand failed project=%s root=%s run=%d: %v", projectID, currentRun.RootDomain, currentRun.ID, snapErr)
+	}
+
+	var currentSnap db.MonitorSnapshot
+	if err := s.db.DB.Where("project_id = ? AND root_domain = ? AND run_id = ?", projectID, currentRun.RootDomain, currentRun.ID).First(&currentSnap).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		currentSnap = db.MonitorSnapshot{
+			ProjectID:      projectID,
+			RootDomain:     currentRun.RootDomain,
+			RunID:          currentRun.ID,
+			AssetCount:     0,
+			PortCount:      0,
+			OpenEventCount: 0,
+		}
+	}
+
+	var previousRun db.MonitorRun
+	prevExists := s.db.DB.Where("project_id = ? AND root_domain = ? AND id < ? AND status = ?", projectID, currentRun.RootDomain, currentRun.ID, "success").
+		Order("id desc").First(&previousRun).Error == nil
+
+	var previousResp *monitorSnapshotResponse
+	resp := monitorDiffResponse{
+		ProjectID:  projectID,
+		RootDomain: currentRun.RootDomain,
+		RunID:      int(currentRun.ID),
+		Snapshot:   toMonitorSnapshotResponse(currentSnap),
+	}
+
+	if prevExists {
+		resp.PrevRunID = int(previousRun.ID)
+		var prevSnap db.MonitorSnapshot
+		if err := s.db.DB.Where("project_id = ? AND root_domain = ? AND run_id = ?", projectID, currentRun.RootDomain, previousRun.ID).First(&prevSnap).Error; err == nil {
+			prev := toMonitorSnapshotResponse(prevSnap)
+			previousResp = &prev
+			resp.Previous = previousResp
+		}
+	}
+	if previousResp != nil {
+		resp.Delta.AssetCount = resp.Snapshot.AssetCount - previousResp.AssetCount
+		resp.Delta.PortCount = resp.Snapshot.PortCount - previousResp.PortCount
+		resp.Delta.OpenEventCount = resp.Snapshot.OpenEventCount - previousResp.OpenEventCount
+	}
+
+	limit := parseBoundedInt(r.URL.Query().Get("limit"), 200, 20, 500)
+
+	var assetChanges []db.AssetChange
+	if err := s.db.DB.Where("project_id = ? AND run_id = ?", projectID, currentRun.ID).Order("id desc").Limit(limit).Find(&assetChanges).Error; err == nil {
+		resp.AssetChanges = make([]monitorChangeResponse, 0, len(assetChanges))
+		for _, ac := range assetChanges {
+			resp.AssetChanges = append(resp.AssetChanges, monitorChangeResponse{
+				RunID:      int(ac.RunID),
+				ProjectID:  ac.ProjectID,
+				RootDomain: ac.RootDomain,
+				ChangeType: ac.ChangeType,
+				Domain:     ac.Domain,
+				IP:         ac.IP,
+				Port:       ac.Port,
+				StatusCode: ac.StatusCode,
+				Title:      ac.Title,
+				CreatedAt:  timeToISO(ac.CreatedAt),
+			})
+		}
+	}
+
+	var portChanges []db.PortChange
+	if err := s.db.DB.Where("project_id = ? AND run_id = ?", projectID, currentRun.ID).Order("id desc").Limit(limit).Find(&portChanges).Error; err == nil {
+		resp.PortChanges = make([]monitorChangeResponse, 0, len(portChanges))
+		for _, pc := range portChanges {
+			title := strings.TrimSpace(pc.Service)
+			if strings.TrimSpace(pc.Version) != "" {
+				if title == "" {
+					title = strings.TrimSpace(pc.Version)
+				} else {
+					title += " " + strings.TrimSpace(pc.Version)
+				}
+			}
+			resp.PortChanges = append(resp.PortChanges, monitorChangeResponse{
+				RunID:      int(pc.RunID),
+				ProjectID:  pc.ProjectID,
+				RootDomain: pc.RootDomain,
+				ChangeType: pc.ChangeType,
+				Domain:     pc.Domain,
+				IP:         pc.IP,
+				Port:       pc.Port,
+				Title:      title,
+				CreatedAt:  timeToISO(pc.CreatedAt),
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -4694,6 +5014,31 @@ func decodeJSONBStrings(data db.JSONB) []string {
 	return items
 }
 
+func decodeJSONBObject(data db.JSONB) map[string]interface{} {
+	if len(data) == 0 {
+		return nil
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil
+	}
+	return obj
+}
+
+func toMonitorSnapshotResponse(snap db.MonitorSnapshot) monitorSnapshotResponse {
+	return monitorSnapshotResponse{
+		ID:             int(snap.ID),
+		ProjectID:      snap.ProjectID,
+		RootDomain:     snap.RootDomain,
+		RunID:          int(snap.RunID),
+		AssetCount:     snap.AssetCount,
+		PortCount:      snap.PortCount,
+		OpenEventCount: snap.OpenEventCount,
+		Summary:        decodeJSONBObject(snap.Summary),
+		CreatedAt:      timeToISO(snap.CreatedAt),
+	}
+}
+
 func normalizeRootDomains(items []string) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(items))
@@ -5464,9 +5809,9 @@ func (s *Server) handleBulkDeleteVulns(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeAudit(body.ProjectID, actorFromRequest(r), "bulk_delete_vulns", "vulnerability", "", map[string]interface{}{
-		"count":        deletedVulns,
+		"count":         deletedVulns,
 		"deletedEvents": deletedEvents,
-		"ids":          body.IDs,
+		"ids":           body.IDs,
 	}, r)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":        "ok",
