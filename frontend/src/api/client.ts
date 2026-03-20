@@ -1,4 +1,13 @@
-const API_BASE = "/api";
+const rawAPIBase = (import.meta.env.VITE_API_BASE ?? "/api").trim();
+const API_BASE = (rawAPIBase || "/api").replace(/\/+$/, "");
+
+function buildApiURL(path: string): string {
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${API_BASE}${normalizedPath}`;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -63,7 +72,7 @@ function handleUnauthorized(status: number): void {
 // ── API methods ──
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(buildApiURL(path), {
     method: "GET",
     headers: { Accept: "application/json", ...authHeaders() },
   });
@@ -80,7 +89,7 @@ export async function apiPost<TReq extends object, TResp>(
   path: string,
   body: TReq
 ): Promise<TResp> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(buildApiURL(path), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -102,7 +111,7 @@ export async function apiPut<TReq extends object, TResp>(
   path: string,
   body: TReq
 ): Promise<TResp> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(buildApiURL(path), {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -121,7 +130,7 @@ export async function apiPut<TReq extends object, TResp>(
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(buildApiURL(path), {
     method: "DELETE",
     headers: { Accept: "application/json", ...authHeaders() },
   });

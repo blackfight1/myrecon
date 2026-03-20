@@ -993,16 +993,18 @@ func monitorTargetOptionUpdates(opts *MonitorTargetOptions) map[string]interface
 }
 
 // EnableMonitorTarget enables monitor target and ensures one pending task exists.
-func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec, maxAttempts int, opts *MonitorTargetOptions) error {
+// It returns the task ID of the pending/running monitor task for this target.
+func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec, maxAttempts int, opts *MonitorTargetOptions) (uint, error) {
 	projectID = strings.TrimSpace(projectID)
 	rootDomain = strings.TrimSpace(rootDomain)
 	if projectID == "" {
-		return fmt.Errorf("projectID is required")
+		return 0, fmt.Errorf("projectID is required")
 	}
 	if rootDomain == "" {
-		return fmt.Errorf("rootDomain is required")
+		return 0, fmt.Errorf("rootDomain is required")
 	}
-	return d.DB.Transaction(func(tx *gorm.DB) error {
+	var ensuredTaskID uint
+	err := d.DB.Transaction(func(tx *gorm.DB) error {
 		var target MonitorTarget
 		result := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).First(&target)
 		if result.Error == gorm.ErrRecordNotFound {
@@ -1039,13 +1041,15 @@ func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec
 			}
 		}
 
-		var count int64
-		if err := tx.Model(&MonitorTask{}).
+		var task MonitorTask
+		err := tx.Model(&MonitorTask{}).
 			Where("project_id = ? AND root_domain = ? AND status IN ?", projectID, rootDomain, []string{"pending", "running"}).
-			Count(&count).Error; err != nil {
+			Order("run_at asc, id asc").
+			First(&task).Error
+		if err != nil && err != gorm.ErrRecordNotFound {
 			return err
 		}
-		if count == 0 {
+		if err == gorm.ErrRecordNotFound {
 			task := MonitorTask{
 				ProjectID:   projectID,
 				RootDomain:  rootDomain,
@@ -1058,9 +1062,16 @@ func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec
 			if err := tx.Create(&task).Error; err != nil {
 				return err
 			}
+			ensuredTaskID = task.ID
+		} else {
+			ensuredTaskID = task.ID
 		}
 		return nil
 	})
+	if err != nil {
+		return 0, err
+	}
+	return ensuredTaskID, nil
 }
 
 // UpdateMonitorTargetOptions updates monitor target policy without changing

@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { StatCard } from "../components/ui/StatCard";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useDashboard, useJobsPage, useMonitorTargets, usePortsPage, useVulnsPage } from "../hooks/queries";
+import { useDashboard, useJobsPage, useMonitorTargets } from "../hooks/queries";
 import { formatDateCompact, formatDurationSec } from "../lib/format";
 import { jobStatusClass, jobStatusLabel } from "../lib/status";
 
@@ -21,18 +21,11 @@ export function DashboardPage() {
   });
   const monTargetsQ = useMonitorTargets(projectId);
 
-  // 获取端口数据用于服务分布图
-  const portsQ = usePortsPage(projectId, { page: 1, pageSize: 200 });
-  // 获取漏洞数据用于严重等级分布图
-  const vulnsQ = useVulnsPage(projectId, { page: 1, pageSize: 500 });
-
   const summary = dashQ.data?.summary;
   const trend = dashQ.data?.trend ?? [];
   const jobs = jobsQ.data?.items ?? [];
   const jobsTotal = jobsQ.data?.total ?? 0;
   const monitorTargetCount = (monTargetsQ.data ?? []).length;
-  const portItems = portsQ.data?.items ?? [];
-  const vulnItems = vulnsQ.data?.items ?? [];
 
   const loading = dashQ.isLoading || jobsQ.isLoading || monTargetsQ.isLoading;
   const error = dashQ.error || jobsQ.error || monTargetsQ.error;
@@ -47,35 +40,24 @@ export function DashboardPage() {
 
   const totalVulns24h = summary?.newVulns24h ?? 0;
 
-  // 端口服务分布 Top 10
-  const serviceDistribution = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const p of portItems) {
-      const svc = p.service || "unknown";
-      counts[svc] = (counts[svc] || 0) + 1;
-    }
-    return Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(([name, value]) => ({ name, value }));
-  }, [portItems]);
+  // 端口服务分布 Top 10（后端全量统计）
+  const serviceDistribution = useMemo(() => summary?.serviceDistribution ?? [], [summary]);
 
-  // 漏洞严重等级分布
+  // 漏洞严重等级分布（后端全量统计）
   const severityDistribution = useMemo(() => {
-    const counts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-    for (const v of vulnItems) {
-      const sev = (v.severity || "info").toLowerCase();
-      if (sev in counts) counts[sev]++;
-      else counts["info"]++;
+    const byName = new Map<string, number>();
+    for (const item of summary?.severityDistribution ?? []) {
+      byName.set((item.name || "unknown").toLowerCase(), item.value || 0);
     }
     return [
-      { name: "严重", value: counts.critical, color: "#ef4444" },
-      { name: "高危", value: counts.high, color: "#f97316" },
-      { name: "中危", value: counts.medium, color: "#f59e0b" },
-      { name: "低危", value: counts.low, color: "#22c55e" },
-      { name: "信息", value: counts.info, color: "#3b82f6" },
+      { name: "严重", value: byName.get("critical") ?? 0, color: "#ef4444" },
+      { name: "高危", value: byName.get("high") ?? 0, color: "#f97316" },
+      { name: "中危", value: byName.get("medium") ?? 0, color: "#f59e0b" },
+      { name: "低危", value: byName.get("low") ?? 0, color: "#22c55e" },
+      { name: "信息", value: byName.get("info") ?? 0, color: "#3b82f6" },
+      { name: "未知", value: byName.get("unknown") ?? 0, color: "#64748b" },
     ].filter((d) => d.value > 0);
-  }, [vulnItems]);
+  }, [summary]);
 
   const trendOption = {
     tooltip: {
@@ -342,7 +324,7 @@ export function DashboardPage() {
         <article className="panel">
           <header className="panel-header">
             <h2>端口服务分布</h2>
-            <span className="panel-meta">Top 10 服务类型</span>
+            <span className="panel-meta">Top 10 服务类型（全量）</span>
           </header>
           <div className="chart-container">
             {serviceDistribution.length > 0 ? (
@@ -359,7 +341,7 @@ export function DashboardPage() {
         <article className="panel">
           <header className="panel-header">
             <h2>漏洞等级分布</h2>
-            <span className="panel-meta">按严重程度统计</span>
+            <span className="panel-meta">按严重程度统计（全量）</span>
           </header>
           <div className="chart-container">
             {severityDistribution.length > 0 ? (

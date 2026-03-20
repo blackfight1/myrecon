@@ -1,5 +1,10 @@
 export type HealthStatus = "success" | "failed" | "running" | "pending" | "canceled" | "unknown";
 
+export interface DashboardCountItem {
+  name: string;
+  value: number;
+}
+
 export interface DashboardSummary {
   jobsRunning: number;
   jobsSuccess24h: number;
@@ -8,6 +13,8 @@ export interface DashboardSummary {
   newPorts24h: number;
   newVulns24h: number;
   scanDurationAvgSec24h: number;
+  serviceDistribution: DashboardCountItem[];
+  severityDistribution: DashboardCountItem[];
 }
 
 export interface TrendPoint {

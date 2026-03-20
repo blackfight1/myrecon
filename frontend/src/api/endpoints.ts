@@ -276,7 +276,7 @@ export const endpoints = {
   getMonitorTargets: (projectId?: string) =>
     apiGet<MonitorTarget[]>(withQuery("/monitor/targets", { project_id: projectId })),
   createMonitorTarget: (body: CreateMonitorTargetRequest) =>
-    apiPost<CreateMonitorTargetRequest, { status: string; domain: string; intervalSec: number }>("/monitor/targets", body),
+    apiPost<CreateMonitorTargetRequest, { status: string; domain: string; intervalSec: number; jobId?: string }>("/monitor/targets", body),
   updateMonitorTarget: (body: UpdateMonitorTargetRequest) =>
     apiPut<UpdateMonitorTargetRequest, { status: string; domain: string }>("/monitor/targets", body),
   stopMonitorTarget: (projectId: string, domain: string) =>

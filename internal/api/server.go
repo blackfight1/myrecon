@@ -100,6 +100,13 @@ type dashboardSummaryResponse struct {
 	NewPorts24h           int `json:"newPorts24h"`
 	NewVulns24h           int `json:"newVulns24h"`
 	ScanDurationAvgSec24h int `json:"scanDurationAvgSec24h"`
+	ServiceDistribution   []dashboardCountItemResponse `json:"serviceDistribution"`
+	SeverityDistribution  []dashboardCountItemResponse `json:"severityDistribution"`
+}
+
+type dashboardCountItemResponse struct {
+	Name  string `json:"name"`
+	Value int    `json:"value"`
 }
 
 type trendPointResponse struct {
@@ -1957,6 +1964,61 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	type dashboardAggRow struct {
+		Name  string `gorm:"column:name"`
+		Value int64  `gorm:"column:value"`
+	}
+	serviceRows := make([]dashboardAggRow, 0, 10)
+	if err := s.db.DB.Raw(`
+		SELECT
+			COALESCE(NULLIF(BTRIM(service), ''), 'unknown') AS name,
+			COUNT(1) AS value
+		FROM ports
+		WHERE project_id = ? AND deleted_at IS NULL
+		GROUP BY 1
+		ORDER BY COUNT(1) DESC, name ASC
+		LIMIT 10
+	`, projectID).Scan(&serviceRows).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	serviceDistribution := make([]dashboardCountItemResponse, 0, len(serviceRows))
+	for _, row := range serviceRows {
+		name := strings.TrimSpace(row.Name)
+		if name == "" {
+			name = "unknown"
+		}
+		serviceDistribution = append(serviceDistribution, dashboardCountItemResponse{
+			Name:  name,
+			Value: int(row.Value),
+		})
+	}
+
+	severityRows := make([]dashboardAggRow, 0, 8)
+	if err := s.db.DB.Raw(`
+		SELECT
+			COALESCE(NULLIF(BTRIM(LOWER(severity)), ''), 'unknown') AS name,
+			COUNT(1) AS value
+		FROM vulnerabilities
+		WHERE project_id = ? AND deleted_at IS NULL
+		GROUP BY 1
+		ORDER BY COUNT(1) DESC, name ASC
+	`, projectID).Scan(&severityRows).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	severityDistribution := make([]dashboardCountItemResponse, 0, len(severityRows))
+	for _, row := range severityRows {
+		name := strings.TrimSpace(strings.ToLower(row.Name))
+		if name == "" {
+			name = "unknown"
+		}
+		severityDistribution = append(severityDistribution, dashboardCountItemResponse{
+			Name:  name,
+			Value: int(row.Value),
+		})
+	}
+
 	resp := dashboardResponse{
 		Summary: dashboardSummaryResponse{
 			JobsRunning:           int(jobsRunningScans + jobsRunningTasks),
@@ -1966,6 +2028,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			NewPorts24h:           int(newPorts24h),
 			NewVulns24h:           int(newVulns24h),
 			ScanDurationAvgSec24h: int(avgDuration),
+			ServiceDistribution:   serviceDistribution,
+			SeverityDistribution:  severityDistribution,
 		},
 		Trend: trend,
 	}
@@ -2694,15 +2758,14 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC()
 	jobID := fmt.Sprintf("scan-%d", now.UnixNano())
-	if mode == "monitor" {
-		jobID = fmt.Sprintf("mon-%d", now.UnixNano())
-	}
 
 	if mode == "monitor" {
-		if err := s.db.EnableMonitorTarget(projectID, rootDomain, defaultMonitorIntervalSec, 3, nil); err != nil {
+		taskID, err := s.db.EnableMonitorTarget(projectID, rootDomain, defaultMonitorIntervalSec, 3, nil)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create monitor task: "+err.Error())
 			return
 		}
+		jobID = fmt.Sprintf("task-%d", taskID)
 		writeJSON(w, http.StatusOK, jobOverviewResponse{
 			ID: jobID, ProjectID: projectID, RootDomain: rootDomain, Mode: mode, Modules: modules,
 			Status: "pending", StartedAt: now.Format(time.RFC3339),
@@ -3553,11 +3616,18 @@ func (s *Server) handleCreateMonitorTarget(w http.ResponseWriter, r *http.Reques
 	if intervalSec <= 0 {
 		intervalSec = defaultMonitorIntervalSec
 	}
-	if err := s.db.EnableMonitorTarget(projectID, domain, intervalSec, 3, buildMonitorTargetOptions(req)); err != nil {
+	taskID, err := s.db.EnableMonitorTarget(projectID, domain, intervalSec, 3, buildMonitorTargetOptions(req))
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "projectId": projectID, "domain": domain, "intervalSec": intervalSec})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":     "ok",
+		"projectId":  projectID,
+		"domain":     domain,
+		"intervalSec": intervalSec,
+		"jobId":      fmt.Sprintf("task-%d", taskID),
+	})
 }
 
 func (s *Server) handleUpdateMonitorTarget(w http.ResponseWriter, r *http.Request) {
