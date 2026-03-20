@@ -13,7 +13,9 @@ import {
   type VulnListQuery,
   type PatchVulnStatusRequest,
   type BulkDeleteAssetsRequest,
-  type BulkVulnStatusRequest
+  type BulkVulnStatusRequest,
+  type BulkDeleteVulnsRequest,
+  type BulkDeleteScreenshotsRequest
 } from "../api/endpoints";
 
 function requiredProjectId(projectId?: string): string {
@@ -319,6 +321,17 @@ export function useScreenshots(rootDomain: string, projectId?: string) {
   });
 }
 
+export function useBulkDeleteScreenshots() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BulkDeleteScreenshotsRequest) => endpoints.bulkDeleteScreenshots(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["screenshots"] });
+      await qc.invalidateQueries({ queryKey: ["screenshot-domains"] });
+    }
+  });
+}
+
 /* ── Asset Detail ── */
 
 export function useAssetDetail(projectId?: string, params?: { id?: number; domain?: string }) {
@@ -359,6 +372,19 @@ export function useBulkVulnStatus() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: BulkVulnStatusRequest) => endpoints.bulkVulnStatus(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["vulns"] });
+      await qc.invalidateQueries({ queryKey: ["vulns-page"] });
+      await qc.invalidateQueries({ queryKey: ["vuln-events"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+    }
+  });
+}
+
+export function useBulkDeleteVulns() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BulkDeleteVulnsRequest) => endpoints.bulkDeleteVulns(body),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["vulns"] });
       await qc.invalidateQueries({ queryKey: ["vulns-page"] });

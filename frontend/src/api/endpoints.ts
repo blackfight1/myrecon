@@ -97,6 +97,17 @@ export interface BulkVulnStatusRequest {
   actor?: string;
 }
 
+export interface BulkDeleteVulnsRequest {
+  projectId: string;
+  ids: number[];
+}
+
+export interface BulkDeleteScreenshotsRequest {
+  projectId: string;
+  rootDomain: string;
+  filenames: string[];
+}
+
 export interface PatchVulnStatusRequest {
   vulnId: number;
   projectId: string;
@@ -313,6 +324,8 @@ export const endpoints = {
     apiGet<ScreenshotItem[]>(
       withQuery(`/screenshots/${encodeURIComponent(rootDomain)}`, { project_id: projectId })
     ),
+  bulkDeleteScreenshots: (body: BulkDeleteScreenshotsRequest) =>
+    apiPost<BulkDeleteScreenshotsRequest, { status: string; deleted: number; requested: number; skipped?: string[] }>("/screenshots/delete", body),
 
   // Asset Detail
   getAssetDetail: (projectId: string, params: { id?: number; domain?: string }) =>
@@ -327,6 +340,8 @@ export const endpoints = {
     apiPost<BulkDeleteAssetsRequest, { status: string; deleted: number }>("/bulk/assets/delete", body),
   bulkVulnStatus: (body: BulkVulnStatusRequest) =>
     apiPost<BulkVulnStatusRequest, { status: string; updated: number }>("/vulns/bulk-status", body),
+  bulkDeleteVulns: (body: BulkDeleteVulnsRequest) =>
+    apiPost<BulkDeleteVulnsRequest, { status: string; deleted: number; deletedEvents: number }>("/vulns/bulk-delete", body),
 
   // Settings
   getSettings: () => apiGet<SystemSettings>("/settings"),

@@ -235,7 +235,7 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 						continue
 					}
 					ip, _ := data["ip"].(string)
-					port, _ := data["port"].(int)
+					port := interfaceToInt(data["port"])
 					host, _ := data["host"].(string)
 					if ip == "" || port <= 0 {
 						continue
@@ -388,4 +388,21 @@ func isTimeoutError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded")
+}
+
+func interfaceToInt(value interface{}) int {
+	switch t := value.(type) {
+	case int:
+		return t
+	case int32:
+		return int(t)
+	case int64:
+		return int(t)
+	case float32:
+		return int(t)
+	case float64:
+		return int(t)
+	default:
+		return 0
+	}
 }

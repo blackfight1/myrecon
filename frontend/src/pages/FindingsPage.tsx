@@ -1,12 +1,13 @@
 ﻿import { createColumnHelper, type SortingState } from "@tanstack/react-table";
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { DataTable } from "../components/ui/DataTable";
 import { ProjectScopeBanner } from "../components/ui/ProjectScopeBanner";
 import { useWorkspace } from "../context/WorkspaceContext";
-import { useVulnsPage, usePatchVulnStatus } from "../hooks/queries";
+import { useVulnsPage, usePatchVulnStatus, useBulkDeleteVulns } from "../hooks/queries";
 import { formatDate } from "../lib/format";
 import { exportToCSV, exportToJSON } from "../lib/export";
 import { type VulnStatus, VULN_STATUS_OPTIONS, vulnStatusLabel, vulnStatusColor } from "../lib/status";
+import { errorMessage } from "../lib/errors";
 import type { VulnerabilityRecord } from "../types/models";
 import type { VulnListQuery } from "../api/endpoints";
 
@@ -27,6 +28,7 @@ export function FindingsPage() {
   const projectId = activeProject?.id;
   const rootDomains = activeProject?.rootDomains ?? [];
   const patchStatus = usePatchVulnStatus();
+  const bulkDelete = useBulkDeleteVulns();
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -37,6 +39,8 @@ export function FindingsPage() {
   const [editingVuln, setEditingVuln] = useState<VulnerabilityRecord | null>(null);
   const [newStatus, setNewStatus] = useState<VulnStatus>("open");
   const [statusReason, setStatusReason] = useState("");
+  const [selectedIDs, setSelectedIDs] = useState<Set<number>>(new Set());
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const sortBy = sorting.length > 0 ? SORT_KEY_MAP[sorting[0].id] ?? "created_at" : "created_at";
   const sortDir = sorting.length > 0 && sorting[0].desc ? "desc" : sorting.length > 0 ? "asc" : "desc";
@@ -56,6 +60,18 @@ export function FindingsPage() {
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+
+  useEffect(() => {
+    setSelectedIDs((prev) => {
+      if (prev.size === 0) return prev;
+      const pageIDs = new Set(items.map((item) => item.id));
+      const next = new Set<number>();
+      prev.forEach((id) => {
+        if (pageIDs.has(id)) next.add(id);
+      });
+      return next;
+    });
+  }, [items]);
 
   const handlePageChange = useCallback((p: number) => setPage(p + 1), []);
   const handlePageSizeChange = useCallback((s: number) => { setPageSize(s); setPage(1); }, []);
@@ -116,7 +132,65 @@ export function FindingsPage() {
     );
   };
 
+  const toggleRowSelect = useCallback((id: number, checked: boolean) => {
+    setSelectedIDs((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const pageIDs = useMemo(() => items.map((item) => item.id), [items]);
+  const allPageSelected = useMemo(
+    () => pageIDs.length > 0 && pageIDs.every((id) => selectedIDs.has(id)),
+    [pageIDs, selectedIDs]
+  );
+
+  const toggleSelectAllPage = useCallback((checked: boolean) => {
+    setSelectedIDs((prev) => {
+      const next = new Set(prev);
+      if (checked) pageIDs.forEach((id) => next.add(id));
+      else pageIDs.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, [pageIDs]);
+
+  const handleBulkDelete = useCallback(async () => {
+    if (!projectId) return;
+    const ids = Array.from(selectedIDs);
+    if (ids.length === 0) return;
+    if (!confirm(`确认删除选中的 ${ids.length} 条漏洞记录吗？此操作不可恢复。`)) return;
+    setFeedback(null);
+    try {
+      const result = await bulkDelete.mutateAsync({ projectId, ids });
+      setSelectedIDs(new Set());
+      setFeedback({ ok: true, text: `已删除 ${result.deleted} 条漏洞记录（事件 ${result.deletedEvents} 条）` });
+    } catch (err) {
+      setFeedback({ ok: false, text: `批量删除失败：${errorMessage(err)}` });
+    }
+  }, [bulkDelete, projectId, selectedIDs]);
+
   const columns = [
+    col.display({
+      id: "select",
+      header: () => (
+        <input
+          type="checkbox"
+          checked={allPageSelected}
+          onChange={(e) => toggleSelectAllPage(e.target.checked)}
+          aria-label="全选当前页漏洞"
+        />
+      ),
+      cell: (c) => (
+        <input
+          type="checkbox"
+          checked={selectedIDs.has(c.row.original.id)}
+          onChange={(e) => toggleRowSelect(c.row.original.id, e.target.checked)}
+          aria-label={`选择漏洞 ${c.row.original.id}`}
+        />
+      )
+    }),
     col.accessor("severity", {
       header: "严重等级",
       cell: (c) => {
@@ -161,6 +235,12 @@ export function FindingsPage() {
 
       <ProjectScopeBanner title="漏洞范围" hint="服务端按项目范围过滤并分页返回。" />
 
+      {feedback && (
+        <div className="empty-state" style={{ color: feedback.ok ? "#16a34a" : "#dc2626", marginBottom: 12 }}>
+          {feedback.text}
+        </div>
+      )}
+
       <div className="stats-row">
         <div className="stat-card accent-danger"><div className="stat-label">严重</div><div className="stat-value">{sevCounts.critical}</div></div>
         <div className="stat-card accent-warning"><div className="stat-label">高危</div><div className="stat-value">{sevCounts.high}</div></div>
@@ -194,6 +274,15 @@ export function FindingsPage() {
           <input className="form-input" value={search} onChange={handleSearchChange} placeholder="搜索根域名/域名/模板/CVE/URL/指纹..." />
           <button className="btn btn-sm" onClick={handleExportCSV} disabled={items.length === 0} title="导出CSV">📥 CSV</button>
           <button className="btn btn-sm" onClick={handleExportJSON} disabled={items.length === 0} title="导出JSON">📥 JSON</button>
+          <button
+            className="btn btn-sm"
+            style={{ background: "#dc2626", color: "#fff" }}
+            onClick={() => { void handleBulkDelete(); }}
+            disabled={bulkDelete.isPending || selectedIDs.size === 0}
+            title="批量删除选中的漏洞记录"
+          >
+            {bulkDelete.isPending ? "删除中..." : `批量删除 (${selectedIDs.size})`}
+          </button>
           <span className="filter-summary">第 {page} 页，每页 {pageSize} 条</span>
         </div>
       </article>

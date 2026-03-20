@@ -33,8 +33,6 @@ export function AssetsPage() {
 
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [pool, setPool] = useState<"verified" | "candidate">("verified");
-  const liveOnly = pool === "verified";
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [monitorNew, setMonitorNew] = useState<"all" | "open" | "recent24h">("all");
@@ -44,12 +42,13 @@ export function AssetsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [projectId, pool, search, pageSize, monitorNew, sortBy, sortDir]);
+  }, [projectId, search, pageSize, monitorNew, sortBy, sortDir]);
 
+  // 资产页统一口径：仅展示 httpx 验证存活资产。
   const assetsQ = useAssetsPage(projectId, {
-    pool,
+    pool: "verified",
     q: search.trim() || undefined,
-    liveOnly,
+    liveOnly: true,
     monitorNew,
     page,
     pageSize,
@@ -58,13 +57,13 @@ export function AssetsPage() {
   });
 
   const items = assetsQ.data?.items ?? [];
-  const liveCount = useMemo(() => items.filter((a) => (a.statusCode ?? 0) > 0).length, [items]);
   const total = assetsQ.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const liveCount = useMemo(() => items.filter((a) => (a.statusCode ?? 0) > 0).length, [items]);
 
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [page, pool, search, monitorNew, sortBy, sortDir]);
+  }, [page, search, monitorNew, sortBy, sortDir]);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -102,31 +101,23 @@ export function AssetsPage() {
     <section className="page">
       <div className="page-header">
         <h1 className="page-title">资产管理</h1>
-        <p className="page-desc">项目范围内的资产清单，支持候选/已验证双资产池视图。</p>
+        <p className="page-desc">统一展示 httpx 验证存活的 URL 资产，支持搜索、分页、排序和批量删除。</p>
       </div>
 
-      <ProjectScopeBanner title="资产范围" hint="服务端按项目范围过滤，支持分页与排序。" />
+      <ProjectScopeBanner title="资产范围" hint="仅展示当前项目下已验证且存活（URL+状态码）的资产。" />
 
       <article className="panel">
         <header className="panel-header">
           <h2>筛选条件</h2>
-          <span className="panel-meta">当前页存活: {liveCount} / 当前页: {items.length} / 总计: {total}</span>
+          <span className="panel-meta">当前页存活 {liveCount} / 当前页 {items.length} / 总计 {total}</span>
         </header>
         <div className="filter-bar">
-          <select className="form-select" value={pool} onChange={(e) => setPool(e.target.value as typeof pool)}>
-            <option value="verified">已验证资产池</option>
-            <option value="candidate">候选资产池</option>
-          </select>
           <input
             className="form-input"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="搜索域名、URL、IP、标题..."
           />
-          <label className="form-check">
-            <input type="checkbox" checked={liveOnly} disabled />
-            仅显示存活
-          </label>
           <select className="form-select" value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)}>
             <option value="last_seen">按最后发现</option>
             <option value="created_at">按创建时间</option>
@@ -181,7 +172,6 @@ export function AssetsPage() {
                   <th style={{ width: 36 }}>
                     <input type="checkbox" checked={items.length > 0 && selectedIds.size === items.length} onChange={toggleAll} />
                   </th>
-                  <th>池状态</th>
                   <th>域名</th>
                   <th>URL</th>
                   <th>IP</th>
@@ -195,15 +185,6 @@ export function AssetsPage() {
                 {items.map((a) => (
                   <tr key={a.id} style={{ background: selectedIds.has(a.id) ? "rgba(96,165,250,0.08)" : undefined }}>
                     <td><input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleSelect(a.id)} /></td>
-                    <td>
-                      {a.pool === "candidate" ? (
-                        <span className={a.verifyStatus === "verified" ? "badge badge-success" : "badge badge-warning"}>
-                          {a.verifyStatus === "verified" ? "候选-已验证" : "候选-待验证"}
-                        </span>
-                      ) : (
-                        <span className="badge badge-success">已验证</span>
-                      )}
-                    </td>
                     <td><DomainLink asset={a} /></td>
                     <td>{a.url || <span className="cell-muted">—</span>}</td>
                     <td>{a.ip ? <span className="cell-mono">{a.ip}</span> : <span className="cell-muted">—</span>}</td>
@@ -222,7 +203,7 @@ export function AssetsPage() {
                   </tr>
                 ))}
                 {items.length === 0 && (
-                  <tr><td colSpan={9} style={{ textAlign: "center", padding: 32, color: "#888" }}>暂无数据</td></tr>
+                  <tr><td colSpan={8} style={{ textAlign: "center", padding: 32, color: "#888" }}>暂无数据</td></tr>
                 )}
               </tbody>
             </table>

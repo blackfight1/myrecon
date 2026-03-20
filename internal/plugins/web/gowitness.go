@@ -85,7 +85,7 @@ func (g *GowitnessPlugin) Execute(input []string) ([]engine.Result, error) {
 			"scan", "file",
 			"-f", tmpFile.Name(),
 			"--ports-small",
-			"--threads", "10",
+			"--threads", "5",
 			"--write-db",
 			"-q",
 			"--http-code-filter", "200,403,401",
@@ -261,6 +261,18 @@ func setCachedScreenshots(dbPath string, dbModTime time.Time, items []Screenshot
 		DBModTime: dbModTime,
 		Items:     cloneScreenshotItems(items),
 	}
+}
+
+// InvalidateScreenshotCache clears cached screenshot rows for one root domain.
+func InvalidateScreenshotCache(baseDir, rootDomain string) {
+	rootDomain = strings.TrimSpace(rootDomain)
+	if rootDomain == "" {
+		return
+	}
+	dbPath := filepath.Join(baseDir, rootDomain, "gowitness.sqlite3")
+	screenshotCacheMu.Lock()
+	defer screenshotCacheMu.Unlock()
+	delete(screenshotCache, dbPath)
 }
 
 func cloneScreenshotItems(items []ScreenshotItem) []ScreenshotItem {

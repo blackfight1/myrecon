@@ -580,6 +580,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/ports", s.handlePorts)
 	s.mux.HandleFunc("/api/vulns", s.handleVulns)
 	s.mux.HandleFunc("/api/vulns/bulk-status", s.handleBulkVulnStatus)
+	s.mux.HandleFunc("/api/vulns/bulk-delete", s.handleBulkDeleteVulns)
 	s.mux.HandleFunc("/api/vulns/status", s.handlePatchVulnStatus)
 	s.mux.HandleFunc("/api/vulns/events", s.handleVulnEvents)
 	s.mux.HandleFunc("/api/graph/relations", s.handleRelations)
@@ -590,6 +591,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/monitor/events/status", s.handleMonitorEventStatus)
 	s.mux.HandleFunc("/api/monitor/events/bulk-status", s.handleBulkMonitorEventStatus)
 	s.mux.HandleFunc("/api/screenshots/domains", s.handleScreenshotDomains)
+	s.mux.HandleFunc("/api/screenshots/delete", s.handleBulkDeleteScreenshots)
 	s.mux.HandleFunc("/api/screenshots/file/", s.handleScreenshotFile)
 	s.mux.HandleFunc("/api/screenshots/", s.handleScreenshots)
 	s.mux.HandleFunc("/api/search", s.handleGlobalSearch)
@@ -3199,6 +3201,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 		}
 	}
 
+	s.appendPluginStatusLogs(projectID, jobID, allResults)
 	s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr, dryRun, notify)
 }
 
@@ -3291,6 +3294,44 @@ func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.
 // ──────────────────────────────────────────
 // Scan pipeline helpers
 // ──────────────────────────────────────────
+
+func (s *Server) appendPluginStatusLogs(projectID, jobID string, results []engine.Result) {
+	for _, result := range results {
+		if result.Type != "plugin_status" {
+			continue
+		}
+		data, ok := result.Data.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		scanner := mapString(data, "scanner")
+		if scanner == "" {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(mapString(data, "status")))
+		successCount := mapInt(data, "success_count")
+		failureCount := mapInt(data, "failure_count")
+		timeoutCount := mapInt(data, "timeout_count")
+		durationMS := mapInt(data, "duration_ms")
+		errMsg := strings.TrimSpace(mapString(data, "error"))
+
+		level := "info"
+		if status == "error" || failureCount > 0 {
+			level = "warn"
+		}
+		if errMsg == "" {
+			s.appendJobLogf(projectID, jobID, level, "扫描器状态: %s status=%s success=%d failure=%d timeout=%d duration=%dms",
+				scanner, status, successCount, failureCount, timeoutCount, durationMS)
+		} else {
+			s.appendJobLogf(projectID, jobID, level, "扫描器状态: %s status=%s success=%d failure=%d timeout=%d duration=%dms error=%s",
+				scanner, status, successCount, failureCount, timeoutCount, durationMS, trimForNotify(errMsg, 260))
+		}
+
+		if strings.EqualFold(scanner, "nmap") && status == "ok" && successCount == 0 {
+			s.appendJobLog(projectID, jobID, "warn", "Nmap 已执行但未识别到服务指纹，端口页可能只显示开放端口（无 service/version）")
+		}
+	}
+}
 
 func (s *Server) collectSubdomains(rootDomains []string, includePassiveBBOT bool) ([]engine.Result, []string, error) {
 	pipeline := engine.NewPipeline()
@@ -4096,6 +4137,83 @@ func (s *Server) handleScreenshots(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleBulkDeleteScreenshots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		ProjectID  string   `json:"projectId"`
+		RootDomain string   `json:"rootDomain"`
+		Filenames  []string `json:"filenames"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	projectID := strings.TrimSpace(body.ProjectID)
+	rootDomain := normalizeRootDomain(body.RootDomain)
+	if projectID == "" || rootDomain == "" || len(body.Filenames) == 0 {
+		writeError(w, http.StatusBadRequest, "projectId, rootDomain and filenames are required")
+		return
+	}
+	if len(body.Filenames) > 1000 {
+		writeError(w, http.StatusBadRequest, "max 1000 filenames per request")
+		return
+	}
+	ok, err := s.isDomainInProjectScope(projectID, rootDomain)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "project scope check failed: "+err.Error())
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "domain is not in project scope")
+		return
+	}
+
+	screenshotDir := filepath.Join(s.screenshotDir, rootDomain, "screenshots")
+	deleted := 0
+	skipped := make([]string, 0)
+	seen := make(map[string]bool, len(body.Filenames))
+	for _, raw := range body.Filenames {
+		filename := filepath.Base(strings.TrimSpace(raw))
+		filename = strings.TrimSpace(filename)
+		if filename == "" || seen[filename] {
+			continue
+		}
+		seen[filename] = true
+		ext := strings.ToLower(filepath.Ext(filename))
+		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
+			skipped = append(skipped, filename)
+			continue
+		}
+		filePath := filepath.Join(screenshotDir, filename)
+		if err := os.Remove(filePath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				skipped = append(skipped, filename)
+				continue
+			}
+			writeError(w, http.StatusInternalServerError, "failed to delete screenshot: "+err.Error())
+			return
+		}
+		deleted++
+	}
+
+	plugins.InvalidateScreenshotCache(s.screenshotDir, rootDomain)
+	s.writeAudit(projectID, actorFromRequest(r), "bulk_delete_screenshots", "screenshot", rootDomain, map[string]interface{}{
+		"rootDomain": rootDomain,
+		"deleted":    deleted,
+		"requested":  len(body.Filenames),
+		"skipped":    skipped,
+	}, r)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":    "ok",
+		"deleted":   deleted,
+		"requested": len(body.Filenames),
+		"skipped":   skipped,
+	})
 }
 
 func (s *Server) handleScreenshotFile(w http.ResponseWriter, r *http.Request) {
@@ -5299,6 +5417,61 @@ func (s *Server) handleBulkDeleteAssets(w http.ResponseWriter, r *http.Request) 
 		"status":  "ok",
 		"deleted": deletedAssets,
 		"cascade": deletedDeps,
+	})
+}
+
+func (s *Server) handleBulkDeleteVulns(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		ProjectID string `json:"projectId"`
+		IDs       []int  `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if body.ProjectID == "" || len(body.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "projectId and ids are required")
+		return
+	}
+	if len(body.IDs) > 500 {
+		writeError(w, http.StatusBadRequest, "max 500 IDs per request")
+		return
+	}
+
+	deletedVulns := int64(0)
+	deletedEvents := int64(0)
+	err := s.db.DB.Transaction(func(tx *gorm.DB) error {
+		rEvents := tx.Where("project_id = ? AND vuln_id IN ?", body.ProjectID, body.IDs).Delete(&db.VulnEvent{})
+		if rEvents.Error != nil {
+			return rEvents.Error
+		}
+		deletedEvents = rEvents.RowsAffected
+
+		rVulns := tx.Where("project_id = ? AND id IN ?", body.ProjectID, body.IDs).Delete(&db.Vulnerability{})
+		if rVulns.Error != nil {
+			return rVulns.Error
+		}
+		deletedVulns = rVulns.RowsAffected
+		return nil
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeAudit(body.ProjectID, actorFromRequest(r), "bulk_delete_vulns", "vulnerability", "", map[string]interface{}{
+		"count":        deletedVulns,
+		"deletedEvents": deletedEvents,
+		"ids":          body.IDs,
+	}, r)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":        "ok",
+		"deleted":       deletedVulns,
+		"deletedEvents": deletedEvents,
 	})
 }
 

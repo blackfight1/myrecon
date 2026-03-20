@@ -87,6 +87,10 @@ func ListScreenshots(baseDir, rootDomain string) ([]ScreenshotItem, error) {
 	return web.ListScreenshots(baseDir, rootDomain)
 }
 
+func InvalidateScreenshotCache(baseDir, rootDomain string) {
+	web.InvalidateScreenshotCache(baseDir, rootDomain)
+}
+
 func ExtractRootDomain(subdomain string) string {
 	return web.ExtractRootDomain(subdomain)
 }
