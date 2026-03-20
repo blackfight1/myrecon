@@ -93,13 +93,13 @@ type dashboardResponse struct {
 }
 
 type dashboardSummaryResponse struct {
-	JobsRunning           int `json:"jobsRunning"`
-	JobsSuccess24h        int `json:"jobsSuccess24h"`
-	JobsFailed24h         int `json:"jobsFailed24h"`
-	NewSubdomains24h      int `json:"newSubdomains24h"`
-	NewPorts24h           int `json:"newPorts24h"`
-	NewVulns24h           int `json:"newVulns24h"`
-	ScanDurationAvgSec24h int `json:"scanDurationAvgSec24h"`
+	JobsRunning           int                          `json:"jobsRunning"`
+	JobsSuccess24h        int                          `json:"jobsSuccess24h"`
+	JobsFailed24h         int                          `json:"jobsFailed24h"`
+	NewSubdomains24h      int                          `json:"newSubdomains24h"`
+	NewPorts24h           int                          `json:"newPorts24h"`
+	NewVulns24h           int                          `json:"newVulns24h"`
+	ScanDurationAvgSec24h int                          `json:"scanDurationAvgSec24h"`
 	ServiceDistribution   []dashboardCountItemResponse `json:"serviceDistribution"`
 	SeverityDistribution  []dashboardCountItemResponse `json:"severityDistribution"`
 }
@@ -496,10 +496,36 @@ func (s *Server) RunWorkers() error {
 	} else if recovered > 0 {
 		log.Printf("[Worker] recovered %d stale monitor tasks", recovered)
 	}
-	if recovered, err := s.db.RecoverStaleRunningScanJobs(scanJobStaleAfter); err != nil {
+	if recovered, err := s.db.RecoverStaleRunningScanJobsDetailed(scanJobStaleAfter); err != nil {
 		log.Printf("[Worker] failed to recover stale scan jobs: %v", err)
-	} else if recovered > 0 {
-		log.Printf("[Worker] recovered %d stale scan jobs", recovered)
+	} else if len(recovered) > 0 {
+		log.Printf("[Worker] recovered %d stale scan jobs", len(recovered))
+		for _, item := range recovered {
+			s.appendJobLog(item.ProjectID, item.JobID, "warn", item.ErrorMessage)
+			if strings.TrimSpace(item.LastStage) == "" {
+				s.appendJobLogf(item.ProjectID, item.JobID, "warn",
+					"worker 回收前无阶段记录: root=%s started_at=%s updated_at=%s cutoff=%s",
+					item.RootDomain, timePtrToISO(item.StartedAt), timeToISO(item.JobUpdatedAt), timeToISO(item.CutoffAt),
+				)
+				continue
+			}
+
+			stageErr := strings.TrimSpace(item.LastStageError)
+			if stageErr != "" {
+				stageErr = trimForNotify(stageErr, 280)
+			}
+			if stageErr == "" {
+				s.appendJobLogf(item.ProjectID, item.JobID, "warn",
+					"worker 回收前最后阶段: stage=%s status=%s stage_updated_at=%s",
+					item.LastStage, item.LastStageStatus, timePtrToISO(item.LastStageUpdatedAt),
+				)
+				continue
+			}
+			s.appendJobLogf(item.ProjectID, item.JobID, "warn",
+				"worker 回收前最后阶段: stage=%s status=%s stage_updated_at=%s stage_error=%s",
+				item.LastStage, item.LastStageStatus, timePtrToISO(item.LastStageUpdatedAt), stageErr,
+			)
+		}
 	}
 
 	go s.runMonitorScheduler()
@@ -3622,11 +3648,11 @@ func (s *Server) handleCreateMonitorTarget(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":     "ok",
-		"projectId":  projectID,
-		"domain":     domain,
+		"status":      "ok",
+		"projectId":   projectID,
+		"domain":      domain,
 		"intervalSec": intervalSec,
-		"jobId":      fmt.Sprintf("task-%d", taskID),
+		"jobId":       fmt.Sprintf("task-%d", taskID),
 	})
 }
 

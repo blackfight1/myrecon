@@ -1793,24 +1793,129 @@ func (d *Database) ClaimPendingScanJob() (*ScanJob, error) {
 	return claimed, nil
 }
 
-// RecoverStaleRunningScanJobs marks stale running scan jobs as failed.
-func (d *Database) RecoverStaleRunningScanJobs(staleAfter time.Duration) (int, error) {
+type RecoveredScanJob struct {
+	ProjectID          string
+	JobID              string
+	RootDomain         string
+	StartedAt          *time.Time
+	JobUpdatedAt       time.Time
+	CutoffAt           time.Time
+	RecoveredAt        time.Time
+	StaleAfter         time.Duration
+	LastStage          string
+	LastStageStatus    string
+	LastStageUpdatedAt *time.Time
+	LastStageError     string
+	ErrorMessage       string
+}
+
+func formatTimeRFC3339OrUnknown(t *time.Time) string {
+	if t == nil || t.IsZero() {
+		return "unknown"
+	}
+	return t.Format(time.RFC3339)
+}
+
+// RecoverStaleRunningScanJobsDetailed marks stale running scan jobs as failed
+// and returns per-job recovery details for runtime logging.
+func (d *Database) RecoverStaleRunningScanJobsDetailed(staleAfter time.Duration) ([]RecoveredScanJob, error) {
 	if staleAfter <= 0 {
 		staleAfter = 6 * time.Hour
 	}
-	now := time.Now()
-	cutoff := now.Add(-staleAfter)
-	result := d.DB.Model(&ScanJob{}).
+	recoveredAt := time.Now()
+	cutoff := recoveredAt.Add(-staleAfter)
+
+	var staleJobs []ScanJob
+	if err := d.DB.Model(&ScanJob{}).
 		Where("mode = ? AND status = ? AND started_at IS NOT NULL AND started_at <= ?", "scan", "running", cutoff).
-		Updates(map[string]interface{}{
-			"status":        "failed",
-			"finished_at":   now,
-			"error_message": "stale running scan job recovered by worker",
-		})
-	if result.Error != nil {
-		return 0, result.Error
+		Order("started_at asc").
+		Find(&staleJobs).Error; err != nil {
+		return nil, err
 	}
-	return int(result.RowsAffected), nil
+	if len(staleJobs) == 0 {
+		return []RecoveredScanJob{}, nil
+	}
+
+	recovered := make([]RecoveredScanJob, 0, len(staleJobs))
+	for i := range staleJobs {
+		jobID := staleJobs[i].ID
+		var detail *RecoveredScanJob
+		if err := d.DB.Transaction(func(tx *gorm.DB) error {
+			var job ScanJob
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", jobID).First(&job).Error; err != nil {
+				if err == gorm.ErrRecordNotFound {
+					return nil
+				}
+				return err
+			}
+
+			status := strings.ToLower(strings.TrimSpace(job.Status))
+			if strings.ToLower(strings.TrimSpace(job.Mode)) != "scan" || status != "running" || job.StartedAt == nil || job.StartedAt.After(cutoff) {
+				return nil
+			}
+
+			errMsg := fmt.Sprintf(
+				"stale running scan job recovered by worker (started_at=%s, updated_at=%s, stale_after=%s, cutoff=%s, recovered_at=%s)",
+				formatTimeRFC3339OrUnknown(job.StartedAt),
+				job.UpdatedAt.Format(time.RFC3339),
+				staleAfter.String(),
+				cutoff.Format(time.RFC3339),
+				recoveredAt.Format(time.RFC3339),
+			)
+			if err := tx.Model(&ScanJob{}).
+				Where("id = ? AND status = ?", job.ID, "running").
+				Updates(map[string]interface{}{
+					"status":        "failed",
+					"finished_at":   recoveredAt,
+					"error_message": errMsg,
+				}).Error; err != nil {
+				return err
+			}
+
+			item := RecoveredScanJob{
+				ProjectID:    job.ProjectID,
+				JobID:        job.JobID,
+				RootDomain:   job.RootDomain,
+				StartedAt:    job.StartedAt,
+				JobUpdatedAt: job.UpdatedAt,
+				CutoffAt:     cutoff,
+				RecoveredAt:  recoveredAt,
+				StaleAfter:   staleAfter,
+				ErrorMessage: errMsg,
+			}
+
+			var stage ScanStage
+			if err := tx.Where("project_id = ? AND job_id = ?", job.ProjectID, job.JobID).Order("updated_at desc").Take(&stage).Error; err == nil {
+				item.LastStage = strings.TrimSpace(stage.Stage)
+				item.LastStageStatus = strings.TrimSpace(stage.Status)
+				if !stage.UpdatedAt.IsZero() {
+					t := stage.UpdatedAt
+					item.LastStageUpdatedAt = &t
+				}
+				item.LastStageError = strings.TrimSpace(stage.Error)
+			} else if err != gorm.ErrRecordNotFound {
+				return err
+			}
+
+			detail = &item
+			return nil
+		}); err != nil {
+			return recovered, err
+		}
+		if detail != nil {
+			recovered = append(recovered, *detail)
+		}
+	}
+	return recovered, nil
+}
+
+// RecoverStaleRunningScanJobs marks stale running scan jobs as failed.
+func (d *Database) RecoverStaleRunningScanJobs(staleAfter time.Duration) (int, error) {
+	recovered, err := d.RecoverStaleRunningScanJobsDetailed(staleAfter)
+	if err != nil {
+		return 0, err
+	}
+	return len(recovered), nil
 }
 
 func getStringValue(data map[string]interface{}, key string) string {
