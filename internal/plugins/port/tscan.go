@@ -1,7 +1,7 @@
 package port
 
 import (
-	"database/sql"
+	"bufio"
 	"fmt"
 	"net"
 	neturl "net/url"
@@ -16,16 +16,18 @@ import (
 
 	"hunter/internal/engine"
 	plugincommon "hunter/internal/plugins/common"
-
-	_ "modernc.org/sqlite"
 )
 
 // TscanPortPlugin performs port discovery and fingerprinting via TscanClient.
 type TscanPortPlugin struct {
-	ports       string
-	extraPorts  string
-	concurrency int
-	timeoutSec  int
+	ports          string
+	extraPorts     string
+	concurrency    int
+	timeoutSec     int
+	runtimeRoot    string
+	runtimeSlots   int
+	slotWaitSec    int
+	slotStaleAfter time.Duration
 }
 
 type tscanIPScanRow struct {
@@ -37,13 +39,29 @@ type tscanIPScanRow struct {
 	Status   string
 }
 
+const defaultTscanPorts = "21,22,23,25,53,81,82,83,88,110,111,123,135,139,143,389,445,465,512,513,514,587,631,873,993,995,1080,1099,1433,1521,1723,1883,2049,2375,2376,3128,3306,3389,4443,5000,5001,5432,5601,5672,5900,5984,5985,5986,6379,7000,7001,7002,7443,8000,8001,8080,8081,8088,8089,8443,8686,8888,9000,9001,9042,9090,9092,9200,9300,9443,10000,11211,27017"
+
 // NewTscanPortPlugin creates a TscanClient-backed port scanner.
 func NewTscanPortPlugin() *TscanPortPlugin {
+	runtimeRoot := strings.TrimSpace(os.Getenv("TSCANCLIENT_RUNTIME_ROOT"))
+	if runtimeRoot == "" {
+		runtimeRoot = filepath.Join(os.TempDir(), "myrecon_tscan_pool")
+	}
+	ports := strings.TrimSpace(os.Getenv("TSCANCLIENT_PORTS"))
+	if ports == "" {
+		// httpx already covers the default 80/443 web probe path, so keep
+		// the Tscan default focused on non-standard services and alt-web ports.
+		ports = defaultTscanPorts
+	}
 	return &TscanPortPlugin{
-		ports:       strings.TrimSpace(os.Getenv("TSCANCLIENT_PORTS")),
-		extraPorts:  strings.TrimSpace(os.Getenv("TSCANCLIENT_EXTRA_PORTS")),
-		concurrency: envIntWithBounds("TSCANCLIENT_PORT_CONCURRENCY", 600, 1, 5000),
-		timeoutSec:  envIntWithBounds("TSCANCLIENT_TIMEOUT_SEC", 3, 1, 30),
+		ports:          ports,
+		extraPorts:     strings.TrimSpace(os.Getenv("TSCANCLIENT_EXTRA_PORTS")),
+		concurrency:    envIntWithBounds("TSCANCLIENT_PORT_CONCURRENCY", 600, 1, 5000),
+		timeoutSec:     envIntWithBounds("TSCANCLIENT_TIMEOUT_SEC", 3, 1, 30),
+		runtimeRoot:    runtimeRoot,
+		runtimeSlots:   envIntWithBounds("TSCANCLIENT_RUNTIME_SLOTS", 4, 1, 32),
+		slotWaitSec:    envIntWithBounds("TSCANCLIENT_SLOT_WAIT_SEC", 300, 5, 3600),
+		slotStaleAfter: time.Duration(envIntWithBounds("TSCANCLIENT_SLOT_STALE_SEC", 7200, 60, 86400)) * time.Second,
 	}
 }
 
@@ -70,11 +88,17 @@ func (t *TscanPortPlugin) Execute(input []string) ([]engine.Result, error) {
 
 	fmt.Printf("[TscanPort] Scanning %d IPs resolved from %d targets...\n", len(ipTargets), len(input))
 
-	workDir, err := os.MkdirTemp("", "myrecon_tscan_*")
+	workDir, err := os.MkdirTemp("", "myrecon_tscan_job_*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tscan workdir: %v", err)
 	}
 	defer os.RemoveAll(workDir)
+
+	slot, releaseSlot, err := t.acquireRuntimeSlot(bin)
+	if err != nil {
+		return nil, fmt.Errorf("failed to acquire tscan runtime slot: %v", err)
+	}
+	defer releaseSlot()
 
 	targetFile, err := plugincommon.CreateTempFile("tscan_targets_*.txt", ipTargets)
 	if err != nil {
@@ -101,11 +125,11 @@ func (t *TscanPortPlugin) Execute(input []string) ([]engine.Result, error) {
 		args = append(args, "-pa", t.extraPorts)
 	}
 
-	cmd := exec.Command(bin, args...)
-	cmd.Dir = workDir
+	cmd := exec.Command(slot.binPath, args...)
+	cmd.Dir = slot.dir
 	output, runErr := cmd.CombinedOutput()
 
-	rows, parseErr := readTscanIPScan(filepath.Join(workDir, "config.db"), projectName)
+	rows, parseErr := parseTscanPortResults(filepath.Join(slot.dir, "port.txt"), string(output))
 	if parseErr != nil {
 		if runErr != nil {
 			return nil, fmt.Errorf("tscanclient execution failed: %v; parse failed: %v; output=%s", runErr, parseErr, compactCommandOutput(string(output), 320))
@@ -122,6 +146,207 @@ func (t *TscanPortPlugin) Execute(input []string) ([]engine.Result, error) {
 	results := buildTscanResults(rows, ipHosts)
 	fmt.Printf("[TscanPort] Scan completed, found %d open ports\n", countResultType(results, "open_port"))
 	return results, nil
+}
+
+type tscanRuntimeSlot struct {
+	name     string
+	dir      string
+	binPath  string
+	lockPath string
+}
+
+func (t *TscanPortPlugin) acquireRuntimeSlot(sourceBin string) (*tscanRuntimeSlot, func(), error) {
+	deadline := time.Now().Add(time.Duration(t.slotWaitSec) * time.Second)
+
+	for {
+		for i := 1; i <= t.runtimeSlots; i++ {
+			slot, err := t.prepareRuntimeSlot(sourceBin, i)
+			if err != nil {
+				return nil, nil, err
+			}
+			ok, err := t.tryLockSlot(slot)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !ok {
+				continue
+			}
+			if err := cleanupRuntimeSlot(slot.dir); err != nil {
+				t.unlockSlot(slot)
+				return nil, nil, err
+			}
+			release := func() {
+				_ = cleanupRuntimeSlot(slot.dir)
+				_ = t.unlockSlot(slot)
+			}
+			return slot, release, nil
+		}
+
+		if time.Now().After(deadline) {
+			return nil, nil, fmt.Errorf("no tscan runtime slot available after waiting %ds", t.slotWaitSec)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func (t *TscanPortPlugin) prepareRuntimeSlot(sourceBin string, index int) (*tscanRuntimeSlot, error) {
+	slotName := fmt.Sprintf("slot-%02d", index)
+	slotDir := filepath.Join(t.runtimeRoot, slotName)
+	if err := os.MkdirAll(slotDir, 0o755); err != nil {
+		return nil, err
+	}
+
+	slot := &tscanRuntimeSlot{
+		name:     slotName,
+		dir:      slotDir,
+		binPath:  filepath.Join(slotDir, "tscanclient"),
+		lockPath: filepath.Join(slotDir, ".lock"),
+	}
+
+	sourceDir := filepath.Dir(sourceBin)
+	requiredFiles := []struct {
+		name string
+		perm os.FileMode
+	}{
+		{name: filepath.Base(slot.binPath), perm: 0o755},
+		{name: "JsRule.json", perm: 0o644},
+	}
+
+	for _, file := range requiredFiles {
+		var src string
+		if file.name == filepath.Base(slot.binPath) {
+			src = sourceBin
+		} else {
+			src = filepath.Join(sourceDir, file.name)
+		}
+		st, err := os.Stat(src)
+		if err != nil {
+			if file.name == "JsRule.json" && os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		if st.IsDir() {
+			continue
+		}
+		dst := filepath.Join(slotDir, file.name)
+		needCopy := true
+		if dstInfo, err := os.Stat(dst); err == nil {
+			if dstInfo.Size() == st.Size() && dstInfo.ModTime().Equal(st.ModTime()) {
+				needCopy = false
+			}
+		}
+		if needCopy {
+			if err := copyFile(src, dst, file.perm); err != nil {
+				return nil, err
+			}
+			_ = os.Chtimes(dst, time.Now(), st.ModTime())
+		}
+	}
+
+	return slot, nil
+}
+
+func (t *TscanPortPlugin) tryLockSlot(slot *tscanRuntimeSlot) (bool, error) {
+	if info, err := os.Stat(slot.lockPath); err == nil {
+		if time.Since(info.ModTime()) > t.slotStaleAfter {
+			_ = os.Remove(slot.lockPath)
+		}
+	}
+
+	lockFile, err := os.OpenFile(slot.lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer lockFile.Close()
+
+	content := fmt.Sprintf("pid=%d\ncreated_at=%s\nslot=%s\n", os.Getpid(), time.Now().Format(time.RFC3339), slot.name)
+	if _, err := lockFile.WriteString(content); err != nil {
+		_ = os.Remove(slot.lockPath)
+		return false, err
+	}
+	return true, nil
+}
+
+func (t *TscanPortPlugin) unlockSlot(slot *tscanRuntimeSlot) error {
+	return os.Remove(slot.lockPath)
+}
+
+func cleanupRuntimeSlot(slotDir string) error {
+	patterns := []string{
+		"config.db",
+		"config.yaml",
+		"port.txt",
+		"url.txt",
+		"poc.txt",
+		"dir.txt",
+		"js.txt",
+		"domain.txt",
+		"cyber.txt",
+		"pwd.txt",
+		"crack.txt",
+		"port-output.txt",
+		"*.txt",
+		"*.html",
+		"*.json",
+		"*.csv",
+	}
+
+	protected := map[string]bool{
+		"tscanclient": true,
+		"JsRule.json": true,
+		".lock":       true,
+	}
+
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(slotDir, pattern))
+		if err != nil {
+			return err
+		}
+		for _, match := range matches {
+			base := filepath.Base(match)
+			if protected[base] {
+				continue
+			}
+			if err := os.RemoveAll(match); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+
+	for _, base := range []string{"config.db", "config.yaml"} {
+		path := filepath.Join(slotDir, base)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string, perm os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+
+	_, copyErr := out.ReadFrom(in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return nil
 }
 
 func resolveTscanBinary() (string, error) {
@@ -228,46 +453,145 @@ func normalizeIPv4(ip string) string {
 	return ""
 }
 
-func readTscanIPScan(dbPath, projectName string) ([]tscanIPScanRow, error) {
-	if _, err := os.Stat(dbPath); err != nil {
-		return nil, fmt.Errorf("config.db not found: %v", err)
-	}
-
-	dbConn, err := sql.Open("sqlite", dbPath)
+func parseTscanPortResults(portFilePath, output string) ([]tscanIPScanRow, error) {
+	openRows, err := parseTscanPortFile(portFilePath)
 	if err != nil {
 		return nil, err
 	}
-	defer dbConn.Close()
+	if len(openRows) == 0 {
+		return []tscanIPScanRow{}, nil
+	}
 
-	rows, err := dbConn.Query(`
-		SELECT COALESCE(Host, ''), COALESCE(Port, 0), COALESCE(Protocol, ''), COALESCE(Title, ''), COALESCE(Banner, ''), COALESCE(Status, '')
-		FROM ipscan
-		WHERE Project = ?
-	`, projectName)
+	fingerprintMap := parseTscanFingerprintOutput(output)
+	for i := range openRows {
+		key := fmt.Sprintf("%s:%d", openRows[i].Host, openRows[i].Port)
+		if fp, ok := fingerprintMap[key]; ok {
+			if strings.TrimSpace(fp.Protocol) != "" {
+				openRows[i].Protocol = fp.Protocol
+			}
+			if strings.TrimSpace(fp.Title) != "" {
+				openRows[i].Title = fp.Title
+			}
+			if strings.TrimSpace(fp.Banner) != "" {
+				openRows[i].Banner = fp.Banner
+			}
+			if strings.TrimSpace(fp.Status) != "" {
+				openRows[i].Status = fp.Status
+			}
+		}
+	}
+	return openRows, nil
+}
+
+func parseTscanPortFile(path string) ([]tscanIPScanRow, error) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("port.txt not found: %v", err)
+		}
 		return nil, err
 	}
-	defer rows.Close()
 
-	var out []tscanIPScanRow
-	for rows.Next() {
-		var row tscanIPScanRow
-		if err := rows.Scan(&row.Host, &row.Port, &row.Protocol, &row.Title, &row.Banner, &row.Status); err != nil {
-			return nil, err
-		}
-		row.Host = normalizeIPv4(row.Host)
-		if row.Host == "" || row.Port <= 0 {
+	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
+	out := make([]tscanIPScanRow, 0)
+	seen := make(map[string]bool)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
 			continue
 		}
-		if status := strings.ToLower(strings.TrimSpace(row.Status)); status != "" && status != "open" {
+
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
 			continue
 		}
-		out = append(out, row)
+		hostPort := strings.TrimSpace(fields[0])
+		status := strings.ToLower(strings.TrimSpace(fields[1]))
+		if status != "open" {
+			continue
+		}
+
+		host, port, ok := splitHostPortToken(hostPort)
+		if !ok {
+			continue
+		}
+		key := fmt.Sprintf("%s:%d", host, port)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		out = append(out, tscanIPScanRow{
+			Host:   host,
+			Port:   port,
+			Status: status,
+		})
 	}
-	if err := rows.Err(); err != nil {
+	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func parseTscanFingerprintOutput(output string) map[string]tscanIPScanRow {
+	lines := strings.Split(output, "\n")
+	result := make(map[string]tscanIPScanRow)
+
+	fingerprintLine := regexp.MustCompile(`\[(TCP|UDP)/([A-Z0-9._-]+)\]\s*(?:\[(.*?)\])?\s*([0-9.]+):([0-9]+)(?:\s*\[(.*?)\])?`)
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		matches := fingerprintLine.FindStringSubmatch(line)
+		if len(matches) == 0 {
+			continue
+		}
+
+		host := normalizeIPv4(matches[4])
+		if host == "" {
+			continue
+		}
+		port, err := strconv.Atoi(strings.TrimSpace(matches[5]))
+		if err != nil || port <= 0 {
+			continue
+		}
+
+		protocolToken := strings.ToLower(strings.TrimSpace(matches[2]))
+		title := strings.TrimSpace(matches[3])
+		banner := strings.TrimSpace(matches[6])
+
+		result[fmt.Sprintf("%s:%d", host, port)] = tscanIPScanRow{
+			Host:     host,
+			Port:     port,
+			Protocol: protocolToken,
+			Title:    title,
+			Banner:   banner,
+			Status:   "open",
+		}
+	}
+	return result
+}
+
+func splitHostPortToken(value string) (string, int, bool) {
+	value = strings.TrimSpace(value)
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return "", 0, false
+	}
+
+	host := normalizeIPv4(parts[0])
+	if host == "" {
+		return "", 0, false
+	}
+
+	port, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || port <= 0 {
+		return "", 0, false
+	}
+
+	return host, port, true
 }
 
 func buildTscanResults(rows []tscanIPScanRow, ipHosts map[string][]string) []engine.Result {

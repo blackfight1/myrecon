@@ -35,6 +35,8 @@ const (
 	defaultMonitorVulnCooldownMin = 30
 	maxMonitorVulnMaxURLs         = 1000
 	maxMonitorVulnCooldownMin     = 24 * 60
+	projectScopedSchemaLockClass  = 913451
+	projectScopedSchemaLockObject = 20260322
 )
 
 type MonitorTargetOptions struct {
@@ -74,6 +76,12 @@ func NewDatabase(dsn string) (*Database, error) {
 
 func ensureProjectScopedSchema(database *gorm.DB) error {
 	return database.Transaction(func(tx *gorm.DB) error {
+		// Serialize the project-scoped schema fixups across API/worker startup
+		// processes to avoid concurrent DDL/DML deadlocks during bootstrap.
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?, ?)", projectScopedSchemaLockClass, projectScopedSchemaLockObject).Error; err != nil {
+			return err
+		}
+
 		backfillStatements := []string{
 			"UPDATE assets SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE asset_candidates SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",

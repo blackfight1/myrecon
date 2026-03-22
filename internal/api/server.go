@@ -3780,6 +3780,8 @@ func countResults(results []engine.Result) map[string]int {
 		"vulnerabilities": 0,
 		"screenshots":     0,
 	}
+	portBuckets := make(map[string]map[string]struct{})
+	portBucketsWithEmptyDomain := make(map[string]bool)
 	for _, r := range results {
 		switch r.Type {
 		case "domain":
@@ -3787,7 +3789,18 @@ func countResults(results []engine.Result) map[string]int {
 		case "web_service":
 			counts["web_services"]++
 		case "port_service", "open_port":
-			counts["ports"]++
+			baseKey, domain, ok := portResultCountKey(r)
+			if !ok {
+				continue
+			}
+			if _, exists := portBuckets[baseKey]; !exists {
+				portBuckets[baseKey] = make(map[string]struct{})
+			}
+			if domain == "" {
+				portBucketsWithEmptyDomain[baseKey] = true
+				continue
+			}
+			portBuckets[baseKey][domain] = struct{}{}
 		case "vulnerability":
 			counts["vulnerabilities"]++
 		case "screenshot":
@@ -3796,7 +3809,41 @@ func countResults(results []engine.Result) map[string]int {
 			}
 		}
 	}
+	for baseKey, domains := range portBuckets {
+		if len(domains) > 0 {
+			counts["ports"] += len(domains)
+			continue
+		}
+		if portBucketsWithEmptyDomain[baseKey] {
+			counts["ports"]++
+		}
+	}
 	return counts
+}
+
+func portResultCountKey(result engine.Result) (string, string, bool) {
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		return "", "", false
+	}
+
+	ip := strings.TrimSpace(mapString(data, "ip"))
+	port := mapInt(data, "port")
+	if ip == "" || port <= 0 {
+		return "", "", false
+	}
+
+	protocol := strings.ToLower(strings.TrimSpace(mapString(data, "protocol")))
+	if protocol == "" {
+		protocol = "tcp"
+	}
+
+	domain := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(mapString(data, "domain")), "."))
+	if domain == "" {
+		domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(mapString(data, "host")), "."))
+	}
+
+	return fmt.Sprintf("%s|%d|%s", ip, port, protocol), domain, true
 }
 
 // ──────────────────────────────────────────

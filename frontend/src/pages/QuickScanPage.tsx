@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useWorkspace } from "../context/WorkspaceContext";
 import { useCreateJob, useSettings } from "../hooks/queries";
 import { errorMessage } from "../lib/errors";
-import { matchesProjectDomain, normalizeRootDomain } from "../lib/projectScope";
+import { matchesProjectDomain, parseDomainList } from "../lib/projectScope";
 
 const BASELINE_MODULES = ["subs", "httpx", "ports"];
 
@@ -11,8 +11,10 @@ export function QuickScanPage() {
   const createJob = useCreateJob();
   const settingsQuery = useSettings();
   const scannerDefaults = settingsQuery.data?.scanner;
+  const projectRootDomains = activeProject?.rootDomains ?? [];
+  const projectRootDomainsKey = projectRootDomains.join("\n");
 
-  const [scanDomain, setScanDomain] = useState(activeProject?.rootDomains?.[0] ?? "");
+  const [scanTargetsRaw, setScanTargetsRaw] = useState(projectRootDomainsKey);
   const [enableWitness, setEnableWitness] = useState(false);
   const [enableNuclei, setEnableNuclei] = useState(false);
   const [enableCors, setEnableCors] = useState(false);
@@ -36,11 +38,11 @@ export function QuickScanPage() {
     [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei, enableCors, enableSubtakeover]
   );
 
+  const scanTargets = useMemo(() => parseDomainList(scanTargetsRaw), [scanTargetsRaw]);
+
   useEffect(() => {
-    if (!scanDomain.trim()) {
-      setScanDomain(activeProject?.rootDomains?.[0] ?? "");
-    }
-  }, [activeProject, scanDomain]);
+    setScanTargetsRaw(projectRootDomainsKey);
+  }, [activeProject?.id, projectRootDomainsKey]);
 
   useEffect(() => {
     if (defaultsLoaded || !scannerDefaults) return;
@@ -51,12 +53,17 @@ export function QuickScanPage() {
   }, [defaultsLoaded, scannerDefaults]);
 
   const handleQuickScan = async () => {
-    const domain = normalizeRootDomain(scanDomain);
-    if (!domain || !activeProject?.id) return;
+    if (!activeProject?.id) return;
 
     setFeedback(null);
-    if (!matchesProjectDomain(domain, activeProject.rootDomains)) {
-      setFeedback({ ok: false, text: "目标域名不在当前项目范围内，请先在项目中添加对应根域名。" });
+    if (scanTargets.length === 0) {
+      setFeedback({ ok: false, text: "请至少输入一个扫描目标。" });
+      return;
+    }
+
+    const outOfScope = scanTargets.filter((domain) => !matchesProjectDomain(domain, projectRootDomains));
+    if (outOfScope.length > 0) {
+      setFeedback({ ok: false, text: `以下目标不在当前项目范围内：${outOfScope.join(", ")}` });
       return;
     }
 
@@ -68,23 +75,42 @@ export function QuickScanPage() {
     if (enableCors) modules.push("cors");
     if (enableSubtakeover) modules.push("subtakeover");
 
-    try {
-      const job = await createJob.mutateAsync({
-        projectId: activeProject.id,
-        domain,
-        modules,
-        mode: "scan",
-        enableNuclei,
-        activeSubs: enableActiveSubs,
-        dictSize: scannerDefaults?.defaultDictSize ?? 1500,
-        dryRun: false,
-        notify: enableNotify
-      });
-      setScanDomain(domain);
-      setFeedback({ ok: true, text: `任务已提交：${job.id}` });
-    } catch (err) {
-      setFeedback({ ok: false, text: `提交失败：${errorMessage(err)}` });
+    const success: string[] = [];
+    const failed: string[] = [];
+
+    for (const domain of scanTargets) {
+      try {
+        const job = await createJob.mutateAsync({
+          projectId: activeProject.id,
+          domain,
+          modules,
+          mode: "scan",
+          enableNuclei,
+          activeSubs: enableActiveSubs,
+          dictSize: scannerDefaults?.defaultDictSize ?? 1500,
+          dryRun: false,
+          notify: enableNotify
+        });
+        success.push(`${domain} (${job.id})`);
+      } catch (err) {
+        failed.push(`${domain}: ${errorMessage(err)}`);
+      }
     }
+
+    if (failed.length === 0) {
+      setFeedback({ ok: true, text: `已提交 ${success.length} 个扫描任务。` });
+      return;
+    }
+
+    if (success.length === 0) {
+      setFeedback({ ok: false, text: `任务提交失败：${failed.join(" | ")}` });
+      return;
+    }
+
+    setFeedback({
+      ok: false,
+      text: `已提交 ${success.length} 个任务，${failed.length} 个失败：${failed.join(" | ")}`
+    });
   };
 
   return (
@@ -108,22 +134,25 @@ export function QuickScanPage() {
 
         <div className="panel-body">
           <div className="form-group">
-            <label className="form-label">目标域名</label>
-            <input
-              className="form-input"
-              type="text"
-              placeholder="example.com"
-              value={scanDomain}
-              onChange={(e) => setScanDomain(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && !createJob.isPending && void handleQuickScan()}
+            <label className="form-label">扫描目标</label>
+            <textarea
+              className="form-input form-textarea"
+              placeholder="example.com&#10;example.org"
+              value={scanTargetsRaw}
+              onChange={(e) => setScanTargetsRaw(e.target.value)}
+              rows={4}
             />
           </div>
 
-          {activeProject && activeProject.rootDomains.length > 0 && (
+          {activeProject && projectRootDomains.length > 0 && (
             <div className="panel-meta" style={{ marginTop: 8 }}>
-              项目范围：{activeProject.rootDomains.join(", ")}
+              项目范围: {projectRootDomains.join(", ")}
             </div>
           )}
+
+          <div className="panel-meta" style={{ marginTop: 8 }}>
+            当前将提交 {scanTargets.length} 个目标，支持换行、空格或逗号分隔。
+          </div>
 
           <label className="form-label" style={{ marginTop: 16 }}>基础流程（固定）</label>
           <div className="module-grid">
@@ -158,14 +187,14 @@ export function QuickScanPage() {
           </div>
 
           <div className="panel-meta" style={{ marginTop: 12 }}>
-            执行流程：{previewModules.join(" -> ")} | 通知：{enableNotify ? "开启" : "关闭"}
+            执行流程: {previewModules.join(" -> ")} | 通知: {enableNotify ? "开启" : "关闭"}
           </div>
 
           <div style={{ marginTop: 20 }}>
             <button
               className="btn btn-primary btn-neon"
               onClick={() => { void handleQuickScan(); }}
-              disabled={createJob.isPending || !activeProject?.id || !scanDomain.trim()}
+              disabled={createJob.isPending || !activeProject?.id || scanTargets.length === 0}
             >
               {createJob.isPending ? "提交中..." : "开始快速扫描"}
             </button>
