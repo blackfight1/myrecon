@@ -1405,12 +1405,13 @@ func (s *Server) runMonitorVulnPipeline(projectID, rootDomain string, runID uint
 func (s *Server) syncLiveMonitorEvents(projectID, rootDomain string, runID uint, assets []db.Asset) (opened, webChanged, resolved int) {
 	now := time.Now()
 	type liveSeenItem struct {
-		asset     db.Asset
-		host      string
-		ip        string
-		port      int
-		key       string
-		legacyKey string
+		asset       db.Asset
+		host        string
+		ip          string
+		port        int
+		key         string
+		legacyKey   string
+		legacyIPKey string
 	}
 	seen := map[string]liveSeenItem{}
 	for _, a := range assets {
@@ -1423,14 +1424,16 @@ func (s *Server) syncLiveMonitorEvents(projectID, rootDomain string, runID uint,
 			continue
 		}
 		legacyKey := buildMonitorLegacyLiveEventKey(a.Domain)
+		legacyIPKey := buildMonitorLiveEventKeyWithIP(host, ip, port)
 		if _, exists := seen[key]; !exists {
 			seen[key] = liveSeenItem{
-				asset:     a,
-				host:      host,
-				ip:        ip,
-				port:      port,
-				key:       key,
-				legacyKey: legacyKey,
+				asset:       a,
+				host:        host,
+				ip:          ip,
+				port:        port,
+				key:         key,
+				legacyKey:   legacyKey,
+				legacyIPKey: legacyIPKey,
 			}
 		}
 	}
@@ -1456,6 +1459,13 @@ func (s *Server) syncLiveMonitorEvents(projectID, rootDomain string, runID uint,
 				e = legacyEvent
 				exists = true
 				legacyMatched = item.legacyKey
+			}
+		}
+		if !exists && item.legacyIPKey != "" {
+			if legacyEvent, ok := existingByKey[item.legacyIPKey]; ok {
+				e = legacyEvent
+				exists = true
+				legacyMatched = item.legacyIPKey
 			}
 		}
 		displayDomain := item.host
@@ -1974,6 +1984,20 @@ func formatMonitorPortNotifyLine(ch db.PortChange) string {
 }
 
 func buildMonitorLiveEventKey(host, ip string, port int) string {
+	host = normalizeMonitorHost(host)
+	if host == "" {
+		host = normalizeMonitorHost(ip)
+	}
+	if host == "" {
+		return ""
+	}
+	if port < 0 {
+		port = 0
+	}
+	return fmt.Sprintf("new_live|host=%s|port=%d", host, port)
+}
+
+func buildMonitorLiveEventKeyWithIP(host, ip string, port int) string {
 	host = normalizeMonitorHost(host)
 	ip = strings.TrimSpace(ip)
 	if host == "" && ip == "" {
