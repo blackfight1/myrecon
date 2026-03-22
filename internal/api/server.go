@@ -3576,8 +3576,13 @@ func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, 
 		pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
 	}
 	if enablePorts {
-		pipeline.AddPortScanner(plugins.NewNaabuPlugin())
-		pipeline.AddPortScanner(plugins.NewNmapPlugin())
+		switch configuredPortScannerEngine() {
+		case "naabu_nmap":
+			pipeline.AddPortScanner(plugins.NewNaabuPlugin())
+			pipeline.AddPortScanner(plugins.NewNmapPlugin())
+		default:
+			pipeline.AddPortScanner(plugins.NewTscanPortPlugin())
+		}
 	}
 	if enableNuclei {
 		pipeline.AddVulnScanner(plugins.NewNucleiPlugin())
@@ -3592,6 +3597,18 @@ func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, 
 		pipeline.SetScreenshotScanner(plugins.NewGowitnessPlugin(screenshotDir))
 	}
 	return pipeline.ExecuteFromSubdomains(targets)
+}
+
+func configuredPortScannerEngine() string {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("PORT_SCANNER_ENGINE")))
+	switch raw {
+	case "", "tscan", "tscanclient":
+		return "tscan"
+	case "naabu_nmap", "naabu", "nmap":
+		return "naabu_nmap"
+	default:
+		return "tscan"
+	}
 }
 
 func (s *Server) saveResultsToDB(projectID, rootDomain, jobID string, results []engine.Result) error {

@@ -60,6 +60,10 @@ func NewNmapPlugin() engine.Scanner {
 	return pluginport.NewNmapPlugin()
 }
 
+func NewTscanPortPlugin() engine.Scanner {
+	return pluginport.NewTscanPortPlugin()
+}
+
 func NewNucleiPlugin() engine.Scanner {
 	return vuln.NewNucleiPlugin()
 }
