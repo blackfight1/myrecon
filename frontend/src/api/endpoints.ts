@@ -30,7 +30,7 @@ import type {
 export interface NewScanJobRequest {
   projectId: string;
   domain: string;
-  mode: "scan" | "monitor";
+  mode: "scan";
   modules: string[];
   enableNuclei?: boolean;
   activeSubs?: boolean;
@@ -53,6 +53,7 @@ export interface CreateMonitorTargetRequest {
   projectId: string;
   domain: string;
   intervalSec?: number;
+  monitorPorts?: boolean;
   enableVulnScan?: boolean;
   enableNuclei?: boolean;
   enableCors?: boolean;
@@ -66,6 +67,7 @@ export interface CreateMonitorTargetRequest {
 export interface UpdateMonitorTargetRequest {
   projectId: string;
   domain: string;
+  monitorPorts?: boolean;
   enableVulnScan?: boolean;
   enableNuclei?: boolean;
   enableCors?: boolean;

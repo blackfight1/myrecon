@@ -52,7 +52,8 @@ function changeTypeLabel(t: string): string {
 }
 
 function monitorPolicySummary(t: MonitorTarget): string {
-  if (!t.enableVulnScan) return "仅资产变更监控";
+  const assetScope = t.monitorPorts === false ? "?????" : "????+??";
+  if (!t.enableVulnScan) return `${assetScope}??`;
   const engines: string[] = [];
   if (t.enableNuclei) engines.push("Nuclei");
   if (t.enableCors) engines.push("CORS");
@@ -62,7 +63,7 @@ function monitorPolicySummary(t: MonitorTarget): string {
   if (t.vulnOnWebChanged) triggers.push("web_changed");
   const maxUrls = t.vulnMaxUrls ?? 50;
   const cooldown = t.vulnCooldownMin ?? 30;
-  return `增量漏扫: ${engines.join("+") || "未选引擎"} | 触发: ${triggers.join("+") || "none"} | Max ${maxUrls} | CD ${cooldown}m`;
+  return `${assetScope} | ????: ${engines.join("+") || "none"} | ??: ${triggers.join("+") || "none"} | Max ${maxUrls} | CD ${cooldown}m`;
 }
 
 export function MonitoringPage() {
@@ -80,6 +81,7 @@ export function MonitoringPage() {
 
   const [newDomain, setNewDomain] = useState("");
   const [newInterval, setNewInterval] = useState(21600);
+  const [newMonitorPorts, setNewMonitorPorts] = useState(true);
   const [newEnableVulnScan, setNewEnableVulnScan] = useState(false);
   const [newEnableNuclei, setNewEnableNuclei] = useState(false);
   const [newEnableCors, setNewEnableCors] = useState(false);
@@ -150,6 +152,7 @@ export function MonitoringPage() {
     setEditingTarget(null);
     setNewDomain(rootDomains[0] ?? "");
     setNewInterval(21600);
+    setNewMonitorPorts(true);
     setNewEnableVulnScan(false);
     setNewEnableNuclei(false);
     setNewEnableCors(false);
@@ -169,6 +172,7 @@ export function MonitoringPage() {
     setEditingTarget(target);
     setNewDomain(target.rootDomain);
     setNewInterval(21600);
+    setNewMonitorPorts(target.monitorPorts !== false);
     setNewEnableVulnScan(Boolean(target.enableVulnScan));
     setNewEnableNuclei(Boolean(target.enableNuclei));
     setNewEnableCors(Boolean(target.enableCors));
@@ -210,6 +214,7 @@ export function MonitoringPage() {
     const safeVulnMaxUrls = Math.min(1000, Math.max(1, newVulnMaxUrls || 50));
     const safeCooldownMin = Math.min(1440, Math.max(1, newVulnCooldownMin || 30));
     return {
+      monitorPorts: newMonitorPorts,
       enableVulnScan: newEnableVulnScan,
       enableNuclei: newEnableVulnScan ? newEnableNuclei : false,
       enableCors: newEnableVulnScan ? newEnableCors : false,
@@ -706,6 +711,12 @@ export function MonitoringPage() {
               )}
 
               <div className="monitor-policy-box">
+                <label className="form-checkbox">
+                  <input type="checkbox" checked={newMonitorPorts} onChange={(e) => setNewMonitorPorts(e.target.checked)} />
+                  ??????
+                </label>
+                <div className="monitor-policy-help">?????? httpx ????? URL ???????????????</div>
+
                 <label className="form-checkbox">
                   <input type="checkbox" checked={newEnableVulnScan} onChange={(e) => setNewEnableVulnScan(e.target.checked)} />
                   开启变更后增量漏扫

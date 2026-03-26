@@ -33,6 +33,7 @@ var (
 const (
 	defaultMonitorVulnMaxURLs     = 50
 	defaultMonitorVulnCooldownMin = 30
+	defaultMonitorIntervalSec     = 6 * 3600
 	maxMonitorVulnMaxURLs         = 1000
 	maxMonitorVulnCooldownMin     = 24 * 60
 	projectScopedSchemaLockClass  = 913451
@@ -40,6 +41,7 @@ const (
 )
 
 type MonitorTargetOptions struct {
+	MonitorPorts      *bool
 	EnableVulnScan    *bool
 	EnableNuclei      *bool
 	EnableCors        *bool
@@ -88,6 +90,8 @@ func ensureProjectScopedSchema(database *gorm.DB) error {
 			"UPDATE ports SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE vulnerabilities SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE monitor_targets SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE monitor_targets SET interval_sec = 21600 WHERE interval_sec IS NULL OR interval_sec <= 0",
+			"UPDATE monitor_targets SET monitor_ports = TRUE WHERE monitor_ports IS NULL",
 			"UPDATE monitor_tasks SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE monitor_runs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE monitor_events SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
@@ -791,6 +795,7 @@ func (d *Database) GetOrCreateMonitorTarget(projectID, rootDomain string) (*Moni
 			ProjectID:         projectID,
 			RootDomain:        rootDomain,
 			Enabled:           true,
+			MonitorPorts:      true,
 			EnableVulnScan:    false,
 			EnableNuclei:      false,
 			EnableCors:        false,
@@ -977,6 +982,9 @@ func applyMonitorTargetOptionsToStruct(target *MonitorTarget, opts *MonitorTarge
 	if target == nil || opts == nil {
 		return
 	}
+	if opts.MonitorPorts != nil {
+		target.MonitorPorts = *opts.MonitorPorts
+	}
 	if opts.EnableVulnScan != nil {
 		target.EnableVulnScan = *opts.EnableVulnScan
 	}
@@ -1007,7 +1015,10 @@ func monitorTargetOptionUpdates(opts *MonitorTargetOptions) map[string]interface
 	if opts == nil {
 		return nil
 	}
-	updates := make(map[string]interface{}, 8)
+	updates := make(map[string]interface{}, 9)
+	if opts.MonitorPorts != nil {
+		updates["monitor_ports"] = *opts.MonitorPorts
+	}
 	if opts.EnableVulnScan != nil {
 		updates["enable_vuln_scan"] = *opts.EnableVulnScan
 	}
@@ -1049,12 +1060,18 @@ func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec
 	var ensuredTaskID uint
 	err := d.DB.Transaction(func(tx *gorm.DB) error {
 		var target MonitorTarget
+		effectiveInterval := intervalSec
+		if effectiveInterval <= 0 {
+			effectiveInterval = defaultMonitorIntervalSec
+		}
 		result := tx.Where("project_id = ? AND root_domain = ?", projectID, rootDomain).First(&target)
 		if result.Error == gorm.ErrRecordNotFound {
 			target = MonitorTarget{
 				ProjectID:         projectID,
 				RootDomain:        rootDomain,
 				Enabled:           true,
+				IntervalSec:       effectiveInterval,
+				MonitorPorts:      true,
 				EnableVulnScan:    false,
 				EnableNuclei:      false,
 				EnableCors:        false,
@@ -1072,7 +1089,13 @@ func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec
 		} else if result.Error != nil {
 			return result.Error
 		} else {
-			updates := map[string]interface{}{"enabled": true}
+			if target.IntervalSec > 0 && intervalSec <= 0 {
+				effectiveInterval = target.IntervalSec
+			}
+			updates := map[string]interface{}{
+				"enabled":      true,
+				"interval_sec": effectiveInterval,
+			}
 			for k, v := range monitorTargetDefaultUpdates(&target) {
 				updates[k] = v
 			}
@@ -1080,6 +1103,12 @@ func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec
 				updates[k] = v
 			}
 			if err := tx.Model(&target).Updates(updates).Error; err != nil {
+				return err
+			}
+			target.IntervalSec = effectiveInterval
+		}
+		if opts != nil && opts.MonitorPorts != nil && !*opts.MonitorPorts {
+			if err := resolveOpenPortMonitorEventsTx(tx, projectID, rootDomain); err != nil {
 				return err
 			}
 		}
@@ -1098,7 +1127,7 @@ func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec
 				RootDomain:  rootDomain,
 				Status:      "pending",
 				RunAt:       time.Now(),
-				IntervalSec: intervalSec,
+				IntervalSec: effectiveInterval,
 				MaxAttempts: maxAttempts,
 				Attempt:     0,
 			}
@@ -1107,6 +1136,18 @@ func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec
 			}
 			ensuredTaskID = task.ID
 		} else {
+			taskUpdates := map[string]interface{}{}
+			if task.IntervalSec != effectiveInterval {
+				taskUpdates["interval_sec"] = effectiveInterval
+			}
+			if maxAttempts > 0 && task.MaxAttempts != maxAttempts {
+				taskUpdates["max_attempts"] = maxAttempts
+			}
+			if len(taskUpdates) > 0 {
+				if err := tx.Model(&task).Updates(taskUpdates).Error; err != nil {
+					return err
+				}
+			}
 			ensuredTaskID = task.ID
 		}
 		return nil
@@ -1145,8 +1186,27 @@ func (d *Database) UpdateMonitorTargetOptions(projectID, rootDomain string, opts
 		if len(updates) == 0 {
 			return nil
 		}
-		return tx.Model(&target).Updates(updates).Error
+		if err := tx.Model(&target).Updates(updates).Error; err != nil {
+			return err
+		}
+		if opts.MonitorPorts != nil && !*opts.MonitorPorts {
+			if err := resolveOpenPortMonitorEventsTx(tx, projectID, rootDomain); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+func resolveOpenPortMonitorEventsTx(tx *gorm.DB, projectID, rootDomain string) error {
+	now := time.Now()
+	return tx.Model(&MonitorEvent{}).
+		Where("project_id = ? AND root_domain = ? AND event_type = ? AND status = ?", projectID, rootDomain, "port_opened", "open").
+		Updates(map[string]interface{}{
+			"status":          "resolved",
+			"resolved_at":     now,
+			"last_changed_at": now,
+		}).Error
 }
 
 func (d *Database) UpdateMonitorTargetLastVulnScan(projectID, rootDomain string, at time.Time) error {

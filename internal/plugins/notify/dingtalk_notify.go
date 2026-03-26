@@ -129,12 +129,12 @@ func (n *DingTalkNotifier) SendMonitorRunDigest(
 	}
 
 	var b strings.Builder
-	b.WriteString("### [Hunter] 监控变更告警\n")
-	b.WriteString(fmt.Sprintf("- 项目: `%s`\n", safeInline(projectID)))
-	b.WriteString(fmt.Sprintf("- 根域名: `%s`\n", safeInline(rootDomain)))
+	b.WriteString("### [Hunter] ??????\n")
+	b.WriteString(fmt.Sprintf("- ??: `%s`\n", safeInline(projectID)))
+	b.WriteString(fmt.Sprintf("- ???: `%s`\n", safeInline(rootDomain)))
 	b.WriteString(fmt.Sprintf("- Run: `%d`\n", runID))
-	b.WriteString(fmt.Sprintf("- 耗时: `%s`\n", duration.Round(time.Second).String()))
-	b.WriteString(fmt.Sprintf("- 统计: new_live=%d, web_changed=%d, port_opened=%d, port_closed=%d, service_changed=%d\n",
+	b.WriteString(fmt.Sprintf("- ??: `%s`\n", duration.Round(time.Second).String()))
+	b.WriteString(fmt.Sprintf("- ??: new_live=%d, web_changed=%d, port_opened=%d, port_closed=%d, service_changed=%d\n",
 		changes["new_live"],
 		changes["web_changed"],
 		changes["port_opened"],
@@ -143,32 +143,32 @@ func (n *DingTalkNotifier) SendMonitorRunDigest(
 	))
 
 	if len(newAssetLines) > 0 {
-		b.WriteString("\n**新资产（URL | 标题 | 技术栈）**\n")
+		b.WriteString("\n**?????URL | ?? | ????**\n")
 		for _, line := range newAssetLines {
 			b.WriteString("- ")
 			b.WriteString(safeMarkdownLine(line))
 			b.WriteString("\n")
 		}
 		if omittedAssets > 0 {
-			b.WriteString(fmt.Sprintf("- ... 其余 %d 条已省略\n", omittedAssets))
+			b.WriteString(fmt.Sprintf("- ... ?? %d ????\n", omittedAssets))
 		}
 	}
 
 	if len(portLines) > 0 {
-		b.WriteString("\n**端口变化（OPEN/CLOSED/CHANGED）**\n")
+		b.WriteString("\n**?????OPEN/CLOSED/CHANGED?**\n")
 		for _, line := range portLines {
 			b.WriteString("- ")
 			b.WriteString(safeMarkdownLine(line))
 			b.WriteString("\n")
 		}
 		if omittedPorts > 0 {
-			b.WriteString(fmt.Sprintf("- ... 其余 %d 条已省略\n", omittedPorts))
+			b.WriteString(fmt.Sprintf("- ... ?? %d ????\n", omittedPorts))
 		}
 	}
 
-	b.WriteString("\n> 时间: ")
+	b.WriteString("\n> ??: ")
 	b.WriteString(time.Now().Format("2006-01-02 15:04:05"))
-	return n.sendMarkdown("监控变更告警", b.String())
+	return n.sendMarkdown("??????", b.String())
 }
 
 func (n *DingTalkNotifier) sendText(content string) error {

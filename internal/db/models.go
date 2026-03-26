@@ -295,6 +295,8 @@ type MonitorTarget struct {
 	Owner             string         `gorm:"index" json:"owner"`
 	RootDomain        string         `gorm:"index:idx_monitor_target_project_root,unique;not null" json:"root_domain"`
 	Enabled           bool           `gorm:"default:true;index" json:"enabled"`
+	IntervalSec       int            `gorm:"default:21600" json:"interval_sec"`
+	MonitorPorts      bool           `gorm:"default:true" json:"monitor_ports"`
 	EnableVulnScan    bool           `gorm:"default:false" json:"enable_vuln_scan"`
 	EnableNuclei      bool           `gorm:"default:false" json:"enable_nuclei"`
 	EnableCors        bool           `gorm:"default:false" json:"enable_cors"`

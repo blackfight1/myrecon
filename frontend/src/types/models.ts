@@ -148,6 +148,8 @@ export interface MonitorTarget {
   projectId?: string;
   rootDomain: string;
   enabled: boolean;
+  intervalSec?: number;
+  monitorPorts?: boolean;
   enableVulnScan?: boolean;
   enableNuclei?: boolean;
   enableCors?: boolean;
