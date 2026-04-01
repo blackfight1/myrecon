@@ -88,7 +88,7 @@ func (g *GowitnessPlugin) Execute(input []string) ([]engine.Result, error) {
 			"--threads", "5",
 			"--write-db",
 			"-q",
-			"--http-code-filter", "200,403,401",
+			"--http-code-filter", "200",
 		)
 		cmd.Dir = domainDir
 

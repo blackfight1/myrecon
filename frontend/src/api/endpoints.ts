@@ -112,6 +112,13 @@ export interface BulkDeleteScreenshotsRequest {
   filenames: string[];
 }
 
+export interface TestAIRequest {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  prompt?: string;
+}
+
 export interface PatchVulnStatusRequest {
   vulnId: number;
   projectId: string;
@@ -367,5 +374,10 @@ export const endpoints = {
   // Settings
   getSettings: () => apiGet<SystemSettings>("/settings"),
   updateSettings: (body: Partial<SystemSettings>) => apiPut<Partial<SystemSettings>, SystemSettings>("/settings", body),
-  testNotification: () => apiPost<object, { success: boolean; message: string }>("/settings/test-notify", {})
+  testNotification: () => apiPost<object, { success: boolean; message: string }>("/settings/test-notify", {}),
+  testAI: (body?: TestAIRequest) =>
+    apiPost<TestAIRequest, { status: string; provider: string; endpoint: string; baseUrl: string; model: string; reply: string }>(
+      "/settings/test-ai",
+      body ?? {}
+    )
 };

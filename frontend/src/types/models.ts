@@ -340,4 +340,10 @@ export interface SystemSettings {
     defaultActiveSubs: boolean;
     defaultNuclei: boolean;
   };
+  ai: {
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+    configured: boolean;
+  };
 }

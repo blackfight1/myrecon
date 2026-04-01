@@ -15,7 +15,8 @@ import {
   type BulkDeleteAssetsRequest,
   type BulkVulnStatusRequest,
   type BulkDeleteVulnsRequest,
-  type BulkDeleteScreenshotsRequest
+  type BulkDeleteScreenshotsRequest,
+  type TestAIRequest
 } from "../api/endpoints";
 
 function requiredProjectId(projectId?: string): string {
@@ -442,5 +443,11 @@ export function useUpdateSettings() {
 export function useTestNotification() {
   return useMutation({
     mutationFn: endpoints.testNotification
+  });
+}
+
+export function useTestAI() {
+  return useMutation({
+    mutationFn: (body?: TestAIRequest) => endpoints.testAI(body)
   });
 }

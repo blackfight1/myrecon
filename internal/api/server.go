@@ -63,6 +63,7 @@ type runtimeSettings struct {
 	Database      runtimeDatabaseSettings
 	Notifications runtimeNotificationSettings
 	Scanner       runtimeScannerSettings
+	AI            runtimeAISettings
 }
 
 type runtimeDatabaseSettings struct {
@@ -85,6 +86,12 @@ type runtimeScannerSettings struct {
 	DefaultDictSize   int
 	DefaultActiveSubs bool
 	DefaultNuclei     bool
+}
+
+type runtimeAISettings struct {
+	BaseURL string
+	APIKey  string
+	Model   string
 }
 
 type dashboardResponse struct {
@@ -373,6 +380,7 @@ type systemSettingsResponse struct {
 	Database      databaseSettingsResponse     `json:"database"`
 	Notifications notificationSettingsResponse `json:"notifications"`
 	Scanner       scannerSettingsResponse      `json:"scanner"`
+	AI            aiSettingsResponse           `json:"ai"`
 }
 
 type databaseSettingsResponse struct {
@@ -398,9 +406,17 @@ type scannerSettingsResponse struct {
 	DefaultNuclei     bool   `json:"defaultNuclei"`
 }
 
+type aiSettingsResponse struct {
+	BaseURL    string `json:"baseUrl"`
+	APIKey     string `json:"apiKey"`
+	Model      string `json:"model"`
+	Configured bool   `json:"configured"`
+}
+
 type settingsPatchRequest struct {
 	Database *databaseSettingsPatch `json:"database"`
 	Scanner  *scannerSettingsPatch  `json:"scanner"`
+	AI       *aiSettingsPatch       `json:"ai"`
 }
 
 type databaseSettingsPatch struct {
@@ -417,6 +433,12 @@ type scannerSettingsPatch struct {
 	DefaultDictSize   *int    `json:"defaultDictSize"`
 	DefaultActiveSubs *bool   `json:"defaultActiveSubs"`
 	DefaultNuclei     *bool   `json:"defaultNuclei"`
+}
+
+type aiSettingsPatch struct {
+	BaseURL *string `json:"baseUrl"`
+	APIKey  *string `json:"apiKey"`
+	Model   *string `json:"model"`
 }
 
 type monitorChangeSortItem struct {
@@ -631,6 +653,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/bulk/assets/delete", s.handleBulkDeleteAssets)
 	s.mux.HandleFunc("/api/settings", s.handleSettings)
 	s.mux.HandleFunc("/api/settings/test-notify", s.handleTestNotify)
+	s.mux.HandleFunc("/api/settings/test-ai", s.handleTestAI)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
@@ -5111,6 +5134,12 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 			DefaultActiveSubs: settings.Scanner.DefaultActiveSubs,
 			DefaultNuclei:     settings.Scanner.DefaultNuclei,
 		},
+		AI: aiSettingsResponse{
+			BaseURL:    settings.AI.BaseURL,
+			APIKey:     maskSecret(settings.AI.APIKey),
+			Model:      settings.AI.Model,
+			Configured: strings.TrimSpace(settings.AI.APIKey) != "",
+		},
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -5156,6 +5185,19 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if p.DefaultNuclei != nil {
 			s.settings.Scanner.DefaultNuclei = *p.DefaultNuclei
+		}
+	}
+	if p := patch.AI; p != nil {
+		if p.BaseURL != nil {
+			s.settings.AI.BaseURL = strings.TrimSpace(*p.BaseURL)
+		}
+		if p.APIKey != nil {
+			if next := strings.TrimSpace(*p.APIKey); next != "" {
+				s.settings.AI.APIKey = next
+			}
+		}
+		if p.Model != nil {
+			s.settings.AI.Model = strings.TrimSpace(*p.Model)
 		}
 	}
 	s.settingsMu.Unlock()
@@ -5261,6 +5303,11 @@ func loadRuntimeSettings(screenshotDir string) runtimeSettings {
 			DefaultDictSize:   dictSize,
 			DefaultActiveSubs: os.Getenv("DEFAULT_ACTIVE_SUBS") == "true",
 			DefaultNuclei:     os.Getenv("DEFAULT_NUCLEI") == "true",
+		},
+		AI: runtimeAISettings{
+			BaseURL: envOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+			APIKey:  strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
+			Model:   envOrDefault("OPENAI_MODEL", "gpt-4o-mini"),
 		},
 	}
 }

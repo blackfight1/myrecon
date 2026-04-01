@@ -288,7 +288,9 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 				continue
 			}
 			rootDomain := extractRootDomain(domain)
-			screenshotInputs = append(screenshotInputs, url+"|"+rootDomain)
+			if mapInt(data, "status_code") == 200 {
+				screenshotInputs = append(screenshotInputs, url+"|"+rootDomain)
+			}
 			vulnInputs = append(vulnInputs, url+"|"+rootDomain)
 		}
 	}
@@ -379,6 +381,44 @@ func buildPluginStatusResult(scannerName string, successCount int, err error, du
 			"duration_ms":   duration.Milliseconds(),
 			"error":         errMsg,
 		},
+	}
+}
+
+func mapInt(data map[string]interface{}, key string) int {
+	if data == nil {
+		return 0
+	}
+	v, ok := data[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch n := v.(type) {
+	case int:
+		return n
+	case int8:
+		return int(n)
+	case int16:
+		return int(n)
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case uint:
+		return int(n)
+	case uint8:
+		return int(n)
+	case uint16:
+		return int(n)
+	case uint32:
+		return int(n)
+	case uint64:
+		return int(n)
+	case float32:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
 	}
 }
 
