@@ -383,6 +383,7 @@ type Project struct {
 	Owner       string         `gorm:"index" json:"owner"`
 	Tags        JSONB          `gorm:"type:jsonb" json:"tags"`
 	Archived    bool           `gorm:"index;default:false" json:"archived"`
+	AIEnabled   bool           `gorm:"index;default:true" json:"ai_enabled"`
 	LastScanAt  *time.Time     `json:"last_scan_at"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
@@ -407,6 +408,20 @@ type ProjectScope struct {
 
 func (ProjectScope) TableName() string {
 	return "project_scopes"
+}
+
+// AppSetting stores JSON settings payloads keyed by name.
+type AppSetting struct {
+	ID        uint           `gorm:"primarykey" json:"id"`
+	Key       string         `gorm:"uniqueIndex;size:128;not null" json:"key"`
+	Value     string         `gorm:"type:text;not null" json:"value"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (AppSetting) TableName() string {
+	return "app_settings"
 }
 
 // VulnEvent stores vulnerability lifecycle transitions.

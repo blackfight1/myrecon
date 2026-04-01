@@ -12,12 +12,14 @@ export function ProjectsPage() {
   const [description, setDescription] = useState("");
   const [rootDomainsRaw, setRootDomainsRaw] = useState("");
   const [tagsRaw, setTagsRaw] = useState("");
+  const [aiEnabled, setAIEnabled] = useState(true);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [editDomains, setEditDomains] = useState("");
   const [editTags, setEditTags] = useState("");
+  const [editAIEnabled, setEditAIEnabled] = useState(true);
 
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
@@ -31,6 +33,7 @@ export function ProjectsPage() {
     setEditDesc(p.description ?? "");
     setEditDomains(p.rootDomains.join(", "));
     setEditTags(p.tags.join(", "));
+    setEditAIEnabled(p.aiEnabled !== false);
   };
 
   const saveEdit = async () => {
@@ -42,7 +45,8 @@ export function ProjectsPage() {
         name: editName.trim(),
         description: editDesc.trim() || undefined,
         rootDomainsRaw: editDomains.trim(),
-        tagsRaw: editTags.trim() || undefined
+        tagsRaw: editTags.trim() || undefined,
+        aiEnabled: editAIEnabled
       });
       setEditingId(null);
       setFeedback({ ok: true, text: "项目已更新" });
@@ -67,12 +71,14 @@ export function ProjectsPage() {
         name: name.trim(),
         description: description.trim() || undefined,
         rootDomainsRaw: rootDomainsRaw.trim(),
-        tagsRaw: tagsRaw.trim() || undefined
+        tagsRaw: tagsRaw.trim() || undefined,
+        aiEnabled
       });
       setName("");
       setDescription("");
       setRootDomainsRaw("");
       setTagsRaw("");
+      setAIEnabled(true);
       setShowForm(false);
       setFeedback({ ok: true, text: "项目创建成功" });
     } catch (err) {
@@ -154,6 +160,12 @@ export function ProjectsPage() {
               <label className="form-label">标签（可选）</label>
               <input className="form-input" value={tagsRaw} onChange={(e) => setTagsRaw(e.target.value)} placeholder="内网, 客户项目" />
             </div>
+            <div className="form-group">
+              <label className="form-checkbox">
+                <input type="checkbox" checked={aiEnabled} onChange={(e) => setAIEnabled(e.target.checked)} />
+                允许该项目使用 AI 能力（建议开启）
+              </label>
+            </div>
             <div className="form-actions">
               <button className="btn" onClick={() => { void handleCreate(); }} disabled={busy || !name.trim() || !rootDomainsRaw.trim()}>
                 {busy ? "创建中..." : "创建项目"}
@@ -195,6 +207,12 @@ export function ProjectsPage() {
                       <label className="form-label">标签（可选）</label>
                       <input className="form-input" value={editTags} onChange={(e) => setEditTags(e.target.value)} />
                     </div>
+                    <div className="form-group">
+                      <label className="form-checkbox">
+                        <input type="checkbox" checked={editAIEnabled} onChange={(e) => setEditAIEnabled(e.target.checked)} />
+                        允许该项目使用 AI 能力
+                      </label>
+                    </div>
                     <div className="form-actions">
                       <button className="btn btn-primary btn-sm" onClick={() => { void saveEdit(); }} disabled={busy || !editName.trim() || !editDomains.trim()}>保存</button>
                       <button className="btn btn-sm" onClick={cancelEdit} disabled={busy}>取消</button>
@@ -228,6 +246,14 @@ export function ProjectsPage() {
                           {p.rootDomains.map((d) => (
                             <span key={d} className="badge badge-info">{d}</span>
                           ))}
+                        </div>
+                      </div>
+                      <div className="project-card-field">
+                        <span className="project-card-label">AI 开关</span>
+                        <div className="project-card-badges">
+                          <span className={`badge ${p.aiEnabled ? "badge-success" : "badge-neutral"}`}>
+                            {p.aiEnabled ? "已开启" : "已关闭"}
+                          </span>
                         </div>
                       </div>
 

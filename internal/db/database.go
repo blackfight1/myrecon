@@ -63,6 +63,7 @@ func NewDatabase(dsn string) (*Database, error) {
 
 	if err := database.AutoMigrate(
 		&Project{}, &ProjectScope{},
+		&AppSetting{},
 		&Asset{}, &AssetCandidate{}, &Port{}, &Vulnerability{}, &VulnEvent{},
 		&MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorEvent{}, &MonitorSnapshot{}, &MonitorTarget{}, &MonitorTask{},
 		&ScanJob{}, &ScanStage{}, &ScanArtifact{}, &JobLog{}, &AssetEdge{}, &AuditLog{},
@@ -101,6 +102,7 @@ func ensureProjectScopedSchema(database *gorm.DB) error {
 			"UPDATE scan_artifacts SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE job_logs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE project_scopes SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
+			"UPDATE projects SET ai_enabled = TRUE WHERE ai_enabled IS NULL",
 			"UPDATE asset_changes SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE port_changes SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE asset_edges SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
@@ -1668,6 +1670,35 @@ func (d *Database) DeleteAllDataByRootDomain(projectID, rootDomain string) error
 		}
 		return nil
 	})
+}
+
+// GetAppSetting returns one app setting value by key.
+func (d *Database) GetAppSetting(key string) (string, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", gorm.ErrRecordNotFound
+	}
+	var item AppSetting
+	if err := d.DB.Where("key = ?", key).First(&item).Error; err != nil {
+		return "", err
+	}
+	return item.Value, nil
+}
+
+// UpsertAppSetting creates or updates an app setting value by key.
+func (d *Database) UpsertAppSetting(key, value string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("setting key is required")
+	}
+	item := AppSetting{
+		Key:   key,
+		Value: value,
+	}
+	return d.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{"value": value, "updated_at": time.Now()}),
+	}).Create(&item).Error
 }
 
 // ── ScanJob helpers ──

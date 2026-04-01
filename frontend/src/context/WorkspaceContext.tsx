@@ -18,6 +18,7 @@ interface WorkspaceState {
     owner?: string;
     rootDomainsRaw: string;
     tagsRaw?: string;
+    aiEnabled?: boolean;
   }) => Promise<void>;
   updateProject: (id: string, patch: {
     name?: string;
@@ -26,6 +27,7 @@ interface WorkspaceState {
     rootDomainsRaw?: string;
     tagsRaw?: string;
     archived?: boolean;
+    aiEnabled?: boolean;
   }) => Promise<void>;
   deleteProject: (id: string, purgeData?: boolean) => Promise<void>;
 }
@@ -120,7 +122,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       description: input.description?.trim() || "",
       owner: input.owner?.trim() || "",
       rootDomains: parseDomainList(input.rootDomainsRaw),
-      tags: parseTags(input.tagsRaw)
+      tags: parseTags(input.tagsRaw),
+      aiEnabled: input.aiEnabled ?? true
     });
     await refresh();
     if (result?.id) {
@@ -138,7 +141,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       owner: patch.owner?.trim() ?? current.owner ?? "",
       rootDomains: patch.rootDomainsRaw ? parseDomainList(patch.rootDomainsRaw) : current.rootDomains,
       tags: patch.tagsRaw ? parseTags(patch.tagsRaw) : current.tags,
-      archived: patch.archived
+      archived: patch.archived,
+      aiEnabled: patch.aiEnabled ?? current.aiEnabled
     });
     await refresh();
   };

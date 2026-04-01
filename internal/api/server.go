@@ -38,6 +38,7 @@ const (
 	monitorNotifyMaxPorts      = 12
 	monitorEventStatusOpen     = "open"
 	monitorEventStatusResolved = "resolved"
+	appSettingAIKey            = "settings.ai.v1"
 )
 
 var errScanCanceled = errors.New("scan canceled")
@@ -57,6 +58,10 @@ type Server struct {
 	// cancel functions for running scans, keyed by jobID
 	scanCancelMu sync.Mutex
 	scanCancels  map[string]context.CancelFunc
+
+	aiLimiterMu          sync.Mutex
+	aiLimiterWindowStart time.Time
+	aiLimiterUsed        int
 }
 
 type runtimeSettings struct {
@@ -89,9 +94,13 @@ type runtimeScannerSettings struct {
 }
 
 type runtimeAISettings struct {
-	BaseURL string
-	APIKey  string
-	Model   string
+	Enabled           bool
+	BaseURL           string
+	APIKey            string
+	Model             string
+	TimeoutSec        int
+	MaxRetries        int
+	RequestsPerMinute int
 }
 
 type dashboardResponse struct {
@@ -407,10 +416,14 @@ type scannerSettingsResponse struct {
 }
 
 type aiSettingsResponse struct {
-	BaseURL    string `json:"baseUrl"`
-	APIKey     string `json:"apiKey"`
-	Model      string `json:"model"`
-	Configured bool   `json:"configured"`
+	Enabled           bool   `json:"enabled"`
+	BaseURL           string `json:"baseUrl"`
+	APIKey            string `json:"apiKey"`
+	Model             string `json:"model"`
+	TimeoutSec        int    `json:"timeoutSec"`
+	MaxRetries        int    `json:"maxRetries"`
+	RequestsPerMinute int    `json:"requestsPerMinute"`
+	Configured        bool   `json:"configured"`
 }
 
 type settingsPatchRequest struct {
@@ -436,9 +449,13 @@ type scannerSettingsPatch struct {
 }
 
 type aiSettingsPatch struct {
-	BaseURL *string `json:"baseUrl"`
-	APIKey  *string `json:"apiKey"`
-	Model   *string `json:"model"`
+	Enabled           *bool   `json:"enabled"`
+	BaseURL           *string `json:"baseUrl"`
+	APIKey            *string `json:"apiKey"`
+	Model             *string `json:"model"`
+	TimeoutSec        *int    `json:"timeoutSec"`
+	MaxRetries        *int    `json:"maxRetries"`
+	RequestsPerMinute *int    `json:"requestsPerMinute"`
 }
 
 type monitorChangeSortItem struct {
@@ -468,6 +485,7 @@ type projectResponse struct {
 	Owner       string   `json:"owner,omitempty"`
 	Tags        []string `json:"tags"`
 	Archived    bool     `json:"archived"`
+	AIEnabled   bool     `json:"aiEnabled"`
 	RootDomains []string `json:"rootDomains"`
 	CreatedAt   string   `json:"createdAt,omitempty"`
 	UpdatedAt   string   `json:"updatedAt,omitempty"`
@@ -482,6 +500,7 @@ type projectUpsertRequest struct {
 	Tags        []string `json:"tags"`
 	RootDomains []string `json:"rootDomains"`
 	Archived    *bool    `json:"archived"`
+	AIEnabled   *bool    `json:"aiEnabled"`
 }
 
 type vulnStatusPatchRequest struct {
@@ -522,14 +541,20 @@ func NewServer(database *db.Database, screenshotDir string) *Server {
 	ensureCommonToolPaths()
 	corsAllowAll, corsOrigins := parseCORSOrigins()
 
+	initialSettings := loadRuntimeSettings(screenshotDir)
+	initialSettings.AI = normalizeRuntimeAISettings(initialSettings.AI)
+
 	s := &Server{
 		db:            database,
 		mux:           http.NewServeMux(),
 		screenshotDir: screenshotDir,
 		corsAllowAll:  corsAllowAll,
 		corsOrigins:   corsOrigins,
-		settings:      loadRuntimeSettings(screenshotDir),
+		settings:      initialSettings,
 		scanCancels:   make(map[string]context.CancelFunc),
+	}
+	if err := s.loadPersistedSettings(); err != nil {
+		log.Printf("[Settings] load persisted settings failed: %v", err)
 	}
 	s.registerRoutes()
 	return s
@@ -690,6 +715,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 				Owner:       p.Owner,
 				Tags:        decodeJSONBStrings(p.Tags),
 				Archived:    p.Archived,
+				AIEnabled:   p.AIEnabled,
 				RootDomains: rootDomains,
 				CreatedAt:   timeToISO(p.CreatedAt),
 				UpdatedAt:   timeToISO(p.UpdatedAt),
@@ -725,6 +751,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			Owner:       strings.TrimSpace(req.Owner),
 			Tags:        tagsJSON,
 			Archived:    false,
+			AIEnabled:   req.AIEnabled == nil || *req.AIEnabled,
 		}
 		err := s.db.DB.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(&project).Error; err != nil {
@@ -773,6 +800,9 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Archived != nil {
 			updates["archived"] = *req.Archived
+		}
+		if req.AIEnabled != nil {
+			updates["ai_enabled"] = *req.AIEnabled
 		}
 		if req.Tags != nil {
 			tagsJSON, _ := json.Marshal(dedupTrimmed(req.Tags))
@@ -5135,10 +5165,14 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 			DefaultNuclei:     settings.Scanner.DefaultNuclei,
 		},
 		AI: aiSettingsResponse{
-			BaseURL:    settings.AI.BaseURL,
-			APIKey:     maskSecret(settings.AI.APIKey),
-			Model:      settings.AI.Model,
-			Configured: strings.TrimSpace(settings.AI.APIKey) != "",
+			Enabled:           settings.AI.Enabled,
+			BaseURL:           settings.AI.BaseURL,
+			APIKey:            maskSecret(settings.AI.APIKey),
+			Model:             settings.AI.Model,
+			TimeoutSec:        settings.AI.TimeoutSec,
+			MaxRetries:        settings.AI.MaxRetries,
+			RequestsPerMinute: settings.AI.RequestsPerMinute,
+			Configured:        strings.TrimSpace(settings.AI.APIKey) != "",
 		},
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -5152,6 +5186,8 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.settingsMu.Lock()
+	aiChanged := false
+	var aiSnapshot runtimeAISettings
 	if p := patch.Database; p != nil {
 		if p.Host != nil {
 			s.settings.Database.Host = strings.TrimSpace(*p.Host)
@@ -5188,6 +5224,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if p := patch.AI; p != nil {
+		aiChanged = true
+		if p.Enabled != nil {
+			s.settings.AI.Enabled = *p.Enabled
+		}
 		if p.BaseURL != nil {
 			s.settings.AI.BaseURL = strings.TrimSpace(*p.BaseURL)
 		}
@@ -5199,10 +5239,153 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if p.Model != nil {
 			s.settings.AI.Model = strings.TrimSpace(*p.Model)
 		}
+		if p.TimeoutSec != nil {
+			s.settings.AI.TimeoutSec = *p.TimeoutSec
+		}
+		if p.MaxRetries != nil {
+			s.settings.AI.MaxRetries = *p.MaxRetries
+		}
+		if p.RequestsPerMinute != nil {
+			s.settings.AI.RequestsPerMinute = *p.RequestsPerMinute
+		}
+		s.settings.AI = normalizeRuntimeAISettings(s.settings.AI)
+		aiSnapshot = s.settings.AI
 	}
 	s.settingsMu.Unlock()
+	if aiChanged {
+		if err := s.persistAISettings(aiSnapshot); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist ai settings: "+err.Error())
+			return
+		}
+		s.resetAILimiter()
+	}
 
 	s.handleGetSettings(w, r)
+}
+
+type aiSettingsPersistedPayload struct {
+	Enabled           bool   `json:"enabled"`
+	BaseURL           string `json:"baseUrl"`
+	APIKey            string `json:"apiKey"`
+	Model             string `json:"model"`
+	TimeoutSec        int    `json:"timeoutSec"`
+	MaxRetries        int    `json:"maxRetries"`
+	RequestsPerMinute int    `json:"requestsPerMinute"`
+}
+
+func (s *Server) loadPersistedSettings() error {
+	raw, err := s.db.GetAppSetting(appSettingAIKey)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var payload aiSettingsPersistedPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return fmt.Errorf("decode persisted ai settings failed: %w", err)
+	}
+	s.settingsMu.Lock()
+	s.settings.AI.Enabled = payload.Enabled
+	if strings.TrimSpace(payload.BaseURL) != "" {
+		s.settings.AI.BaseURL = payload.BaseURL
+	}
+	if strings.TrimSpace(payload.APIKey) != "" {
+		s.settings.AI.APIKey = payload.APIKey
+	}
+	if strings.TrimSpace(payload.Model) != "" {
+		s.settings.AI.Model = payload.Model
+	}
+	if payload.TimeoutSec > 0 {
+		s.settings.AI.TimeoutSec = payload.TimeoutSec
+	}
+	if payload.MaxRetries >= 0 {
+		s.settings.AI.MaxRetries = payload.MaxRetries
+	}
+	if payload.RequestsPerMinute >= 0 {
+		s.settings.AI.RequestsPerMinute = payload.RequestsPerMinute
+	}
+	s.settings.AI = normalizeRuntimeAISettings(s.settings.AI)
+	s.settingsMu.Unlock()
+	s.resetAILimiter()
+	return nil
+}
+
+func (s *Server) persistAISettings(cfg runtimeAISettings) error {
+	cfg = normalizeRuntimeAISettings(cfg)
+	payload := aiSettingsPersistedPayload{
+		Enabled:           cfg.Enabled,
+		BaseURL:           cfg.BaseURL,
+		APIKey:            cfg.APIKey,
+		Model:             cfg.Model,
+		TimeoutSec:        cfg.TimeoutSec,
+		MaxRetries:        cfg.MaxRetries,
+		RequestsPerMinute: cfg.RequestsPerMinute,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return s.db.UpsertAppSetting(appSettingAIKey, string(raw))
+}
+
+func normalizeRuntimeAISettings(cfg runtimeAISettings) runtimeAISettings {
+	cfg.BaseURL = strings.TrimSpace(cfg.BaseURL)
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "https://api.openai.com/v1"
+	}
+	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
+	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	cfg.Model = strings.TrimSpace(cfg.Model)
+	if cfg.Model == "" {
+		cfg.Model = "gpt-4o-mini"
+	}
+	if cfg.TimeoutSec <= 0 {
+		cfg.TimeoutSec = 30
+	}
+	cfg.TimeoutSec = clampIntRange(cfg.TimeoutSec, 5, 120)
+	if cfg.MaxRetries < 0 {
+		cfg.MaxRetries = 2
+	}
+	cfg.MaxRetries = clampIntRange(cfg.MaxRetries, 0, 5)
+	if cfg.RequestsPerMinute < 0 {
+		cfg.RequestsPerMinute = 60
+	}
+	cfg.RequestsPerMinute = clampIntRange(cfg.RequestsPerMinute, 0, 600)
+	return cfg
+}
+
+func (s *Server) resetAILimiter() {
+	s.aiLimiterMu.Lock()
+	s.aiLimiterWindowStart = time.Time{}
+	s.aiLimiterUsed = 0
+	s.aiLimiterMu.Unlock()
+}
+
+func (s *Server) checkAndConsumeAILimit(limit int) (bool, time.Duration) {
+	if limit <= 0 {
+		return true, 0
+	}
+	now := time.Now()
+	s.aiLimiterMu.Lock()
+	defer s.aiLimiterMu.Unlock()
+	if s.aiLimiterWindowStart.IsZero() || now.Sub(s.aiLimiterWindowStart) >= time.Minute {
+		s.aiLimiterWindowStart = now
+		s.aiLimiterUsed = 0
+	}
+	if s.aiLimiterUsed < limit {
+		s.aiLimiterUsed++
+		return true, 0
+	}
+	wait := time.Minute - now.Sub(s.aiLimiterWindowStart)
+	if wait < 0 {
+		wait = 0
+	}
+	return false, wait
 }
 
 func ensureCommonToolPaths() {
@@ -5305,9 +5488,13 @@ func loadRuntimeSettings(screenshotDir string) runtimeSettings {
 			DefaultNuclei:     os.Getenv("DEFAULT_NUCLEI") == "true",
 		},
 		AI: runtimeAISettings{
-			BaseURL: envOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-			APIKey:  strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
-			Model:   envOrDefault("OPENAI_MODEL", "gpt-4o-mini"),
+			Enabled:           envBoolOrDefault("OPENAI_ENABLED", true),
+			BaseURL:           envOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+			APIKey:            strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
+			Model:             envOrDefault("OPENAI_MODEL", "gpt-4o-mini"),
+			TimeoutSec:        envIntOrDefault("OPENAI_TIMEOUT_SEC", 30),
+			MaxRetries:        envIntOrDefault("OPENAI_MAX_RETRIES", 2),
+			RequestsPerMinute: envIntOrDefault("OPENAI_REQUESTS_PER_MINUTE", 60),
 		},
 	}
 }
@@ -5317,6 +5504,43 @@ func envOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+func envIntOrDefault(key string, defaultVal int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return defaultVal
+	}
+	return n
+}
+
+func envBoolOrDefault(key string, defaultVal bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if v == "" {
+		return defaultVal
+	}
+	switch v {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return defaultVal
+	}
+}
+
+func clampIntRange(v, minVal, maxVal int) int {
+	if v < minVal {
+		return minVal
+	}
+	if v > maxVal {
+		return maxVal
+	}
+	return v
 }
 
 func shouldEnableCorsWithNuclei() bool {
@@ -6559,4 +6783,22 @@ func (s *Server) isDomainInProjectScope(projectID, domain string) (bool, error) 
 		}
 	}
 	return false, nil
+}
+
+func (s *Server) isProjectAIEnabled(projectID string) (bool, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return true, nil
+	}
+	var project db.Project
+	if err := s.db.DB.Select("id", "archived", "ai_enabled").Where("id = ?", projectID).First(&project).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, gorm.ErrRecordNotFound
+		}
+		return false, err
+	}
+	if project.Archived {
+		return false, nil
+	}
+	return project.AIEnabled, nil
 }

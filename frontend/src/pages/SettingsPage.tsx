@@ -1,7 +1,8 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import type { SystemSettings } from "../types/models";
 import { useSettings, useTestAI, useTestNotification, useUpdateSettings } from "../hooks/queries";
 import { errorMessage } from "../lib/errors";
+import { useWorkspace } from "../context/WorkspaceContext";
 
 export function SettingsPage() {
   const [testNotifyResult, setTestNotifyResult] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -16,14 +17,19 @@ export function SettingsPage() {
   const [nuclei, setNuclei] = useState(false);
 
   const [editAI, setEditAI] = useState(false);
+  const [aiEnabled, setAIEnabled] = useState(true);
   const [aiBaseURL, setAIBaseURL] = useState("");
   const [aiAPIKey, setAIAPIKey] = useState("");
   const [aiModel, setAIModel] = useState("");
+  const [aiTimeoutSec, setAITimeoutSec] = useState(30);
+  const [aiMaxRetries, setAIMaxRetries] = useState(2);
+  const [aiRPM, setAIRPM] = useState(60);
 
   const settingsQuery = useSettings();
   const updateMutation = useUpdateSettings();
   const testNotifyMutation = useTestNotification();
   const testAIMutation = useTestAI();
+  const { activeProject } = useWorkspace();
   const settings = settingsQuery.data;
 
   const maskValue = (val: string) => {
@@ -65,8 +71,12 @@ export function SettingsPage() {
 
   const startEditAI = () => {
     if (!settings) return;
+    setAIEnabled(settings.ai.enabled);
     setAIBaseURL(settings.ai.baseUrl);
     setAIModel(settings.ai.model);
+    setAITimeoutSec(settings.ai.timeoutSec);
+    setAIMaxRetries(settings.ai.maxRetries);
+    setAIRPM(settings.ai.requestsPerMinute);
     setAIAPIKey("");
     setTestAIResult(null);
     setEditAI(true);
@@ -74,9 +84,21 @@ export function SettingsPage() {
   };
 
   const saveAI = () => {
-    const aiPatch: { baseUrl: string; model: string; apiKey?: string } = {
+    const aiPatch: {
+      enabled: boolean;
+      baseUrl: string;
+      model: string;
+      timeoutSec: number;
+      maxRetries: number;
+      requestsPerMinute: number;
+      apiKey?: string;
+    } = {
+      enabled: aiEnabled,
       baseUrl: aiBaseURL.trim(),
-      model: aiModel.trim()
+      model: aiModel.trim(),
+      timeoutSec: aiTimeoutSec,
+      maxRetries: aiMaxRetries,
+      requestsPerMinute: aiRPM
     };
     if (aiAPIKey.trim() !== "") {
       aiPatch.apiKey = aiAPIKey.trim();
@@ -90,6 +112,27 @@ export function SettingsPage() {
         setFeedback({ ok: true, text: "AI 配置已保存" });
       },
       onError: (err) => setFeedback({ ok: false, text: `AI 保存失败：${errorMessage(err)}` })
+    });
+  };
+
+  const testAI = (opts?: { useDraft?: boolean }) => {
+    if (!settings && !opts?.useDraft) return;
+    setTestAIResult(null);
+    const body = opts?.useDraft
+      ? {
+          projectId: activeProject?.id,
+          enabled: aiEnabled,
+          baseUrl: aiBaseURL.trim(),
+          apiKey: aiAPIKey.trim() || undefined,
+          model: aiModel.trim() || undefined,
+          prompt: "Reply with pong only."
+        }
+      : {
+          projectId: activeProject?.id
+        };
+    testAIMutation.mutate(body, {
+      onSuccess: (data) => setTestAIResult({ ok: true, msg: `连接成功（${data.endpoint}）：${data.reply}` }),
+      onError: (err) => setTestAIResult({ ok: false, msg: errorMessage(err) })
     });
   };
 
@@ -159,9 +202,7 @@ export function SettingsPage() {
                   <span className="setting-value">{settings.notifications.dingtalkSecret ? "已设置" : "未设置"}</span>
                 </div>
               </div>
-              <div className="setting-note">
-                该模块读取环境变量 `DINGTALK_WEBHOOK` / `DINGTALK_SECRET`。
-              </div>
+              <div className="setting-note">该模块读取环境变量 `DINGTALK_WEBHOOK` / `DINGTALK_SECRET`。</div>
               <div style={{ marginTop: 12 }}>
                 <button
                   className="btn btn-sm"
@@ -198,6 +239,12 @@ export function SettingsPage() {
               {editAI ? (
                 <div className="settings-form">
                   <div className="form-group">
+                    <label className="form-checkbox">
+                      <input type="checkbox" checked={aiEnabled} onChange={(e) => setAIEnabled(e.target.checked)} />
+                      启用 AI 调用（全局）
+                    </label>
+                  </div>
+                  <div className="form-group">
                     <label className="form-label">API 请求地址</label>
                     <input
                       className="form-input"
@@ -227,26 +274,20 @@ export function SettingsPage() {
                       placeholder="gpt-5.3-codex"
                     />
                   </div>
+                  <div className="form-group">
+                    <label className="form-label">超时（秒）</label>
+                    <input className="form-input" type="number" min={5} max={120} value={aiTimeoutSec} onChange={(e) => setAITimeoutSec(Number(e.target.value) || 5)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">失败重试次数</label>
+                    <input className="form-input" type="number" min={0} max={5} value={aiMaxRetries} onChange={(e) => setAIMaxRetries(Number(e.target.value) || 0)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">速率限制（次/分钟，0=不限制）</label>
+                    <input className="form-input" type="number" min={0} max={600} value={aiRPM} onChange={(e) => setAIRPM(Number(e.target.value) || 0)} />
+                  </div>
                   <div className="form-actions">
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => {
-                        setTestAIResult(null);
-                        testAIMutation.mutate(
-                          {
-                            baseUrl: aiBaseURL.trim(),
-                            apiKey: aiAPIKey.trim() || undefined,
-                            model: aiModel.trim() || undefined,
-                            prompt: "Reply with pong only."
-                          },
-                          {
-                            onSuccess: (data) => setTestAIResult({ ok: true, msg: `连接成功（${data.endpoint}）：${data.reply}` }),
-                            onError: (err) => setTestAIResult({ ok: false, msg: errorMessage(err) })
-                          }
-                        );
-                      }}
-                      disabled={testAIMutation.isPending}
-                    >
+                    <button className="btn btn-sm" onClick={() => testAI({ useDraft: true })} disabled={testAIMutation.isPending}>
                       {testAIMutation.isPending ? "测试中..." : "测试连接"}
                     </button>
                     <button className="btn btn-primary" onClick={saveAI} disabled={updateMutation.isPending}>
@@ -266,9 +307,15 @@ export function SettingsPage() {
                 <>
                   <div className="settings-grid">
                     <div className="setting-row">
-                      <span className="setting-label">状态</span>
+                      <span className="setting-label">配置状态</span>
                       <span className={`badge ${settings.ai.configured ? "badge-success" : "badge-neutral"}`}>
                         {settings.ai.configured ? "已配置" : "未配置"}
+                      </span>
+                    </div>
+                    <div className="setting-row">
+                      <span className="setting-label">全局开关</span>
+                      <span className={`badge ${settings.ai.enabled ? "badge-success" : "badge-neutral"}`}>
+                        {settings.ai.enabled ? "已启用" : "已关闭"}
                       </span>
                     </div>
                     <div className="setting-row">
@@ -283,21 +330,30 @@ export function SettingsPage() {
                       <span className="setting-label">API Key</span>
                       <span className="setting-value cell-mono">{maskValue(settings.ai.apiKey)}</span>
                     </div>
+                    <div className="setting-row">
+                      <span className="setting-label">超时</span>
+                      <span className="setting-value">{settings.ai.timeoutSec}s</span>
+                    </div>
+                    <div className="setting-row">
+                      <span className="setting-label">重试</span>
+                      <span className="setting-value">{settings.ai.maxRetries}</span>
+                    </div>
+                    <div className="setting-row">
+                      <span className="setting-label">速率限制</span>
+                      <span className="setting-value">{settings.ai.requestsPerMinute}/min</span>
+                    </div>
+                    {activeProject && (
+                      <div className="setting-row">
+                        <span className="setting-label">当前项目</span>
+                        <span className="setting-value">{activeProject.name}（AI {activeProject.aiEnabled ? "开启" : "关闭"}）</span>
+                      </div>
+                    )}
                   </div>
                   <div style={{ marginTop: 12 }}>
                     <button
                       className="btn btn-sm"
-                      onClick={() => {
-                        setTestAIResult(null);
-                        testAIMutation.mutate(
-                          {},
-                          {
-                            onSuccess: (data) => setTestAIResult({ ok: true, msg: `连接成功（${data.endpoint}）：${data.reply}` }),
-                            onError: (err) => setTestAIResult({ ok: false, msg: errorMessage(err) })
-                          }
-                        );
-                      }}
-                      disabled={testAIMutation.isPending || !settings.ai.configured}
+                      onClick={() => testAI()}
+                      disabled={testAIMutation.isPending || !settings.ai.configured || !settings.ai.enabled}
                     >
                       {testAIMutation.isPending ? "测试中..." : "测试 AI 连接"}
                     </button>

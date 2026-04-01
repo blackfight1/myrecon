@@ -4,18 +4,25 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type aiTestRequest struct {
-	BaseURL *string `json:"baseUrl"`
-	APIKey  *string `json:"apiKey"`
-	Model   *string `json:"model"`
-	Prompt  string  `json:"prompt"`
+	ProjectID *string `json:"projectId"`
+	Enabled   *bool   `json:"enabled"`
+	BaseURL   *string `json:"baseUrl"`
+	APIKey    *string `json:"apiKey"`
+	Model     *string `json:"model"`
+	Prompt    string  `json:"prompt"`
 }
 
 func (s *Server) handleTestAI(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +44,15 @@ func (s *Server) handleTestAI(w http.ResponseWriter, r *http.Request) {
 	s.settingsMu.RLock()
 	cfg := s.settings.AI
 	s.settingsMu.RUnlock()
+	cfg = normalizeRuntimeAISettings(cfg)
 
+	projectID := ""
+	if req.ProjectID != nil {
+		projectID = strings.TrimSpace(*req.ProjectID)
+	}
+	if req.Enabled != nil {
+		cfg.Enabled = *req.Enabled
+	}
 	if req.BaseURL != nil {
 		cfg.BaseURL = strings.TrimSpace(*req.BaseURL)
 	}
@@ -47,7 +62,27 @@ func (s *Server) handleTestAI(w http.ResponseWriter, r *http.Request) {
 	if req.Model != nil {
 		cfg.Model = strings.TrimSpace(*req.Model)
 	}
+	cfg = normalizeRuntimeAISettings(cfg)
 
+	if !cfg.Enabled {
+		writeError(w, http.StatusBadRequest, "ai is disabled globally")
+		return
+	}
+	if projectID != "" {
+		enabled, err := s.isProjectAIEnabled(projectID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				writeError(w, http.StatusNotFound, "project not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to check project ai setting: "+err.Error())
+			return
+		}
+		if !enabled {
+			writeError(w, http.StatusBadRequest, "ai is disabled for this project")
+			return
+		}
+	}
 	if strings.TrimSpace(cfg.BaseURL) == "" {
 		writeError(w, http.StatusBadRequest, "ai baseUrl is required")
 		return
@@ -66,10 +101,11 @@ func (s *Server) handleTestAI(w http.ResponseWriter, r *http.Request) {
 		prompt = "Reply with pong only."
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	timeout := time.Duration(cfg.TimeoutSec) * time.Second
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
-	reply, endpoint, err := testOpenAICompatible(ctx, cfg, prompt)
+	reply, endpoint, err := s.testOpenAICompatible(ctx, cfg, prompt)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "ai test failed: "+err.Error())
 		return
@@ -85,21 +121,22 @@ func (s *Server) handleTestAI(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func testOpenAICompatible(ctx context.Context, cfg runtimeAISettings, prompt string) (string, string, error) {
+func (s *Server) testOpenAICompatible(ctx context.Context, cfg runtimeAISettings, prompt string) (string, string, error) {
 	// Try Responses API first (newer OpenAI-compatible format).
-	if reply, err := testResponsesAPI(ctx, cfg, prompt); err == nil {
+	reply, errResp := s.testResponsesAPI(ctx, cfg, prompt)
+	if errResp == nil {
 		return reply, "responses", nil
 	}
 
 	// Fallback to Chat Completions for broader proxy compatibility.
-	reply, err := testChatCompletionsAPI(ctx, cfg, prompt)
-	if err != nil {
-		return "", "", err
+	reply, errChat := s.testChatCompletionsAPI(ctx, cfg, prompt)
+	if errChat != nil {
+		return "", "", fmt.Errorf("responses failed: %v; chat/completions failed: %v", errResp, errChat)
 	}
 	return reply, "chat/completions", nil
 }
 
-func testResponsesAPI(ctx context.Context, cfg runtimeAISettings, prompt string) (string, error) {
+func (s *Server) testResponsesAPI(ctx context.Context, cfg runtimeAISettings, prompt string) (string, error) {
 	body := map[string]interface{}{
 		"model":             cfg.Model,
 		"input":             prompt,
@@ -114,7 +151,7 @@ func testResponsesAPI(ctx context.Context, cfg runtimeAISettings, prompt string)
 			} `json:"content"`
 		} `json:"output"`
 	}
-	if err := doAIRequest(ctx, cfg, "/responses", body, &resp); err != nil {
+	if err := s.doAIRequestWithRetry(ctx, cfg, "/responses", body, &resp); err != nil {
 		return "", err
 	}
 	if txt := strings.TrimSpace(resp.OutputText); txt != "" {
@@ -130,7 +167,7 @@ func testResponsesAPI(ctx context.Context, cfg runtimeAISettings, prompt string)
 	return "", fmt.Errorf("responses API returned empty text")
 }
 
-func testChatCompletionsAPI(ctx context.Context, cfg runtimeAISettings, prompt string) (string, error) {
+func (s *Server) testChatCompletionsAPI(ctx context.Context, cfg runtimeAISettings, prompt string) (string, error) {
 	body := map[string]interface{}{
 		"model": cfg.Model,
 		"messages": []map[string]string{
@@ -146,7 +183,7 @@ func testChatCompletionsAPI(ctx context.Context, cfg runtimeAISettings, prompt s
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	if err := doAIRequest(ctx, cfg, "/chat/completions", body, &resp); err != nil {
+	if err := s.doAIRequestWithRetry(ctx, cfg, "/chat/completions", body, &resp); err != nil {
 		return "", err
 	}
 	if len(resp.Choices) == 0 {
@@ -159,7 +196,58 @@ func testChatCompletionsAPI(ctx context.Context, cfg runtimeAISettings, prompt s
 	return text, nil
 }
 
-func doAIRequest(ctx context.Context, cfg runtimeAISettings, path string, payload interface{}, out interface{}) error {
+type aiHTTPError struct {
+	Path       string
+	StatusCode int
+	Message    string
+}
+
+func (e *aiHTTPError) Error() string {
+	return fmt.Sprintf("%s returned %d: %s", e.Path, e.StatusCode, e.Message)
+}
+
+func (e *aiHTTPError) retryable() bool {
+	switch e.StatusCode {
+	case http.StatusTooManyRequests, http.StatusRequestTimeout, http.StatusConflict, http.StatusTooEarly:
+		return true
+	default:
+		return e.StatusCode >= 500 && e.StatusCode <= 599
+	}
+}
+
+func (s *Server) doAIRequestWithRetry(ctx context.Context, cfg runtimeAISettings, path string, payload interface{}, out interface{}) error {
+	totalAttempts := cfg.MaxRetries + 1
+	if totalAttempts < 1 {
+		totalAttempts = 1
+	}
+	for attempt := 1; attempt <= totalAttempts; attempt++ {
+		ok, waitFor := s.checkAndConsumeAILimit(cfg.RequestsPerMinute)
+		if !ok {
+			return fmt.Errorf("ai rate limit exceeded (%d req/min), retry after %s", cfg.RequestsPerMinute, waitFor.Truncate(time.Second))
+		}
+
+		err := s.doAIRequestOnce(ctx, cfg, path, payload, out)
+		if err == nil {
+			return nil
+		}
+
+		retryable := isRetryableAIError(err)
+		logAIRequest(path, cfg, attempt, totalAttempts, retryable, err)
+		if !retryable || attempt >= totalAttempts {
+			return err
+		}
+
+		backoff := time.Duration(300*(attempt*attempt)) * time.Millisecond
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+	}
+	return fmt.Errorf("ai request failed")
+}
+
+func (s *Server) doAIRequestOnce(ctx context.Context, cfg runtimeAISettings, path string, payload interface{}, out interface{}) error {
 	rawBody, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -173,7 +261,8 @@ func doAIRequest(ctx context.Context, cfg runtimeAISettings, path string, payloa
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.APIKey))
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	timeout := time.Duration(cfg.TimeoutSec) * time.Second
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -189,7 +278,10 @@ func doAIRequest(ctx context.Context, cfg runtimeAISettings, path string, payloa
 		if msg == "" {
 			msg = http.StatusText(resp.StatusCode)
 		}
-		return fmt.Errorf("%s returned %d: %s", path, resp.StatusCode, msg)
+		if len(msg) > 260 {
+			msg = msg[:260] + "..."
+		}
+		return &aiHTTPError{Path: path, StatusCode: resp.StatusCode, Message: msg}
 	}
 	if err := json.Unmarshal(respRaw, out); err != nil {
 		return fmt.Errorf("decode %s response failed: %v", path, err)
@@ -217,4 +309,39 @@ func extractMessageText(content interface{}) string {
 	default:
 		return ""
 	}
+}
+
+func isRetryableAIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var httpErr *aiHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.retryable()
+	}
+	return false
+}
+
+func logAIRequest(path string, cfg runtimeAISettings, attempt, totalAttempts int, retryable bool, err error) {
+	base := strings.TrimSpace(cfg.BaseURL)
+	base = strings.TrimRight(base, "/")
+	if idx := strings.Index(base, "://"); idx > 0 {
+		rest := base[idx+3:]
+		if slash := strings.Index(rest, "/"); slash > 0 {
+			rest = rest[:slash]
+		}
+		base = rest
+	}
+	log.Printf("[AI] request failed path=%s host=%s model=%s attempt=%d/%d retryable=%v err=%v",
+		path, base, cfg.Model, attempt, totalAttempts, retryable, err)
 }

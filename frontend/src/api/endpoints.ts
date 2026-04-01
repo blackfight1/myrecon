@@ -86,6 +86,7 @@ export interface ProjectUpsertRequest {
   tags?: string[];
   rootDomains: string[];
   archived?: boolean;
+  aiEnabled?: boolean;
 }
 
 export interface BulkDeleteAssetsRequest {
@@ -113,6 +114,8 @@ export interface BulkDeleteScreenshotsRequest {
 }
 
 export interface TestAIRequest {
+  projectId?: string;
+  enabled?: boolean;
   baseUrl?: string;
   apiKey?: string;
   model?: string;

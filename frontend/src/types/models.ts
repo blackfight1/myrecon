@@ -256,6 +256,7 @@ export interface ProjectRecord {
   rootDomains: string[];
   tags: string[];
   archived?: boolean;
+  aiEnabled: boolean;
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -341,9 +342,13 @@ export interface SystemSettings {
     defaultNuclei: boolean;
   };
   ai: {
+    enabled: boolean;
     baseUrl: string;
     apiKey: string;
     model: string;
+    timeoutSec: number;
+    maxRetries: number;
+    requestsPerMinute: number;
     configured: boolean;
   };
 }
