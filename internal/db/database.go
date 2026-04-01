@@ -42,6 +42,7 @@ const (
 
 type MonitorTargetOptions struct {
 	MonitorPorts      *bool
+	NotifyAISummary   *bool
 	EnableVulnScan    *bool
 	EnableNuclei      *bool
 	EnableCors        *bool
@@ -52,8 +53,17 @@ type MonitorTargetOptions struct {
 	VulnCooldownMin   *int
 }
 
-// NewDatabase creates database connection.
+// NewDatabase creates database connection and runs schema migration.
 func NewDatabase(dsn string) (*Database, error) {
+	return openDatabase(dsn, true)
+}
+
+// NewDatabaseNoMigrate creates database connection without running migration.
+func NewDatabaseNoMigrate(dsn string) (*Database, error) {
+	return openDatabase(dsn, false)
+}
+
+func openDatabase(dsn string, runMigrate bool) (*Database, error) {
 	database, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -61,17 +71,19 @@ func NewDatabase(dsn string) (*Database, error) {
 		return nil, fmt.Errorf("failed to connect to database: %v", err)
 	}
 
-	if err := database.AutoMigrate(
-		&Project{}, &ProjectScope{},
-		&AppSetting{},
-		&Asset{}, &AssetCandidate{}, &Port{}, &Vulnerability{}, &VulnEvent{},
-		&MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorEvent{}, &MonitorSnapshot{}, &MonitorTarget{}, &MonitorTask{},
-		&ScanJob{}, &ScanStage{}, &ScanArtifact{}, &JobLog{}, &AssetEdge{}, &AuditLog{},
-	); err != nil {
-		return nil, fmt.Errorf("failed to migrate database: %v", err)
-	}
-	if err := ensureProjectScopedSchema(database); err != nil {
-		return nil, fmt.Errorf("failed to ensure project scoped schema: %v", err)
+	if runMigrate {
+		if err := database.AutoMigrate(
+			&Project{}, &ProjectScope{},
+			&AppSetting{},
+			&Asset{}, &AssetCandidate{}, &Port{}, &Vulnerability{}, &VulnEvent{},
+			&MonitorRun{}, &AssetChange{}, &PortChange{}, &MonitorEvent{}, &MonitorSnapshot{}, &MonitorTarget{}, &MonitorTask{},
+			&ScanJob{}, &ScanStage{}, &ScanArtifact{}, &JobLog{}, &AssetEdge{}, &AuditLog{},
+		); err != nil {
+			return nil, fmt.Errorf("failed to migrate database: %v", err)
+		}
+		if err := ensureProjectScopedSchema(database); err != nil {
+			return nil, fmt.Errorf("failed to ensure project scoped schema: %v", err)
+		}
 	}
 
 	return &Database{DB: database}, nil
@@ -93,6 +105,7 @@ func ensureProjectScopedSchema(database *gorm.DB) error {
 			"UPDATE monitor_targets SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE monitor_targets SET interval_sec = 21600 WHERE interval_sec IS NULL OR interval_sec <= 0",
 			"UPDATE monitor_targets SET monitor_ports = TRUE WHERE monitor_ports IS NULL",
+			"UPDATE monitor_targets SET notify_ai_summary = FALSE WHERE notify_ai_summary IS NULL",
 			"UPDATE monitor_tasks SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE monitor_runs SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
 			"UPDATE monitor_events SET project_id = 'default' WHERE project_id IS NULL OR BTRIM(project_id) = ''",
@@ -987,6 +1000,9 @@ func applyMonitorTargetOptionsToStruct(target *MonitorTarget, opts *MonitorTarge
 	if opts.MonitorPorts != nil {
 		target.MonitorPorts = *opts.MonitorPorts
 	}
+	if opts.NotifyAISummary != nil {
+		target.NotifyAISummary = *opts.NotifyAISummary
+	}
 	if opts.EnableVulnScan != nil {
 		target.EnableVulnScan = *opts.EnableVulnScan
 	}
@@ -1017,9 +1033,12 @@ func monitorTargetOptionUpdates(opts *MonitorTargetOptions) map[string]interface
 	if opts == nil {
 		return nil
 	}
-	updates := make(map[string]interface{}, 9)
+	updates := make(map[string]interface{}, 10)
 	if opts.MonitorPorts != nil {
 		updates["monitor_ports"] = *opts.MonitorPorts
+	}
+	if opts.NotifyAISummary != nil {
+		updates["notify_ai_summary"] = *opts.NotifyAISummary
 	}
 	if opts.EnableVulnScan != nil {
 		updates["enable_vuln_scan"] = *opts.EnableVulnScan
@@ -1074,6 +1093,7 @@ func (d *Database) EnableMonitorTarget(projectID, rootDomain string, intervalSec
 				Enabled:           true,
 				IntervalSec:       effectiveInterval,
 				MonitorPorts:      true,
+				NotifyAISummary:   false,
 				EnableVulnScan:    false,
 				EnableNuclei:      false,
 				EnableCors:        false,

@@ -123,6 +123,7 @@ func (n *DingTalkNotifier) SendMonitorRunDigest(
 	portLines []string,
 	omittedAssets int,
 	omittedPorts int,
+	aiSummary string,
 ) error {
 	if !n.Enabled() {
 		return nil
@@ -141,6 +142,21 @@ func (n *DingTalkNotifier) SendMonitorRunDigest(
 		changes["port_closed"],
 		changes["service_changed"],
 	))
+	if strings.TrimSpace(aiSummary) != "" {
+		b.WriteString("\n**AI 摘要（降噪）**\n")
+		normalized := strings.ReplaceAll(aiSummary, "\r\n", "\n")
+		normalized = strings.ReplaceAll(normalized, "\r", "\n")
+		lines := strings.Split(normalized, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			b.WriteString("- ")
+			b.WriteString(safeMarkdownLine(line))
+			b.WriteString("\n")
+		}
+	}
 
 	if len(newAssetLines) > 0 {
 		b.WriteString("\n**?????URL | ?? | ????**\n")

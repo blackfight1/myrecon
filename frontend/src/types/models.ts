@@ -150,6 +150,7 @@ export interface MonitorTarget {
   enabled: boolean;
   intervalSec?: number;
   monitorPorts?: boolean;
+  notifyAiSummary?: boolean;
   enableVulnScan?: boolean;
   enableNuclei?: boolean;
   enableCors?: boolean;

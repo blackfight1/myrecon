@@ -266,6 +266,7 @@ type monitorTargetResponse struct {
 	Enabled           bool   `json:"enabled"`
 	IntervalSec       int    `json:"intervalSec"`
 	MonitorPorts      bool   `json:"monitorPorts"`
+	NotifyAISummary   bool   `json:"notifyAiSummary"`
 	EnableVulnScan    bool   `json:"enableVulnScan"`
 	EnableNuclei      bool   `json:"enableNuclei"`
 	EnableCors        bool   `json:"enableCors"`
@@ -468,6 +469,7 @@ type createMonitorRequest struct {
 	Domain            string `json:"domain"`
 	IntervalSec       int    `json:"intervalSec"`
 	MonitorPorts      *bool  `json:"monitorPorts"`
+	NotifyAISummary   *bool  `json:"notifyAiSummary"`
 	EnableVulnScan    *bool  `json:"enableVulnScan"`
 	EnableNuclei      *bool  `json:"enableNuclei"`
 	EnableCors        *bool  `json:"enableCors"`
@@ -1225,6 +1227,15 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 					"port_opened": portOpened, "port_closed": portClosed,
 					"service_changed": svcChanged,
 				}
+				aiSummary := ""
+				if target != nil && target.NotifyAISummary {
+					summary, aiErr := s.buildMonitorNotifyAISummary(task.ProjectID, rootDomain, stats, assetLines, portLines, omittedAssets, omittedPorts)
+					if aiErr != nil {
+						s.appendJobLogf(task.ProjectID, jobID, "warn", "monitor ai summary failed: %v", aiErr)
+					} else {
+						aiSummary = summary
+					}
+				}
 				if err := notifier.SendMonitorRunDigest(
 					task.ProjectID,
 					rootDomain,
@@ -1235,6 +1246,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 					portLines,
 					omittedAssets,
 					omittedPorts,
+					aiSummary,
 				); err != nil {
 					s.appendJobLogf(task.ProjectID, jobID, "warn", "閫氱煡鍙戦€佸け璐? %v", err)
 				} else {
@@ -2310,6 +2322,103 @@ func (s *Server) buildMonitorNotifyDetails(projectID string, runID uint, window 
 	sort.Slice(notifiedEventIDs, func(i, j int) bool { return notifiedEventIDs[i] < notifiedEventIDs[j] })
 
 	return assetLines, omittedAssets, portLines, omittedPorts, notifiedEventIDs, suppressedByWindow, nil
+}
+
+func (s *Server) buildMonitorNotifyAISummary(
+	projectID, rootDomain string,
+	stats map[string]int,
+	assetLines, portLines []string,
+	omittedAssets, omittedPorts int,
+) (string, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		projectID = "default"
+	}
+
+	s.settingsMu.RLock()
+	cfg := normalizeRuntimeAISettings(s.settings.AI)
+	s.settingsMu.RUnlock()
+	if !cfg.Enabled {
+		return "", nil
+	}
+
+	projectAIEnabled, err := s.isProjectAIEnabled(projectID)
+	if err != nil {
+		return "", err
+	}
+	if !projectAIEnabled {
+		return "", nil
+	}
+
+	if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
+		return "", fmt.Errorf("ai settings not configured")
+	}
+
+	trimLines := func(lines []string, limit int) []string {
+		if len(lines) == 0 || limit <= 0 {
+			return nil
+		}
+		if len(lines) > limit {
+			return lines[:limit]
+		}
+		return lines
+	}
+	assetPreview := trimLines(assetLines, 8)
+	portPreview := trimLines(portLines, 8)
+
+	var prompt strings.Builder
+	prompt.WriteString("You are a security monitoring assistant.\n")
+	prompt.WriteString("Generate a concise Simplified-Chinese digest from the monitor run data.\n")
+	prompt.WriteString("Output exactly 3 bullet points, each <= 60 Chinese characters.\n")
+	prompt.WriteString("1) New live/web-changed assets highlights.\n")
+	prompt.WriteString("2) Port/service changes and risk judgment.\n")
+	prompt.WriteString("3) Next actions in priority order.\n")
+	prompt.WriteString("If risk is low, explicitly say low noise.\n")
+	prompt.WriteString(fmt.Sprintf("Project: %s\n", projectID))
+	prompt.WriteString(fmt.Sprintf("RootDomain: %s\n", strings.TrimSpace(rootDomain)))
+	prompt.WriteString(fmt.Sprintf(
+		"Stats: new_live=%d web_changed=%d port_opened=%d port_closed=%d service_changed=%d\n",
+		stats["new_live"], stats["web_changed"], stats["port_opened"], stats["port_closed"], stats["service_changed"],
+	))
+	if len(assetPreview) > 0 {
+		prompt.WriteString("AssetLines:\n")
+		for _, line := range assetPreview {
+			prompt.WriteString("- ")
+			prompt.WriteString(strings.TrimSpace(line))
+			prompt.WriteString("\n")
+		}
+		if omittedAssets > 0 {
+			prompt.WriteString(fmt.Sprintf("- omitted_assets=%d\n", omittedAssets))
+		}
+	}
+	if len(portPreview) > 0 {
+		prompt.WriteString("PortLines:\n")
+		for _, line := range portPreview {
+			prompt.WriteString("- ")
+			prompt.WriteString(strings.TrimSpace(line))
+			prompt.WriteString("\n")
+		}
+		if omittedPorts > 0 {
+			prompt.WriteString(fmt.Sprintf("- omitted_ports=%d\n", omittedPorts))
+		}
+	}
+
+	timeout := time.Duration(cfg.TimeoutSec) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	reply, _, err := s.testOpenAICompatible(ctx, cfg, prompt.String())
+	if err != nil {
+		return "", err
+	}
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return "", fmt.Errorf("ai summary is empty")
+	}
+	return trimForNotify(reply, 1200), nil
 }
 
 func monitorPortChangePriority(changeType string) int {
@@ -4318,6 +4427,7 @@ func (s *Server) handleListMonitorTargets(w http.ResponseWriter, r *http.Request
 			Enabled:           t.Enabled,
 			IntervalSec:       t.IntervalSec,
 			MonitorPorts:      t.MonitorPorts,
+			NotifyAISummary:   t.NotifyAISummary,
 			EnableVulnScan:    policy.EnableVulnScan,
 			EnableNuclei:      policy.EnableNuclei,
 			EnableCors:        policy.EnableCors,
@@ -4373,6 +4483,7 @@ func (s *Server) handleCreateMonitorTarget(w http.ResponseWriter, r *http.Reques
 	s.writeAudit(projectID, actorFromRequest(r), "create_monitor_target", "monitor_target", domain, map[string]interface{}{
 		"intervalSec":       intervalSec,
 		"monitorPorts":      req.MonitorPorts,
+		"notifyAiSummary":   req.NotifyAISummary,
 		"enableVulnScan":    req.EnableVulnScan,
 		"enableNuclei":      req.EnableNuclei,
 		"enableCors":        req.EnableCors,
@@ -4430,6 +4541,7 @@ func (s *Server) handleUpdateMonitorTarget(w http.ResponseWriter, r *http.Reques
 	}
 	s.writeAudit(projectID, actorFromRequest(r), "update_monitor_target", "monitor_target", domain, map[string]interface{}{
 		"monitorPorts":      req.MonitorPorts,
+		"notifyAiSummary":   req.NotifyAISummary,
 		"enableVulnScan":    req.EnableVulnScan,
 		"enableNuclei":      req.EnableNuclei,
 		"enableCors":        req.EnableCors,
@@ -5727,6 +5839,7 @@ func monitorVulnPolicyFromTarget(target *db.MonitorTarget) monitorVulnPolicy {
 
 func buildMonitorTargetOptions(req createMonitorRequest) *db.MonitorTargetOptions {
 	if req.MonitorPorts == nil &&
+		req.NotifyAISummary == nil &&
 		req.EnableVulnScan == nil &&
 		req.EnableNuclei == nil &&
 		req.EnableCors == nil &&
@@ -5739,6 +5852,7 @@ func buildMonitorTargetOptions(req createMonitorRequest) *db.MonitorTargetOption
 	}
 	opts := &db.MonitorTargetOptions{
 		MonitorPorts:      req.MonitorPorts,
+		NotifyAISummary:   req.NotifyAISummary,
 		EnableVulnScan:    req.EnableVulnScan,
 		EnableNuclei:      req.EnableNuclei,
 		EnableCors:        req.EnableCors,

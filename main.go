@@ -66,7 +66,7 @@ func main() {
 	// ── Worker Mode ──
 	if mode == "worker" {
 		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
-		database, err := db.NewDatabase(dsn)
+		database, err := db.NewDatabaseNoMigrate(dsn)
 		if err != nil {
 			log.Fatalf("database connection failed: %v", err)
 		}

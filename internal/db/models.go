@@ -297,6 +297,7 @@ type MonitorTarget struct {
 	Enabled           bool           `gorm:"default:true;index" json:"enabled"`
 	IntervalSec       int            `gorm:"default:21600" json:"interval_sec"`
 	MonitorPorts      bool           `gorm:"default:true" json:"monitor_ports"`
+	NotifyAISummary   bool           `gorm:"default:false" json:"notify_ai_summary"`
 	EnableVulnScan    bool           `gorm:"default:false" json:"enable_vuln_scan"`
 	EnableNuclei      bool           `gorm:"default:false" json:"enable_nuclei"`
 	EnableCors        bool           `gorm:"default:false" json:"enable_cors"`

@@ -54,6 +54,7 @@ export interface CreateMonitorTargetRequest {
   domain: string;
   intervalSec?: number;
   monitorPorts?: boolean;
+  notifyAiSummary?: boolean;
   enableVulnScan?: boolean;
   enableNuclei?: boolean;
   enableCors?: boolean;
@@ -68,6 +69,7 @@ export interface UpdateMonitorTargetRequest {
   projectId: string;
   domain: string;
   monitorPorts?: boolean;
+  notifyAiSummary?: boolean;
   enableVulnScan?: boolean;
   enableNuclei?: boolean;
   enableCors?: boolean;
