@@ -38,6 +38,7 @@ const (
 	monitorNotifyMaxPorts      = 12
 	monitorEventStatusOpen     = "open"
 	monitorEventStatusResolved = "resolved"
+	appSettingScannerKey       = "settings.scanner.v1"
 	appSettingAIKey            = "settings.ai.v1"
 )
 
@@ -553,6 +554,7 @@ func NewServer(database *db.Database, screenshotDir string) *Server {
 	corsAllowAll, corsOrigins := parseCORSOrigins()
 
 	initialSettings := loadRuntimeSettings(screenshotDir)
+	initialSettings.Scanner = normalizeRuntimeScannerSettings(initialSettings.Scanner)
 	initialSettings.AI = normalizeRuntimeAISettings(initialSettings.AI)
 
 	s := &Server{
@@ -3805,6 +3807,15 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	log.Printf("[Scan] Job %s started for %s, modules=%v dryRun=%v", jobID, rootDomain, modules, dryRun)
 	s.appendJobLogf(projectID, jobID, "info", "鎵弿寮€濮? root=%s modules=%v dryRun=%v", rootDomain, modules, dryRun)
 
+	// API and worker run as separate processes; refresh persisted settings at
+	// job start so newly saved defaults can take effect without service restart.
+	if err := s.loadPersistedScannerSettings(); err != nil {
+		log.Printf("[Settings] load persisted scanner settings failed at job start: %v", err)
+	}
+	if err := s.loadPersistedAISettings(); err != nil {
+		log.Printf("[Settings] load persisted ai settings failed at job start: %v", err)
+	}
+
 	// Frontend may send stage modules (subs/ports/httpx/...) or concrete tool
 	// modules (subfinder/findomain/bbot/naabu/nmap/...); normalize behavior here.
 	hasPassiveSubs := containsAnyModule(modules, "subs", "subfinder", "findomain", "bbot", "shosubgo")
@@ -5302,6 +5313,8 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.settingsMu.Lock()
+	scannerChanged := false
+	var scannerSnapshot runtimeScannerSettings
 	aiChanged := false
 	var aiSnapshot runtimeAISettings
 	if p := patch.Database; p != nil {
@@ -5322,9 +5335,9 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if p := patch.Scanner; p != nil {
+		scannerChanged = true
 		if p.ScreenshotDir != nil {
 			s.settings.Scanner.ScreenshotDir = *p.ScreenshotDir
-			s.screenshotDir = *p.ScreenshotDir
 		}
 		if p.DNSResolvers != nil {
 			s.settings.Scanner.DNSResolvers = *p.DNSResolvers
@@ -5338,6 +5351,9 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if p.DefaultNuclei != nil {
 			s.settings.Scanner.DefaultNuclei = *p.DefaultNuclei
 		}
+		s.settings.Scanner = normalizeRuntimeScannerSettings(s.settings.Scanner)
+		s.screenshotDir = s.settings.Scanner.ScreenshotDir
+		scannerSnapshot = s.settings.Scanner
 	}
 	if p := patch.AI; p != nil {
 		aiChanged = true
@@ -5377,6 +5393,12 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		aiSnapshot = s.settings.AI
 	}
 	s.settingsMu.Unlock()
+	if scannerChanged {
+		if err := s.persistScannerSettings(scannerSnapshot); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist scanner settings: "+err.Error())
+			return
+		}
+	}
 	if aiChanged {
 		if err := s.persistAISettings(aiSnapshot); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to persist ai settings: "+err.Error())
@@ -5401,7 +5423,57 @@ type aiSettingsPersistedPayload struct {
 	SubdictSampleSize int    `json:"subdictSampleSize"`
 }
 
+type scannerSettingsPersistedPayload struct {
+	ScreenshotDir     string `json:"screenshotDir"`
+	DNSResolvers      string `json:"dnsResolvers"`
+	DefaultDictSize   int    `json:"defaultDictSize"`
+	DefaultActiveSubs bool   `json:"defaultActiveSubs"`
+	DefaultNuclei     bool   `json:"defaultNuclei"`
+}
+
 func (s *Server) loadPersistedSettings() error {
+	if err := s.loadPersistedScannerSettings(); err != nil {
+		return err
+	}
+	if err := s.loadPersistedAISettings(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) loadPersistedScannerSettings() error {
+	raw, err := s.db.GetAppSetting(appSettingScannerKey)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var payload scannerSettingsPersistedPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return fmt.Errorf("decode persisted scanner settings failed: %w", err)
+	}
+	s.settingsMu.Lock()
+	if strings.TrimSpace(payload.ScreenshotDir) != "" {
+		s.settings.Scanner.ScreenshotDir = payload.ScreenshotDir
+	}
+	s.settings.Scanner.DNSResolvers = payload.DNSResolvers
+	if payload.DefaultDictSize > 0 {
+		s.settings.Scanner.DefaultDictSize = payload.DefaultDictSize
+	}
+	s.settings.Scanner.DefaultActiveSubs = payload.DefaultActiveSubs
+	s.settings.Scanner.DefaultNuclei = payload.DefaultNuclei
+	s.settings.Scanner = normalizeRuntimeScannerSettings(s.settings.Scanner)
+	s.screenshotDir = s.settings.Scanner.ScreenshotDir
+	s.settingsMu.Unlock()
+	return nil
+}
+
+func (s *Server) loadPersistedAISettings() error {
 	raw, err := s.db.GetAppSetting(appSettingAIKey)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -5446,8 +5518,23 @@ func (s *Server) loadPersistedSettings() error {
 	}
 	s.settings.AI = normalizeRuntimeAISettings(s.settings.AI)
 	s.settingsMu.Unlock()
-	s.resetAILimiter()
 	return nil
+}
+
+func (s *Server) persistScannerSettings(cfg runtimeScannerSettings) error {
+	cfg = normalizeRuntimeScannerSettings(cfg)
+	payload := scannerSettingsPersistedPayload{
+		ScreenshotDir:     cfg.ScreenshotDir,
+		DNSResolvers:      cfg.DNSResolvers,
+		DefaultDictSize:   cfg.DefaultDictSize,
+		DefaultActiveSubs: cfg.DefaultActiveSubs,
+		DefaultNuclei:     cfg.DefaultNuclei,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return s.db.UpsertAppSetting(appSettingScannerKey, string(raw))
 }
 
 func (s *Server) persistAISettings(cfg runtimeAISettings) error {
@@ -5469,6 +5556,16 @@ func (s *Server) persistAISettings(cfg runtimeAISettings) error {
 		return err
 	}
 	return s.db.UpsertAppSetting(appSettingAIKey, string(raw))
+}
+
+func normalizeRuntimeScannerSettings(cfg runtimeScannerSettings) runtimeScannerSettings {
+	cfg.ScreenshotDir = strings.TrimSpace(cfg.ScreenshotDir)
+	if cfg.ScreenshotDir == "" {
+		cfg.ScreenshotDir = "screenshots"
+	}
+	cfg.DNSResolvers = strings.TrimSpace(cfg.DNSResolvers)
+	cfg.DefaultDictSize = clampDictSize(cfg.DefaultDictSize)
+	return cfg
 }
 
 func normalizeRuntimeAISettings(cfg runtimeAISettings) runtimeAISettings {

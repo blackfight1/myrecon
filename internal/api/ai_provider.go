@@ -341,6 +341,12 @@ func (s *Server) buildActiveBruteforceWordlist(ctx context.Context, projectID st
 }
 
 func (s *Server) resolveAISubdictRuntimeConfig(projectID string) (runtimeAISettings, bool, string, error) {
+	// API and worker are separate processes. Reload persisted AI settings so
+	// worker-side behavior follows latest settings changes without service restart.
+	if err := s.loadPersistedAISettings(); err != nil {
+		log.Printf("[AI] reload persisted settings failed: %v", err)
+	}
+
 	s.settingsMu.RLock()
 	cfg := normalizeRuntimeAISettings(s.settings.AI)
 	s.settingsMu.RUnlock()

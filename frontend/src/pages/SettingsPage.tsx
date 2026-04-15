@@ -1,14 +1,13 @@
 ﻿import { useState } from "react";
 import type { SystemSettings } from "../types/models";
-import type { TestAISubdictResponse } from "../api/endpoints";
-import { useSettings, useTestAI, useTestAISubdict, useTestNotification, useUpdateSettings } from "../hooks/queries";
+import { useNavigate } from "react-router-dom";
+import { useSettings, useTestAI, useTestNotification, useUpdateSettings } from "../hooks/queries";
 import { errorMessage } from "../lib/errors";
 import { useWorkspace } from "../context/WorkspaceContext";
 
 export function SettingsPage() {
   const [testNotifyResult, setTestNotifyResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testAIResult, setTestAIResult] = useState<{ ok: boolean; msg: string } | null>(null);
-  const [testAISubdictResult, setTestAISubdictResult] = useState<{ ok: boolean; msg: string; data?: TestAISubdictResponse } | null>(null);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [editScanner, setEditScanner] = useState(false);
@@ -29,14 +28,12 @@ export function SettingsPage() {
   const [aiSubdictEnabled, setAISubdictEnabled] = useState(false);
   const [aiSubdictMaxWords, setAISubdictMaxWords] = useState(300);
   const [aiSubdictSampleSize, setAISubdictSampleSize] = useState(200);
-  const [subdictTestRootDomain, setSubdictTestRootDomain] = useState("");
-  const [subdictTestSubdomainsRaw, setSubdictTestSubdomainsRaw] = useState("");
 
   const settingsQuery = useSettings();
   const updateMutation = useUpdateSettings();
   const testNotifyMutation = useTestNotification();
   const testAIMutation = useTestAI();
-  const testAISubdictMutation = useTestAISubdict();
+  const navigate = useNavigate();
   const { activeProject } = useWorkspace();
   const settings = settingsQuery.data;
 
@@ -88,11 +85,8 @@ export function SettingsPage() {
     setAISubdictEnabled(settings.ai.subdictEnabled);
     setAISubdictMaxWords(settings.ai.subdictMaxWords);
     setAISubdictSampleSize(settings.ai.subdictSampleSize);
-    setSubdictTestRootDomain(activeProject?.rootDomains?.[0] ?? "");
-    setSubdictTestSubdomainsRaw("");
     setAIAPIKey("");
     setTestAIResult(null);
-    setTestAISubdictResult(null);
     setEditAI(true);
     setFeedback(null);
   };
@@ -153,47 +147,6 @@ export function SettingsPage() {
     testAIMutation.mutate(body, {
       onSuccess: (data) => setTestAIResult({ ok: true, msg: `连接成功（${data.endpoint}）：${data.reply}` }),
       onError: (err) => setTestAIResult({ ok: false, msg: errorMessage(err) })
-    });
-  };
-
-  const testAISubdict = (opts?: { useDraft?: boolean }) => {
-    const rootDomain = subdictTestRootDomain.trim() || activeProject?.rootDomains?.[0] || "";
-    if (!rootDomain) {
-      setTestAISubdictResult({ ok: false, msg: "请先填写根域名，或选择包含根域名的项目" });
-      return;
-    }
-    const subdomains = subdictTestSubdomainsRaw
-      .split(/\r?\n|,|;/)
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const body = opts?.useDraft
-      ? {
-          projectId: activeProject?.id,
-          rootDomain,
-          subdomains: subdomains.length > 0 ? subdomains : undefined,
-          enabled: aiEnabled,
-          baseUrl: aiBaseURL.trim(),
-          apiKey: aiAPIKey.trim() || undefined,
-          model: aiModel.trim() || undefined,
-          subdictEnabled: aiSubdictEnabled,
-          subdictMaxWords: aiSubdictMaxWords,
-          subdictSampleSize: aiSubdictSampleSize
-        }
-      : {
-          projectId: activeProject?.id,
-          rootDomain,
-          subdomains: subdomains.length > 0 ? subdomains : undefined
-        };
-    setTestAISubdictResult(null);
-    testAISubdictMutation.mutate(body, {
-      onSuccess: (data) => {
-        setTestAISubdictResult({
-          ok: true,
-          msg: `生成成功：基线 ${data.baselineCount}，AI ${data.aiCount}，融合 ${data.mergedCount}（AI 命中 ${data.aiWordsUsed}）`,
-          data
-        });
-      },
-      onError: (err) => setTestAISubdictResult({ ok: false, msg: errorMessage(err) })
     });
   };
 
@@ -361,65 +314,20 @@ export function SettingsPage() {
                     <label className="form-label">AI 样本子域名数量</label>
                     <input className="form-input" type="number" min={20} max={2000} value={aiSubdictSampleSize} onChange={(e) => setAISubdictSampleSize(Number(e.target.value) || 20)} />
                   </div>
-                  <div className="form-group">
-                    <label className="form-label">测试根域名</label>
-                    <input
-                      className="form-input"
-                      type="text"
-                      value={subdictTestRootDomain}
-                      onChange={(e) => setSubdictTestRootDomain(e.target.value)}
-                      placeholder={activeProject?.rootDomains?.[0] || "example.com"}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">测试样本子域名（可选，每行一个）</label>
-                    <textarea
-                      className="form-input form-textarea"
-                      rows={5}
-                      value={subdictTestSubdomainsRaw}
-                      onChange={(e) => setSubdictTestSubdomainsRaw(e.target.value)}
-                      placeholder={"api.example.com\nadmin.example.com\ndev.example.com"}
-                    />
-                    <div className="setting-note">留空时后端会尝试从当前项目历史资产中自动取样。</div>
-                  </div>
                   <div className="form-actions">
                     <button className="btn btn-sm" onClick={() => testAI({ useDraft: true })} disabled={testAIMutation.isPending}>
                       {testAIMutation.isPending ? "测试中..." : "测试连接"}
                     </button>
-                    <button className="btn btn-sm" onClick={() => testAISubdict({ useDraft: true })} disabled={testAISubdictMutation.isPending}>
-                      {testAISubdictMutation.isPending ? "生成中..." : "测试 AI 字典生成"}
-                    </button>
                     <button className="btn btn-primary" onClick={saveAI} disabled={updateMutation.isPending}>
                       {updateMutation.isPending ? "保存中..." : "保存"}
                     </button>
-                    <button className="btn btn-sm" onClick={() => setEditAI(false)} disabled={updateMutation.isPending || testAIMutation.isPending || testAISubdictMutation.isPending}>
+                    <button className="btn btn-sm" onClick={() => setEditAI(false)} disabled={updateMutation.isPending || testAIMutation.isPending}>
                       取消
                     </button>
                   </div>
                   {testAIResult && (
                     <div className="setting-note" style={{ color: testAIResult.ok ? "#16a34a" : "#dc2626" }}>
                       {testAIResult.msg}
-                    </div>
-                  )}
-                  {testAISubdictResult && (
-                    <div className="setting-note" style={{ color: testAISubdictResult.ok ? "#16a34a" : "#dc2626" }}>
-                      {testAISubdictResult.msg}
-                    </div>
-                  )}
-                  {testAISubdictResult?.ok && testAISubdictResult.data && (
-                    <div className="settings-grid" style={{ marginTop: 8 }}>
-                      <div className="setting-row">
-                        <span className="setting-label">采样子域名</span>
-                        <span className="setting-value">{testAISubdictResult.data.sampledSubdomainCnt}</span>
-                      </div>
-                      <div className="setting-row">
-                        <span className="setting-label">AI 接口</span>
-                        <span className="setting-value">{testAISubdictResult.data.endpoint}</span>
-                      </div>
-                      <div className="setting-row">
-                        <span className="setting-label">融合词表示例</span>
-                        <span className="setting-value cell-mono">{testAISubdictResult.data.mergedWords.slice(0, 20).join(", ") || "-"}</span>
-                      </div>
                     </div>
                   )}
                 </div>
@@ -491,25 +399,16 @@ export function SettingsPage() {
                     >
                       {testAIMutation.isPending ? "测试中..." : "测试 AI 连接"}
                     </button>
-                    <button
-                      className="btn btn-sm"
-                      style={{ marginLeft: 8 }}
-                      onClick={() => testAISubdict()}
-                      disabled={testAISubdictMutation.isPending || !settings.ai.configured || !settings.ai.enabled || !settings.ai.subdictEnabled}
-                    >
-                      {testAISubdictMutation.isPending ? "生成中..." : "测试 AI 字典生成"}
+                    <button className="btn btn-sm" style={{ marginLeft: 8 }} onClick={() => navigate("/tools")}>
+                      打开工具中心
                     </button>
                     {testAIResult && (
                       <span className={`badge ${testAIResult.ok ? "badge-success" : "badge-danger"}`} style={{ marginLeft: 8 }}>
                         {testAIResult.msg}
                       </span>
                     )}
-                    {testAISubdictResult && (
-                      <span className={`badge ${testAISubdictResult.ok ? "badge-success" : "badge-danger"}`} style={{ marginLeft: 8 }}>
-                        {testAISubdictResult.msg}
-                      </span>
-                    )}
                   </div>
+                  <div className="setting-note">AI 子域名字典生成测试已迁移到「工具中心」，便于后续统一扩展更多工具能力。</div>
                 </>
               )}
             </div>

@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+﻿import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { Breadcrumb } from "../ui/Breadcrumb";
 import { useTheme } from "../../context/ThemeContext";
 import { useWorkspace } from "../../context/WorkspaceContext";
@@ -20,40 +20,43 @@ export function AppShell() {
         </div>
 
         <nav className="sidebar-nav">
-          <div className="nav-section-title">主要功能</div>
+          <div className="nav-section-title">核心功能</div>
           <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            <span className="nav-icon">◈</span> 仪表盘
+            <span className="nav-icon">●</span> 仪表盘
           </NavLink>
           <NavLink to="/assets" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            <span className="nav-icon">◎</span> 资产
+            <span className="nav-icon">●</span> 资产
           </NavLink>
           <NavLink to="/ports" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            <span className="nav-icon">⊞</span> 端口
+            <span className="nav-icon">◉</span> 端口
           </NavLink>
           <NavLink to="/findings" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            <span className="nav-icon">⚑</span> 漏洞
+            <span className="nav-icon">◆</span> 漏洞
           </NavLink>
           <NavLink to="/screenshots" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            <span className="nav-icon">⎔</span> 截图
+            <span className="nav-icon">▣</span> 截图
           </NavLink>
 
           <div className="nav-section-title">扫描</div>
           <NavLink to="/quick-scan" className={({ isActive }) => `nav-link nav-link-quick${isActive ? " active" : ""}`}>
-            <span className="nav-icon">✦</span> 快速扫描
+            <span className="nav-icon">★</span> 快速扫描
           </NavLink>
           <NavLink to="/jobs" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            <span className="nav-icon">▷</span> 扫描任务
+            <span className="nav-icon">◍</span> 扫描任务
           </NavLink>
           <NavLink to="/monitoring" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            <span className="nav-icon">◉</span> 监控
+            <span className="nav-icon">◎</span> 监控
           </NavLink>
 
           <div className="nav-section-title">系统设置</div>
           <NavLink to="/projects" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            <span className="nav-icon">⊟</span> 项目管理
+            <span className="nav-icon">□</span> 项目管理
+          </NavLink>
+          <NavLink to="/tools" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+            <span className="nav-icon">⌘</span> 工具
           </NavLink>
           <NavLink to="/settings" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            <span className="nav-icon">⚙</span> 系统设置
+            <span className="nav-icon">○</span> 系统设置
           </NavLink>
         </nav>
 
@@ -65,7 +68,7 @@ export function AppShell() {
               <div className="sidebar-user-role">管理员</div>
             </div>
             <button className="sidebar-logout-btn" title="退出登录" onClick={logout}>
-              ⏻
+              ×
             </button>
           </div>
         </div>
@@ -88,12 +91,14 @@ export function AppShell() {
               </select>
             </div>
           </div>
+
           <div className="topbar-center" style={{ flex: 1, display: "flex", justifyContent: "center", padding: "0 16px" }}>
             <GlobalSearch />
           </div>
+
           <div className="topbar-right">
             <button className="topbar-btn topbar-btn-neon" onClick={() => navigate("/quick-scan")}>
-              ✦ 快速扫描
+              快速扫描
             </button>
             <div className="topbar-divider" />
             <div className="theme-switcher">

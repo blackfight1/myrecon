@@ -1,10 +1,10 @@
-import { lazy, Suspense } from "react";
+﻿import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/layout/AppShell";
 import { useAuth } from "./context/AuthContext";
 import LoginPage from "./pages/LoginPage";
 
-// 路由代码分割 — 每个页面独立 chunk，首屏只加载 DashboardPage
+// 路由代码分割：每个页面独立 chunk，首屏只加载必要内容。
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 const QuickScanPage = lazy(() => import("./pages/QuickScanPage").then((m) => ({ default: m.QuickScanPage })));
@@ -17,12 +17,13 @@ const FindingsPage = lazy(() => import("./pages/FindingsPage").then((m) => ({ de
 const ScreenshotsPage = lazy(() => import("./pages/ScreenshotsPage").then((m) => ({ default: m.ScreenshotsPage })));
 const MonitoringPage = lazy(() => import("./pages/MonitoringPage").then((m) => ({ default: m.MonitoringPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const ToolsPage = lazy(() => import("./pages/ToolsPage").then((m) => ({ default: m.ToolsPage })));
 
 function PageLoading() {
   return (
     <div className="page-loading">
       <div className="page-loading-spinner" />
-      <span>加载中…</span>
+      <span>加载中...</span>
     </div>
   );
 }
@@ -51,7 +52,14 @@ export default function App() {
           )
         }
       />
-      <Route path="/" element={<RequireAuth><AppShell /></RequireAuth>}>
+      <Route
+        path="/"
+        element={
+          <RequireAuth>
+            <AppShell />
+          </RequireAuth>
+        }
+      >
         <Route index element={<Suspense fallback={<PageLoading />}><DashboardPage /></Suspense>} />
         <Route path="projects" element={<Suspense fallback={<PageLoading />}><ProjectsPage /></Suspense>} />
         <Route path="quick-scan" element={<Suspense fallback={<PageLoading />}><QuickScanPage /></Suspense>} />
@@ -63,6 +71,7 @@ export default function App() {
         <Route path="findings" element={<Suspense fallback={<PageLoading />}><FindingsPage /></Suspense>} />
         <Route path="screenshots" element={<Suspense fallback={<PageLoading />}><ScreenshotsPage /></Suspense>} />
         <Route path="monitoring" element={<Suspense fallback={<PageLoading />}><MonitoringPage /></Suspense>} />
+        <Route path="tools" element={<Suspense fallback={<PageLoading />}><ToolsPage /></Suspense>} />
         <Route path="settings" element={<Suspense fallback={<PageLoading />}><SettingsPage /></Suspense>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
