@@ -1,12 +1,14 @@
 ﻿import { useState } from "react";
 import type { SystemSettings } from "../types/models";
-import { useSettings, useTestAI, useTestNotification, useUpdateSettings } from "../hooks/queries";
+import type { TestAISubdictResponse } from "../api/endpoints";
+import { useSettings, useTestAI, useTestAISubdict, useTestNotification, useUpdateSettings } from "../hooks/queries";
 import { errorMessage } from "../lib/errors";
 import { useWorkspace } from "../context/WorkspaceContext";
 
 export function SettingsPage() {
   const [testNotifyResult, setTestNotifyResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testAIResult, setTestAIResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [testAISubdictResult, setTestAISubdictResult] = useState<{ ok: boolean; msg: string; data?: TestAISubdictResponse } | null>(null);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [editScanner, setEditScanner] = useState(false);
@@ -24,11 +26,17 @@ export function SettingsPage() {
   const [aiTimeoutSec, setAITimeoutSec] = useState(30);
   const [aiMaxRetries, setAIMaxRetries] = useState(2);
   const [aiRPM, setAIRPM] = useState(60);
+  const [aiSubdictEnabled, setAISubdictEnabled] = useState(false);
+  const [aiSubdictMaxWords, setAISubdictMaxWords] = useState(300);
+  const [aiSubdictSampleSize, setAISubdictSampleSize] = useState(200);
+  const [subdictTestRootDomain, setSubdictTestRootDomain] = useState("");
+  const [subdictTestSubdomainsRaw, setSubdictTestSubdomainsRaw] = useState("");
 
   const settingsQuery = useSettings();
   const updateMutation = useUpdateSettings();
   const testNotifyMutation = useTestNotification();
   const testAIMutation = useTestAI();
+  const testAISubdictMutation = useTestAISubdict();
   const { activeProject } = useWorkspace();
   const settings = settingsQuery.data;
 
@@ -77,8 +85,14 @@ export function SettingsPage() {
     setAITimeoutSec(settings.ai.timeoutSec);
     setAIMaxRetries(settings.ai.maxRetries);
     setAIRPM(settings.ai.requestsPerMinute);
+    setAISubdictEnabled(settings.ai.subdictEnabled);
+    setAISubdictMaxWords(settings.ai.subdictMaxWords);
+    setAISubdictSampleSize(settings.ai.subdictSampleSize);
+    setSubdictTestRootDomain(activeProject?.rootDomains?.[0] ?? "");
+    setSubdictTestSubdomainsRaw("");
     setAIAPIKey("");
     setTestAIResult(null);
+    setTestAISubdictResult(null);
     setEditAI(true);
     setFeedback(null);
   };
@@ -91,6 +105,9 @@ export function SettingsPage() {
       timeoutSec: number;
       maxRetries: number;
       requestsPerMinute: number;
+      subdictEnabled: boolean;
+      subdictMaxWords: number;
+      subdictSampleSize: number;
       apiKey?: string;
     } = {
       enabled: aiEnabled,
@@ -98,7 +115,10 @@ export function SettingsPage() {
       model: aiModel.trim(),
       timeoutSec: aiTimeoutSec,
       maxRetries: aiMaxRetries,
-      requestsPerMinute: aiRPM
+      requestsPerMinute: aiRPM,
+      subdictEnabled: aiSubdictEnabled,
+      subdictMaxWords: aiSubdictMaxWords,
+      subdictSampleSize: aiSubdictSampleSize
     };
     if (aiAPIKey.trim() !== "") {
       aiPatch.apiKey = aiAPIKey.trim();
@@ -133,6 +153,47 @@ export function SettingsPage() {
     testAIMutation.mutate(body, {
       onSuccess: (data) => setTestAIResult({ ok: true, msg: `连接成功（${data.endpoint}）：${data.reply}` }),
       onError: (err) => setTestAIResult({ ok: false, msg: errorMessage(err) })
+    });
+  };
+
+  const testAISubdict = (opts?: { useDraft?: boolean }) => {
+    const rootDomain = subdictTestRootDomain.trim() || activeProject?.rootDomains?.[0] || "";
+    if (!rootDomain) {
+      setTestAISubdictResult({ ok: false, msg: "请先填写根域名，或选择包含根域名的项目" });
+      return;
+    }
+    const subdomains = subdictTestSubdomainsRaw
+      .split(/\r?\n|,|;/)
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const body = opts?.useDraft
+      ? {
+          projectId: activeProject?.id,
+          rootDomain,
+          subdomains: subdomains.length > 0 ? subdomains : undefined,
+          enabled: aiEnabled,
+          baseUrl: aiBaseURL.trim(),
+          apiKey: aiAPIKey.trim() || undefined,
+          model: aiModel.trim() || undefined,
+          subdictEnabled: aiSubdictEnabled,
+          subdictMaxWords: aiSubdictMaxWords,
+          subdictSampleSize: aiSubdictSampleSize
+        }
+      : {
+          projectId: activeProject?.id,
+          rootDomain,
+          subdomains: subdomains.length > 0 ? subdomains : undefined
+        };
+    setTestAISubdictResult(null);
+    testAISubdictMutation.mutate(body, {
+      onSuccess: (data) => {
+        setTestAISubdictResult({
+          ok: true,
+          msg: `生成成功：基线 ${data.baselineCount}，AI ${data.aiCount}，融合 ${data.mergedCount}（AI 命中 ${data.aiWordsUsed}）`,
+          data
+        });
+      },
+      onError: (err) => setTestAISubdictResult({ ok: false, msg: errorMessage(err) })
     });
   };
 
@@ -286,20 +347,79 @@ export function SettingsPage() {
                     <label className="form-label">速率限制（次/分钟，0=不限制）</label>
                     <input className="form-input" type="number" min={0} max={600} value={aiRPM} onChange={(e) => setAIRPM(Number(e.target.value) || 0)} />
                   </div>
+                  <div className="form-group">
+                    <label className="form-checkbox">
+                      <input type="checkbox" checked={aiSubdictEnabled} onChange={(e) => setAISubdictEnabled(e.target.checked)} />
+                      启用 AI 子域名字典生成（用于主动爆破）
+                    </label>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">AI 字典词数上限</label>
+                    <input className="form-input" type="number" min={20} max={5000} value={aiSubdictMaxWords} onChange={(e) => setAISubdictMaxWords(Number(e.target.value) || 20)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">AI 样本子域名数量</label>
+                    <input className="form-input" type="number" min={20} max={2000} value={aiSubdictSampleSize} onChange={(e) => setAISubdictSampleSize(Number(e.target.value) || 20)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">测试根域名</label>
+                    <input
+                      className="form-input"
+                      type="text"
+                      value={subdictTestRootDomain}
+                      onChange={(e) => setSubdictTestRootDomain(e.target.value)}
+                      placeholder={activeProject?.rootDomains?.[0] || "example.com"}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">测试样本子域名（可选，每行一个）</label>
+                    <textarea
+                      className="form-input form-textarea"
+                      rows={5}
+                      value={subdictTestSubdomainsRaw}
+                      onChange={(e) => setSubdictTestSubdomainsRaw(e.target.value)}
+                      placeholder={"api.example.com\nadmin.example.com\ndev.example.com"}
+                    />
+                    <div className="setting-note">留空时后端会尝试从当前项目历史资产中自动取样。</div>
+                  </div>
                   <div className="form-actions">
                     <button className="btn btn-sm" onClick={() => testAI({ useDraft: true })} disabled={testAIMutation.isPending}>
                       {testAIMutation.isPending ? "测试中..." : "测试连接"}
                     </button>
+                    <button className="btn btn-sm" onClick={() => testAISubdict({ useDraft: true })} disabled={testAISubdictMutation.isPending}>
+                      {testAISubdictMutation.isPending ? "生成中..." : "测试 AI 字典生成"}
+                    </button>
                     <button className="btn btn-primary" onClick={saveAI} disabled={updateMutation.isPending}>
                       {updateMutation.isPending ? "保存中..." : "保存"}
                     </button>
-                    <button className="btn btn-sm" onClick={() => setEditAI(false)} disabled={updateMutation.isPending || testAIMutation.isPending}>
+                    <button className="btn btn-sm" onClick={() => setEditAI(false)} disabled={updateMutation.isPending || testAIMutation.isPending || testAISubdictMutation.isPending}>
                       取消
                     </button>
                   </div>
                   {testAIResult && (
                     <div className="setting-note" style={{ color: testAIResult.ok ? "#16a34a" : "#dc2626" }}>
                       {testAIResult.msg}
+                    </div>
+                  )}
+                  {testAISubdictResult && (
+                    <div className="setting-note" style={{ color: testAISubdictResult.ok ? "#16a34a" : "#dc2626" }}>
+                      {testAISubdictResult.msg}
+                    </div>
+                  )}
+                  {testAISubdictResult?.ok && testAISubdictResult.data && (
+                    <div className="settings-grid" style={{ marginTop: 8 }}>
+                      <div className="setting-row">
+                        <span className="setting-label">采样子域名</span>
+                        <span className="setting-value">{testAISubdictResult.data.sampledSubdomainCnt}</span>
+                      </div>
+                      <div className="setting-row">
+                        <span className="setting-label">AI 接口</span>
+                        <span className="setting-value">{testAISubdictResult.data.endpoint}</span>
+                      </div>
+                      <div className="setting-row">
+                        <span className="setting-label">融合词表示例</span>
+                        <span className="setting-value cell-mono">{testAISubdictResult.data.mergedWords.slice(0, 20).join(", ") || "-"}</span>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -342,6 +462,20 @@ export function SettingsPage() {
                       <span className="setting-label">速率限制</span>
                       <span className="setting-value">{settings.ai.requestsPerMinute}/min</span>
                     </div>
+                    <div className="setting-row">
+                      <span className="setting-label">子域名字典 AI</span>
+                      <span className={`badge ${settings.ai.subdictEnabled ? "badge-success" : "badge-neutral"}`}>
+                        {settings.ai.subdictEnabled ? "已启用" : "未启用"}
+                      </span>
+                    </div>
+                    <div className="setting-row">
+                      <span className="setting-label">子域名字典词数上限</span>
+                      <span className="setting-value">{settings.ai.subdictMaxWords}</span>
+                    </div>
+                    <div className="setting-row">
+                      <span className="setting-label">子域名字典样本上限</span>
+                      <span className="setting-value">{settings.ai.subdictSampleSize}</span>
+                    </div>
                     {activeProject && (
                       <div className="setting-row">
                         <span className="setting-label">当前项目</span>
@@ -357,9 +491,22 @@ export function SettingsPage() {
                     >
                       {testAIMutation.isPending ? "测试中..." : "测试 AI 连接"}
                     </button>
+                    <button
+                      className="btn btn-sm"
+                      style={{ marginLeft: 8 }}
+                      onClick={() => testAISubdict()}
+                      disabled={testAISubdictMutation.isPending || !settings.ai.configured || !settings.ai.enabled || !settings.ai.subdictEnabled}
+                    >
+                      {testAISubdictMutation.isPending ? "生成中..." : "测试 AI 字典生成"}
+                    </button>
                     {testAIResult && (
                       <span className={`badge ${testAIResult.ok ? "badge-success" : "badge-danger"}`} style={{ marginLeft: 8 }}>
                         {testAIResult.msg}
+                      </span>
+                    )}
+                    {testAISubdictResult && (
+                      <span className={`badge ${testAISubdictResult.ok ? "badge-success" : "badge-danger"}`} style={{ marginLeft: 8 }}>
+                        {testAISubdictResult.msg}
                       </span>
                     )}
                   </div>

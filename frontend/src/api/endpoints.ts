@@ -124,6 +124,39 @@ export interface TestAIRequest {
   prompt?: string;
 }
 
+export interface TestAISubdictRequest {
+  projectId?: string;
+  rootDomain: string;
+  subdomains?: string[];
+  enabled?: boolean;
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  subdictEnabled?: boolean;
+  subdictMaxWords?: number;
+  subdictSampleSize?: number;
+}
+
+export interface TestAISubdictResponse {
+  status: string;
+  projectId?: string;
+  rootDomain: string;
+  loadedFromProject?: boolean;
+  sourceSubdomainCnt: number;
+  sampledSubdomainCnt: number;
+  sampledSubdomains: string[];
+  endpoint: string;
+  baselineCount: number;
+  baselineWords: string[];
+  aiCount: number;
+  aiWords: string[];
+  mergedCount: number;
+  mergedWords: string[];
+  aiWordsUsed: number;
+  promptPreview?: string;
+  replyPreview?: string;
+}
+
 export interface PatchVulnStatusRequest {
   vulnId: number;
   projectId: string;
@@ -384,5 +417,7 @@ export const endpoints = {
     apiPost<TestAIRequest, { status: string; provider: string; endpoint: string; baseUrl: string; model: string; reply: string }>(
       "/settings/test-ai",
       body ?? {}
-    )
+    ),
+  testAISubdict: (body: TestAISubdictRequest) =>
+    apiPost<TestAISubdictRequest, TestAISubdictResponse>("/settings/test-ai-subdict", body)
 };

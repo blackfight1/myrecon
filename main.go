@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"hunter/internal/api"
+	commonpkg "hunter/internal/common"
 	"hunter/internal/db"
 	"hunter/internal/engine"
 	"hunter/internal/plugins"
@@ -415,7 +416,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Main flags:")
 	fmt.Println("  -project           Project ID for data isolation (default: default)")
-	fmt.Println("  -active-subs       Enable active subdomain bruteforce (dictgen + dnsx)")
+	fmt.Println("  -active-subs       Enable active subdomain bruteforce (passive-token + dnsx)")
 	fmt.Println("  -dict-size         Dictionary cap for active bruteforce (default 800)")
 	fmt.Println("  -dns-resolvers     Optional resolvers file for dnsx")
 	fmt.Println("  -nuclei            Enable nuclei scanning")
@@ -717,28 +718,11 @@ func runPassiveSubdomainCollection(domains []string) ([]engine.Result, []string,
 func runActiveSubdomainExpansion(rootDomains, passiveSubdomains []string, dictSize int, dnsResolvers string) ([]engine.Result, []string, error) {
 	var allResults []engine.Result
 
-	dictPlugin := plugins.NewDictgenPlugin(clampDictSize(dictSize))
-	dictInput := append([]string{}, passiveSubdomains...)
-	dictInput = append(dictInput, rootDomains...)
-
-	dictResults, dictErr := executeScannerWithStatus(dictPlugin, dictInput)
-	allResults = append(allResults, dictResults...)
-	if dictErr != nil {
-		return allResults, nil, dictErr
-	}
-
-	var words []string
-	for _, r := range dictResults {
-		if r.Type != "dict_word" {
-			continue
-		}
-		if w, ok := r.Data.(string); ok && strings.TrimSpace(w) != "" {
-			words = append(words, w)
-		}
-	}
+	words := commonpkg.BuildBruteforceWordlist(passiveSubdomains, rootDomains, clampDictSize(dictSize))
 	if len(words) == 0 {
 		return allResults, []string{}, nil
 	}
+	fmt.Printf("[ActiveSubs] Built %d words from passive subdomains\n", len(words))
 
 	brutePlugin := plugins.NewDNSXBruteforcePlugin(rootDomains, dnsResolvers)
 	bruteResults, bruteErr := executeScannerWithStatus(brutePlugin, words)

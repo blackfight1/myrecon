@@ -16,7 +16,8 @@ import {
   type BulkVulnStatusRequest,
   type BulkDeleteVulnsRequest,
   type BulkDeleteScreenshotsRequest,
-  type TestAIRequest
+  type TestAIRequest,
+  type TestAISubdictRequest
 } from "../api/endpoints";
 
 function requiredProjectId(projectId?: string): string {
@@ -449,5 +450,11 @@ export function useTestNotification() {
 export function useTestAI() {
   return useMutation({
     mutationFn: (body?: TestAIRequest) => endpoints.testAI(body)
+  });
+}
+
+export function useTestAISubdict() {
+  return useMutation({
+    mutationFn: (body: TestAISubdictRequest) => endpoints.testAISubdict(body)
   });
 }

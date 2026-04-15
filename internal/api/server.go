@@ -101,6 +101,9 @@ type runtimeAISettings struct {
 	TimeoutSec        int
 	MaxRetries        int
 	RequestsPerMinute int
+	SubdictEnabled    bool
+	SubdictMaxWords   int
+	SubdictSampleSize int
 }
 
 type dashboardResponse struct {
@@ -424,6 +427,9 @@ type aiSettingsResponse struct {
 	TimeoutSec        int    `json:"timeoutSec"`
 	MaxRetries        int    `json:"maxRetries"`
 	RequestsPerMinute int    `json:"requestsPerMinute"`
+	SubdictEnabled    bool   `json:"subdictEnabled"`
+	SubdictMaxWords   int    `json:"subdictMaxWords"`
+	SubdictSampleSize int    `json:"subdictSampleSize"`
 	Configured        bool   `json:"configured"`
 }
 
@@ -457,6 +463,9 @@ type aiSettingsPatch struct {
 	TimeoutSec        *int    `json:"timeoutSec"`
 	MaxRetries        *int    `json:"maxRetries"`
 	RequestsPerMinute *int    `json:"requestsPerMinute"`
+	SubdictEnabled    *bool   `json:"subdictEnabled"`
+	SubdictMaxWords   *int    `json:"subdictMaxWords"`
+	SubdictSampleSize *int    `json:"subdictSampleSize"`
 }
 
 type monitorChangeSortItem struct {
@@ -681,6 +690,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/settings", s.handleSettings)
 	s.mux.HandleFunc("/api/settings/test-notify", s.handleTestNotify)
 	s.mux.HandleFunc("/api/settings/test-ai", s.handleTestAI)
+	s.mux.HandleFunc("/api/settings/test-ai-subdict", s.handleTestAISubdict)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
@@ -3873,7 +3883,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 
 		if hasActiveSubs {
 			s.appendJobLogf(projectID, jobID, "info", "闃舵寮€濮? 涓诲姩鏋氫妇 (dictSize=%d)", dictSize)
-			activeResults, activeSubdomains, err := s.expandActiveSubdomains(ctx, domains, subdomains, dictSize, dnsResolvers)
+			activeResults, activeSubdomains, err := s.expandActiveSubdomains(ctx, projectID, domains, subdomains, dictSize, dnsResolvers)
 			allResults = append(allResults, activeResults...)
 			if err != nil {
 				log.Printf("[Scan] Job %s active subs warning: %v", jobID, err)
@@ -4082,25 +4092,16 @@ func (s *Server) expandBbotActiveSubdomains(ctx context.Context, rootDomains []s
 	return results, subdomains, err
 }
 
-func (s *Server) expandActiveSubdomains(ctx context.Context, rootDomains, passiveSubdomains []string, dictSize int, dnsResolvers string) ([]engine.Result, []string, error) {
+func (s *Server) expandActiveSubdomains(ctx context.Context, projectID string, rootDomains, passiveSubdomains []string, dictSize int, dnsResolvers string) ([]engine.Result, []string, error) {
 	var allResults []engine.Result
-	dictPlugin := plugins.NewDictgenPlugin(dictSize)
-	dictInput := append(append([]string{}, passiveSubdomains...), rootDomains...)
-	dictResults, err := dictPlugin.Execute(ctx, dictInput)
-	allResults = append(allResults, dictResults...)
-	if err != nil {
-		return allResults, nil, err
-	}
-	var words []string
-	for _, r := range dictResults {
-		if r.Type == "dict_word" {
-			if w, ok := r.Data.(string); ok && strings.TrimSpace(w) != "" {
-				words = append(words, w)
-			}
-		}
-	}
+	words, aiUsed := s.buildActiveBruteforceWordlist(ctx, projectID, rootDomains, passiveSubdomains, clampDictSize(dictSize))
 	if len(words) == 0 {
 		return allResults, []string{}, nil
+	}
+	if aiUsed > 0 {
+		log.Printf("[Scan] Active wordlist built from passive+AI: words=%d ai_words_used=%d", len(words), aiUsed)
+	} else {
+		log.Printf("[Scan] Active wordlist built from passive data: words=%d", len(words))
 	}
 	brutePlugin := plugins.NewDNSXBruteforcePlugin(rootDomains, dnsResolvers)
 	bruteResults, err := brutePlugin.Execute(ctx, words)
@@ -5284,6 +5285,9 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 			TimeoutSec:        settings.AI.TimeoutSec,
 			MaxRetries:        settings.AI.MaxRetries,
 			RequestsPerMinute: settings.AI.RequestsPerMinute,
+			SubdictEnabled:    settings.AI.SubdictEnabled,
+			SubdictMaxWords:   settings.AI.SubdictMaxWords,
+			SubdictSampleSize: settings.AI.SubdictSampleSize,
 			Configured:        strings.TrimSpace(settings.AI.APIKey) != "",
 		},
 	}
@@ -5360,6 +5364,15 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if p.RequestsPerMinute != nil {
 			s.settings.AI.RequestsPerMinute = *p.RequestsPerMinute
 		}
+		if p.SubdictEnabled != nil {
+			s.settings.AI.SubdictEnabled = *p.SubdictEnabled
+		}
+		if p.SubdictMaxWords != nil {
+			s.settings.AI.SubdictMaxWords = *p.SubdictMaxWords
+		}
+		if p.SubdictSampleSize != nil {
+			s.settings.AI.SubdictSampleSize = *p.SubdictSampleSize
+		}
 		s.settings.AI = normalizeRuntimeAISettings(s.settings.AI)
 		aiSnapshot = s.settings.AI
 	}
@@ -5383,6 +5396,9 @@ type aiSettingsPersistedPayload struct {
 	TimeoutSec        int    `json:"timeoutSec"`
 	MaxRetries        int    `json:"maxRetries"`
 	RequestsPerMinute int    `json:"requestsPerMinute"`
+	SubdictEnabled    bool   `json:"subdictEnabled"`
+	SubdictMaxWords   int    `json:"subdictMaxWords"`
+	SubdictSampleSize int    `json:"subdictSampleSize"`
 }
 
 func (s *Server) loadPersistedSettings() error {
@@ -5421,6 +5437,13 @@ func (s *Server) loadPersistedSettings() error {
 	if payload.RequestsPerMinute >= 0 {
 		s.settings.AI.RequestsPerMinute = payload.RequestsPerMinute
 	}
+	s.settings.AI.SubdictEnabled = payload.SubdictEnabled
+	if payload.SubdictMaxWords > 0 {
+		s.settings.AI.SubdictMaxWords = payload.SubdictMaxWords
+	}
+	if payload.SubdictSampleSize > 0 {
+		s.settings.AI.SubdictSampleSize = payload.SubdictSampleSize
+	}
 	s.settings.AI = normalizeRuntimeAISettings(s.settings.AI)
 	s.settingsMu.Unlock()
 	s.resetAILimiter()
@@ -5437,6 +5460,9 @@ func (s *Server) persistAISettings(cfg runtimeAISettings) error {
 		TimeoutSec:        cfg.TimeoutSec,
 		MaxRetries:        cfg.MaxRetries,
 		RequestsPerMinute: cfg.RequestsPerMinute,
+		SubdictEnabled:    cfg.SubdictEnabled,
+		SubdictMaxWords:   cfg.SubdictMaxWords,
+		SubdictSampleSize: cfg.SubdictSampleSize,
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -5468,6 +5494,14 @@ func normalizeRuntimeAISettings(cfg runtimeAISettings) runtimeAISettings {
 		cfg.RequestsPerMinute = 60
 	}
 	cfg.RequestsPerMinute = clampIntRange(cfg.RequestsPerMinute, 0, 600)
+	if cfg.SubdictMaxWords <= 0 {
+		cfg.SubdictMaxWords = 300
+	}
+	cfg.SubdictMaxWords = clampIntRange(cfg.SubdictMaxWords, 20, 5000)
+	if cfg.SubdictSampleSize <= 0 {
+		cfg.SubdictSampleSize = 200
+	}
+	cfg.SubdictSampleSize = clampIntRange(cfg.SubdictSampleSize, 20, 2000)
 	return cfg
 }
 
@@ -5607,6 +5641,9 @@ func loadRuntimeSettings(screenshotDir string) runtimeSettings {
 			TimeoutSec:        envIntOrDefault("OPENAI_TIMEOUT_SEC", 30),
 			MaxRetries:        envIntOrDefault("OPENAI_MAX_RETRIES", 2),
 			RequestsPerMinute: envIntOrDefault("OPENAI_REQUESTS_PER_MINUTE", 60),
+			SubdictEnabled:    envBoolOrDefault("OPENAI_SUBDICT_ENABLED", false),
+			SubdictMaxWords:   envIntOrDefault("OPENAI_SUBDICT_MAX_WORDS", 300),
+			SubdictSampleSize: envIntOrDefault("OPENAI_SUBDICT_SAMPLE_SIZE", 200),
 		},
 	}
 }
@@ -5721,8 +5758,8 @@ func sanitizeModules(raw []string) []string {
 	allowed := map[string]bool{
 		"subfinder": true, "findomain": true, "bbot": true, "shosubgo": true,
 		"bbot_active": true, "chaos": true,
-		"dictgen": true, "dnsx_bruteforce": true,
-		"naabu": true, "nmap": true,
+		"dnsx_bruteforce": true,
+		"naabu":           true, "nmap": true,
 		"httpx": true, "gowitness": true, "nuclei": true, "cors": true, "subtakeover": true,
 		"subs": true, "ports": true, "monitor": true, "witness": true,
 	}

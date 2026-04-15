@@ -350,6 +350,9 @@ export interface SystemSettings {
     timeoutSec: number;
     maxRetries: number;
     requestsPerMinute: number;
+    subdictEnabled: boolean;
+    subdictMaxWords: number;
+    subdictSampleSize: number;
     configured: boolean;
   };
 }
