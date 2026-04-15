@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useWorkspace } from "../context/WorkspaceContext";
 import { useCreateJob, useSettings } from "../hooks/queries";
 import { errorMessage } from "../lib/errors";
@@ -6,11 +7,23 @@ import { matchesProjectDomain, parseDomainList } from "../lib/projectScope";
 
 const BASELINE_MODULES = ["subs", "httpx", "ports"];
 
+type ToggleOption = {
+  key: string;
+  title: string;
+  desc: string;
+  value: boolean;
+  setValue: (v: boolean) => void;
+};
+
 export function QuickScanPage() {
   const { activeProject } = useWorkspace();
   const createJob = useCreateJob();
   const settingsQuery = useSettings();
-  const scannerDefaults = settingsQuery.data?.scanner;
+  const navigate = useNavigate();
+
+  const settings = settingsQuery.data;
+  const scannerDefaults = settings?.scanner;
+  const aiSettings = settings?.ai;
   const projectRootDomains = activeProject?.rootDomains ?? [];
   const projectRootDomainsKey = projectRootDomains.join("\n");
 
@@ -25,6 +38,25 @@ export function QuickScanPage() {
   const [defaultsLoaded, setDefaultsLoaded] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
+  const scanTargets = useMemo(() => parseDomainList(scanTargetsRaw), [scanTargetsRaw]);
+
+  const aiSubdictReady = !!(
+    aiSettings?.enabled &&
+    aiSettings?.configured &&
+    aiSettings?.subdictEnabled &&
+    activeProject?.aiEnabled
+  );
+
+  const aiBlockedReason = useMemo(() => {
+    if (!activeProject) return "请先选择项目";
+    if (!aiSettings) return "系统设置加载中";
+    if (!aiSettings.enabled) return "系统 AI 开关已关闭";
+    if (!aiSettings.configured) return "系统 AI 未配置可用密钥";
+    if (!aiSettings.subdictEnabled) return "系统设置中未启用 AI 子域名字典生成";
+    if (!activeProject.aiEnabled) return "当前项目已关闭 AI";
+    return "可用";
+  }, [activeProject, aiSettings]);
+
   const previewModules = useMemo(
     () => [
       ...BASELINE_MODULES,
@@ -38,8 +70,6 @@ export function QuickScanPage() {
     [enableActiveSubs, enableBbotActive, enableWitness, enableNuclei, enableCors, enableSubtakeover]
   );
 
-  const scanTargets = useMemo(() => parseDomainList(scanTargetsRaw), [scanTargetsRaw]);
-
   useEffect(() => {
     setScanTargetsRaw(projectRootDomainsKey);
   }, [activeProject?.id, projectRootDomainsKey]);
@@ -51,6 +81,36 @@ export function QuickScanPage() {
     setEnableActiveSubs(scannerDefaults.defaultActiveSubs);
     setDefaultsLoaded(true);
   }, [defaultsLoaded, scannerDefaults]);
+
+  const applyBasicPreset = () => {
+    setEnableWitness(false);
+    setEnableNuclei(false);
+    setEnableCors(false);
+    setEnableSubtakeover(false);
+    setEnableActiveSubs(false);
+    setEnableBbotActive(false);
+    setEnableNotify(true);
+  };
+
+  const applyAIEnhancedPreset = () => {
+    setEnableWitness(false);
+    setEnableNuclei(false);
+    setEnableCors(false);
+    setEnableSubtakeover(false);
+    setEnableActiveSubs(true);
+    setEnableBbotActive(true);
+    setEnableNotify(true);
+  };
+
+  const applyFullPreset = () => {
+    setEnableWitness(true);
+    setEnableNuclei(true);
+    setEnableCors(true);
+    setEnableSubtakeover(true);
+    setEnableActiveSubs(true);
+    setEnableBbotActive(true);
+    setEnableNotify(true);
+  };
 
   const handleQuickScan = async () => {
     if (!activeProject?.id) return;
@@ -77,6 +137,7 @@ export function QuickScanPage() {
 
     const success: string[] = [];
     const failed: string[] = [];
+    const willUseAISubdict = enableActiveSubs && aiSubdictReady;
 
     for (const domain of scanTargets) {
       try {
@@ -98,7 +159,10 @@ export function QuickScanPage() {
     }
 
     if (failed.length === 0) {
-      setFeedback({ ok: true, text: `已提交 ${success.length} 个扫描任务。` });
+      setFeedback({
+        ok: true,
+        text: `已提交 ${success.length} 个扫描任务。${willUseAISubdict ? "本次将启用 AI 子域字典增强。" : ""}`
+      });
       return;
     }
 
@@ -113,15 +177,67 @@ export function QuickScanPage() {
     });
   };
 
+  const toggles: ToggleOption[] = [
+    {
+      key: "active-subs",
+      title: "主动子域（AI字典增强）",
+      desc: aiSubdictReady ? "可用：会自动融合 AI 词表进行爆破" : `未就绪：${aiBlockedReason}`,
+      value: enableActiveSubs,
+      setValue: setEnableActiveSubs
+    },
+    {
+      key: "bbot-active",
+      title: "BBOT 主动扩展",
+      desc: "额外主动发现子域，速度较慢但覆盖更广",
+      value: enableBbotActive,
+      setValue: setEnableBbotActive
+    },
+    {
+      key: "nuclei",
+      title: "漏洞扫描",
+      desc: "启用 Nuclei 模板扫描",
+      value: enableNuclei,
+      setValue: setEnableNuclei
+    },
+    {
+      key: "cors",
+      title: "高危 CORS",
+      desc: "执行高风险 CORS 检测",
+      value: enableCors,
+      setValue: setEnableCors
+    },
+    {
+      key: "subtakeover",
+      title: "子域接管",
+      desc: "检查常见接管风险",
+      value: enableSubtakeover,
+      setValue: setEnableSubtakeover
+    },
+    {
+      key: "witness",
+      title: "截图",
+      desc: "对存活 Web 资产进行截图",
+      value: enableWitness,
+      setValue: setEnableWitness
+    },
+    {
+      key: "notify",
+      title: "通知",
+      desc: "任务完成后发送通知",
+      value: enableNotify,
+      setValue: setEnableNotify
+    }
+  ];
+
   return (
     <section className="page">
       <div className="page-header">
         <h1 className="page-title">快速扫描</h1>
-        <p className="page-desc">固定流程：子域发现 + Web 探测 + 端口扫描，可选截图与漏洞扫描。</p>
+        <p className="page-desc">固定基础链路（子域发现 + Web 探测 + 端口扫描），并支持一键开启 AI 增强与扩展模块。</p>
       </div>
 
       {feedback && (
-        <div className="empty-state" style={{ color: feedback.ok ? "#16a34a" : "#dc2626", marginBottom: 12 }}>
+        <div className={`tool-feedback ${feedback.ok ? "ok" : "error"}`} style={{ marginBottom: 12 }}>
           {feedback.text}
         </div>
       )}
@@ -129,15 +245,44 @@ export function QuickScanPage() {
       <article className="panel">
         <header className="panel-header">
           <h2>扫描参数</h2>
-          <span className="panel-meta">项目: {activeProject?.name ?? "未选择项目"}</span>
+          <span className="panel-meta">项目：{activeProject?.name ?? "未选择项目"}</span>
         </header>
 
         <div className="panel-body">
-          <div className="form-group">
+          <div className="qs-status-grid">
+            <div className="qs-status-card">
+              <div className="qs-status-label">AI 字典状态</div>
+              <div className={`qs-status-value ${aiSubdictReady ? "ok" : "warn"}`}>
+                {aiSubdictReady ? "已就绪" : "未就绪"}
+              </div>
+              <div className="qs-status-desc">{aiBlockedReason}</div>
+            </div>
+
+            <div className="qs-status-card">
+              <div className="qs-status-label">提交目标数</div>
+              <div className="qs-status-value">{scanTargets.length}</div>
+              <div className="qs-status-desc">支持换行、空格、逗号分隔</div>
+            </div>
+
+            <div className="qs-status-card">
+              <div className="qs-status-label">主动字典大小</div>
+              <div className="qs-status-value">{scannerDefaults?.defaultDictSize ?? 1500}</div>
+              <div className="qs-status-desc">来自系统设置默认值</div>
+            </div>
+          </div>
+
+          <div className="qs-action-row">
+            <button type="button" className="qs-preset-btn" onClick={applyBasicPreset}>基础模式</button>
+            <button type="button" className="qs-preset-btn qs-preset-btn-accent" onClick={applyAIEnhancedPreset}>AI增强推荐</button>
+            <button type="button" className="qs-preset-btn" onClick={applyFullPreset}>全面模式</button>
+            <button type="button" className="qs-link-btn" onClick={() => navigate("/settings")}>去系统设置</button>
+          </div>
+
+          <div className="form-group" style={{ marginTop: 14 }}>
             <label className="form-label">扫描目标</label>
             <textarea
               className="form-input form-textarea"
-              placeholder="example.com&#10;example.org"
+              placeholder={"example.com\nexample.org"}
               value={scanTargetsRaw}
               onChange={(e) => setScanTargetsRaw(e.target.value)}
               rows={4}
@@ -146,13 +291,9 @@ export function QuickScanPage() {
 
           {activeProject && projectRootDomains.length > 0 && (
             <div className="panel-meta" style={{ marginTop: 8 }}>
-              项目范围: {projectRootDomains.join(", ")}
+              项目范围：{projectRootDomains.join(", ")}
             </div>
           )}
-
-          <div className="panel-meta" style={{ marginTop: 8 }}>
-            当前将提交 {scanTargets.length} 个目标，支持换行、空格或逗号分隔。
-          </div>
 
           <label className="form-label" style={{ marginTop: 16 }}>基础流程（固定）</label>
           <div className="module-grid">
@@ -162,38 +303,39 @@ export function QuickScanPage() {
           </div>
 
           <label className="form-label" style={{ marginTop: 16 }}>可选阶段</label>
-          <div className="module-grid">
-            <button className={`module-chip ${enableWitness ? "active" : ""}`} onClick={() => setEnableWitness((v) => !v)}>
-              截图 {enableWitness ? "ON" : "OFF"}
-            </button>
-            <button className={`module-chip ${enableNuclei ? "active" : ""}`} onClick={() => setEnableNuclei((v) => !v)}>
-              漏洞扫描 {enableNuclei ? "ON" : "OFF"}
-            </button>
-            <button className={`module-chip ${enableCors ? "active" : ""}`} onClick={() => setEnableCors((v) => !v)}>
-              高危CORS {enableCors ? "ON" : "OFF"}
-            </button>
-            <button className={`module-chip ${enableSubtakeover ? "active" : ""}`} onClick={() => setEnableSubtakeover((v) => !v)}>
-              子域接管 {enableSubtakeover ? "ON" : "OFF"}
-            </button>
-            <button className={`module-chip ${enableActiveSubs ? "active" : ""}`} onClick={() => setEnableActiveSubs((v) => !v)}>
-              主动子域 {enableActiveSubs ? "ON" : "OFF"}
-            </button>
-            <button className={`module-chip ${enableBbotActive ? "active" : ""}`} onClick={() => setEnableBbotActive((v) => !v)}>
-              BBOT主动扩展 {enableBbotActive ? "ON" : "OFF"}
-            </button>
-            <button className={`module-chip ${enableNotify ? "active" : ""}`} onClick={() => setEnableNotify((v) => !v)}>
-              通知 {enableNotify ? "ON" : "OFF"}
-            </button>
+          <div className="qs-toggle-grid">
+            {toggles.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={`qs-toggle-card ${item.value ? "active" : ""}`}
+                onClick={() => item.setValue(!item.value)}
+              >
+                <div className="qs-toggle-head">
+                  <span className="qs-toggle-title">{item.title}</span>
+                  <span className={`qs-toggle-state ${item.value ? "on" : "off"}`}>{item.value ? "ON" : "OFF"}</span>
+                </div>
+                <div className="qs-toggle-desc">{item.desc}</div>
+              </button>
+            ))}
           </div>
 
           <div className="panel-meta" style={{ marginTop: 12 }}>
-            执行流程: {previewModules.join(" -> ")} | 通知: {enableNotify ? "开启" : "关闭"}
+            执行流程：{previewModules.join(" -> ")} | 通知：{enableNotify ? "开启" : "关闭"}
           </div>
+
+          {enableActiveSubs && !aiSubdictReady && (
+            <div className="tool-config-hint" style={{ marginTop: 12 }}>
+              当前已开启主动子域，但 AI 字典未就绪，将退化为基础词表爆破。若需 AI 增强，请在系统设置中开启并配置完整。
+            </div>
+          )}
 
           <div style={{ marginTop: 20 }}>
             <button
-              className="btn btn-primary btn-neon"
-              onClick={() => { void handleQuickScan(); }}
+              className="btn btn-primary btn-neon qs-submit-btn"
+              onClick={() => {
+                void handleQuickScan();
+              }}
               disabled={createJob.isPending || !activeProject?.id || scanTargets.length === 0}
             >
               {createJob.isPending ? "提交中..." : "开始快速扫描"}
