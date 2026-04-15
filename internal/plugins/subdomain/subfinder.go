@@ -2,6 +2,7 @@ package subdomain
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -34,7 +35,7 @@ func (s *SubfinderPlugin) Name() string {
 }
 
 // Execute runs Subfinder for one or more root domains.
-func (s *SubfinderPlugin) Execute(input []string) ([]engine.Result, error) {
+func (s *SubfinderPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if _, err := exec.LookPath("subfinder"); err != nil {
 		return nil, fmt.Errorf("subfinder not found in PATH. Please install subfinder and ensure it's in your PATH")
 	}
@@ -55,7 +56,7 @@ func (s *SubfinderPlugin) Execute(input []string) ([]engine.Result, error) {
 		}
 		defer common.RemoveTempFile(tmpFile)
 
-		cmd := exec.Command("subfinder", "-dL", tmpFile, "-all", "-json", "-silent")
+		cmd := exec.CommandContext(ctx, "subfinder", "-dL", tmpFile, "-all", "-json", "-silent")
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create stdout pipe: %v", err)
@@ -89,7 +90,7 @@ func (s *SubfinderPlugin) Execute(input []string) ([]engine.Result, error) {
 		for _, domain := range input {
 			fmt.Printf("[Subfinder] Collecting subdomains for: %s\n", domain)
 
-			cmd := exec.Command("subfinder", "-d", domain, "-all", "-json", "-silent")
+			cmd := exec.CommandContext(ctx, "subfinder", "-d", domain, "-all", "-json", "-silent")
 			stdout, err := cmd.StdoutPipe()
 			if err != nil {
 				return nil, fmt.Errorf("failed to create stdout pipe: %v", err)

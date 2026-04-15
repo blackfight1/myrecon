@@ -2,6 +2,7 @@ package port
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	neturl "net/url"
@@ -72,7 +73,7 @@ func (t *TscanPortPlugin) Name() string {
 
 // Execute runs TscanClient in an isolated workdir and converts ipscan rows into
 // the existing open_port + port_service result contract.
-func (t *TscanPortPlugin) Execute(input []string) ([]engine.Result, error) {
+func (t *TscanPortPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	bin, err := resolveTscanBinary()
 	if err != nil {
 		return nil, err
@@ -125,7 +126,7 @@ func (t *TscanPortPlugin) Execute(input []string) ([]engine.Result, error) {
 		args = append(args, "-pa", t.extraPorts)
 	}
 
-	cmd := exec.Command(slot.binPath, args...)
+	cmd := exec.CommandContext(ctx, slot.binPath, args...)
 	cmd.Dir = slot.dir
 	output, runErr := cmd.CombinedOutput()
 

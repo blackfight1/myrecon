@@ -2,6 +2,7 @@ package subdomain
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,7 +30,7 @@ func (c *ChaosPlugin) Name() string {
 }
 
 // Execute runs chaos for one or more root domains.
-func (c *ChaosPlugin) Execute(input []string) ([]engine.Result, error) {
+func (c *ChaosPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if _, err := exec.LookPath("chaos"); err != nil {
 		return nil, fmt.Errorf("chaos not found in PATH. Please install chaos and ensure it's in your PATH")
 	}
@@ -57,7 +58,7 @@ func (c *ChaosPlugin) Execute(input []string) ([]engine.Result, error) {
 		if apiKey != "" {
 			args = append(args, "-key", apiKey)
 		}
-		finalResults, err := c.executeOnce(args, seen, results)
+		finalResults, err := c.executeOnce(ctx, args, seen, results)
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +71,7 @@ func (c *ChaosPlugin) Execute(input []string) ([]engine.Result, error) {
 		if apiKey != "" {
 			args = append(args, "-key", apiKey)
 		}
-		partial, err := c.executeOnce(args, seen, nil)
+		partial, err := c.executeOnce(ctx, args, seen, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -93,13 +94,13 @@ func resolveChaosAPIKey() string {
 	return defaultChaosAPIKey
 }
 
-func (c *ChaosPlugin) executeOnce(args []string, seen map[string]bool, seed []engine.Result) ([]engine.Result, error) {
+func (c *ChaosPlugin) executeOnce(ctx context.Context, args []string, seen map[string]bool, seed []engine.Result) ([]engine.Result, error) {
 	results := seed
 	if results == nil {
 		results = make([]engine.Result, 0, 256)
 	}
 
-	cmd := exec.Command("chaos", args...)
+	cmd := exec.CommandContext(ctx, "chaos", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chaos stdout pipe: %v", err)

@@ -1,6 +1,7 @@
 package vuln
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -68,7 +69,7 @@ func (c *CorsPlugin) Name() string {
 
 // Execute performs CORS checks for live HTTP targets.
 // Input format follows other vuln plugins: "url|rootDomain" or plain URL.
-func (c *CorsPlugin) Execute(input []string) ([]engine.Result, error) {
+func (c *CorsPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if !envBool("CORS_SCAN_ENABLED", true) {
 		return []engine.Result{}, nil
 	}
@@ -92,7 +93,7 @@ func (c *CorsPlugin) Execute(input []string) ([]engine.Result, error) {
 	for _, target := range targets {
 		tests := c.buildTests(target)
 		for _, test := range tests {
-			respHeaders, statusCode, err := c.requestWithOrigin(target.URL, test.origin)
+			respHeaders, statusCode, err := c.requestWithOrigin(ctx, target.URL, test.origin)
 			if err != nil {
 				continue
 			}
@@ -226,8 +227,8 @@ func (c *CorsPlugin) evaluate(test corsTest, headers http.Header) (corsTest, boo
 	return corsTest{}, false
 }
 
-func (c *CorsPlugin) requestWithOrigin(targetURL, origin string) (http.Header, int, error) {
-	req, err := http.NewRequest(http.MethodGet, targetURL, nil)
+func (c *CorsPlugin) requestWithOrigin(ctx context.Context, targetURL, origin string) (http.Header, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return nil, 0, err
 	}

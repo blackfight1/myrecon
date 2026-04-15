@@ -2,6 +2,7 @@ package subdomain
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -37,7 +38,7 @@ func (d *DNSXBruteforcePlugin) Name() string {
 }
 
 // Execute runs dnsx brute-force with root domains and dictionary words.
-func (d *DNSXBruteforcePlugin) Execute(input []string) ([]engine.Result, error) {
+func (d *DNSXBruteforcePlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if _, err := exec.LookPath("dnsx"); err != nil {
 		return nil, fmt.Errorf("dnsx not found in PATH. Please install dnsx and ensure it's in your PATH")
 	}
@@ -71,7 +72,7 @@ func (d *DNSXBruteforcePlugin) Execute(input []string) ([]engine.Result, error) 
 		args = append(args, "-r", d.resolversFile)
 	}
 
-	cmd := exec.Command("dnsx", args...)
+	cmd := exec.CommandContext(ctx, "dnsx", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create dnsx stdout pipe: %v", err)

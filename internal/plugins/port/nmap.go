@@ -2,6 +2,7 @@ package port
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"fmt"
 	"os"
@@ -28,7 +29,7 @@ func (n *NmapPlugin) Name() string {
 
 // Execute runs nmap service detection.
 // Expected input format: "ip:port:host" or "ip:port".
-func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
+func (n *NmapPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	nmapBin, err := resolveNmapBinary()
 	if err != nil {
 		return nil, err
@@ -86,7 +87,7 @@ func (n *NmapPlugin) Execute(input []string) ([]engine.Result, error) {
 
 		fmt.Printf("[Nmap] (%d/%d) Scanning %s on %d ports...\n", scannedCount, len(ipPorts), ip, len(ports))
 
-		cmd := exec.Command(nmapBin,
+		cmd := exec.CommandContext(ctx, nmapBin,
 			"-sV",
 			"-Pn",
 			"-T4",

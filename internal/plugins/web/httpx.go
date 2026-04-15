@@ -2,6 +2,7 @@ package web
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -43,7 +44,7 @@ func (h *HttpxPlugin) Name() string {
 }
 
 // Execute runs httpx against domains/subdomains and returns live web service results.
-func (h *HttpxPlugin) Execute(input []string) ([]engine.Result, error) {
+func (h *HttpxPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if _, err := exec.LookPath("httpx"); err != nil {
 		return nil, fmt.Errorf("httpx not found in PATH. Please install httpx and ensure it's in your PATH")
 	}
@@ -67,7 +68,7 @@ func (h *HttpxPlugin) Execute(input []string) ([]engine.Result, error) {
 	}
 	_ = tmpFile.Close()
 
-	cmd := exec.Command("httpx",
+	cmd := exec.CommandContext(ctx, "httpx",
 		"-l", tmpFile.Name(),
 		"-json",
 		"-sc",

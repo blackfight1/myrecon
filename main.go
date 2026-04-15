@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -193,8 +194,14 @@ func main() {
 		if err != nil || interval <= 0 {
 			log.Fatalf("invalid monitor-interval: %s", *monitorInterval)
 		}
+		dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
+		monDB, err := db.NewDatabase(dsn)
+		if err != nil {
+			log.Fatalf("database connection failed: %v", err)
+		}
 		notifier := plugins.NewDingTalkNotifierFromEnv(*enableNotify)
 		runMonitorLoop(
+			monDB,
 			strings.TrimSpace(*projectID),
 			strings.TrimSpace(*domain),
 			interval,
@@ -568,7 +575,7 @@ func runPortsOnly(subdomains []string, nucleiEnabled bool) ([]engine.Result, err
 		pipeline.SetVulnScanner(plugins.NewNucleiPlugin())
 	}
 
-	return pipeline.ExecuteFromSubdomains(subdomains)
+	return pipeline.ExecuteFromSubdomains(context.Background(), subdomains)
 }
 
 func runWitnessOnly(urls []string, screenshotDir string) ([]engine.Result, error) {
@@ -582,7 +589,7 @@ func runWitnessOnly(urls []string, screenshotDir string) ([]engine.Result, error
 		input = append(input, u+"|"+rootDomain)
 	}
 
-	return gowitnessPlugin.Execute(input)
+	return gowitnessPlugin.Execute(context.Background(), input)
 }
 
 func runSubsAndPorts(domains []string, nucleiEnabled, activeSubs bool, dictSize int, dnsResolvers string) ([]engine.Result, error) {
@@ -600,7 +607,7 @@ func runSubsAndPorts(domains []string, nucleiEnabled, activeSubs bool, dictSize 
 		pipeline.SetVulnScanner(plugins.NewNucleiPlugin())
 	}
 
-	networkResults, err := pipeline.ExecuteFromSubdomains(subdomains)
+	networkResults, err := pipeline.ExecuteFromSubdomains(context.Background(), subdomains)
 	return append(subResults, networkResults...), err
 }
 
@@ -618,7 +625,7 @@ func runSubsAndWitness(domains []string, screenshotDir string, nucleiEnabled, ac
 		pipeline.SetVulnScanner(plugins.NewNucleiPlugin())
 	}
 
-	networkResults, err := pipeline.ExecuteFromSubdomains(subdomains)
+	networkResults, err := pipeline.ExecuteFromSubdomains(context.Background(), subdomains)
 	return append(subResults, networkResults...), err
 }
 
@@ -634,7 +641,7 @@ func runPortsAndWitness(subdomains []string, screenshotDir string, nucleiEnabled
 		pipeline.SetVulnScanner(plugins.NewNucleiPlugin())
 	}
 
-	return pipeline.ExecuteFromSubdomains(subdomains)
+	return pipeline.ExecuteFromSubdomains(context.Background(), subdomains)
 }
 
 func runFullPipeline(domains []string, screenshotDir string, nucleiEnabled, activeSubs bool, dictSize int, dnsResolvers string) ([]engine.Result, error) {
@@ -653,7 +660,7 @@ func runFullPipeline(domains []string, screenshotDir string, nucleiEnabled, acti
 		pipeline.SetVulnScanner(plugins.NewNucleiPlugin())
 	}
 
-	networkResults, err := pipeline.ExecuteFromSubdomains(subdomains)
+	networkResults, err := pipeline.ExecuteFromSubdomains(context.Background(), subdomains)
 	return append(subResults, networkResults...), err
 }
 
@@ -695,7 +702,7 @@ func runPassiveSubdomainCollection(domains []string) ([]engine.Result, []string,
 	pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
 	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
 
-	results, err := pipeline.Execute(domains)
+	results, err := pipeline.Execute(context.Background(), domains)
 	subdomains := extractDomainResults(results)
 	rawDomainItems := 0
 	for _, r := range results {
@@ -750,7 +757,7 @@ func runActiveSubdomainExpansion(rootDomains, passiveSubdomains []string, dictSi
 
 func executeScannerWithStatus(scanner engine.Scanner, input []string) ([]engine.Result, error) {
 	start := time.Now()
-	results, err := scanner.Execute(input)
+	results, err := scanner.Execute(context.Background(), input)
 	status := buildLocalPluginStatusResult(scanner.Name(), len(results), err, time.Since(start))
 	out := make([]engine.Result, 0, len(results)+1)
 	out = append(out, status)

@@ -1127,7 +1127,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 
 	// Collect subdomains
 	s.appendJobLog(task.ProjectID, jobID, "info", "闃舵寮€濮? 瀛愬煙鏀堕泦")
-	subResults, subdomains, err := s.collectSubdomains([]string{rootDomain}, true)
+	subResults, subdomains, err := s.collectSubdomains(context.Background(), []string{rootDomain}, true)
 	if err != nil {
 		errMsg := fmt.Sprintf("subdomain collection failed: %v", err)
 		log.Printf("[Scheduler] %s", errMsg)
@@ -1140,7 +1140,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 
 	// Run network pipeline (httpx + ports)
 	s.appendJobLogf(task.ProjectID, jobID, "info", "闃舵寮€濮? 缃戠粶鎺㈡祴 (targets=%d)", len(subdomains))
-	networkResults, err := s.runNetworkPipeline(subdomains, true, target.MonitorPorts, false, false, false, false, s.screenshotDir)
+	networkResults, err := s.runNetworkPipeline(context.Background(), subdomains, true, target.MonitorPorts, false, false, false, false, s.screenshotDir)
 	if err != nil {
 		log.Printf("[Scheduler] network pipeline warning for %s: %v", rootDomain, err)
 		s.appendJobLogf(task.ProjectID, jobID, "warn", "缃戠粶鎺㈡祴鍛婅: %v", err)
@@ -1804,21 +1804,21 @@ func (s *Server) runMonitorVulnPipeline(projectID, rootDomain string, runID uint
 	var firstErr error
 
 	if enableNuclei {
-		nucleiResults, err := plugins.NewNucleiPlugin().Execute(inputs)
+		nucleiResults, err := plugins.NewNucleiPlugin().Execute(context.Background(), inputs)
 		if err != nil {
 			firstErr = err
 		}
 		allResults = append(allResults, nucleiResults...)
 	}
 	if enableCors {
-		corsResults, err := plugins.NewCorsPlugin().Execute(inputs)
+		corsResults, err := plugins.NewCorsPlugin().Execute(context.Background(), inputs)
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 		allResults = append(allResults, corsResults...)
 	}
 	if enableSubtakeover {
-		subtakeoverResults, err := plugins.NewSubTakeoverPlugin().Execute(inputs)
+		subtakeoverResults, err := plugins.NewSubTakeoverPlugin().Execute(context.Background(), inputs)
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -3837,7 +3837,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	if hasSubs {
 		s.appendJobLog(projectID, jobID, "info", "闃舵寮€濮? 瀛愬煙鏀堕泦")
 		includePassiveBBOT := !hasBbotActive
-		subResults, subdomains, err := s.collectSubdomains(domains, includePassiveBBOT)
+		subResults, subdomains, err := s.collectSubdomains(ctx, domains, includePassiveBBOT)
 		allResults = append(allResults, subResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("subdomain collection failed: %v", err)
@@ -3854,7 +3854,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 
 		if hasBbotActive {
 			s.appendJobLog(projectID, jobID, "info", "闃舵寮€濮? BBOT 涓诲姩鎵╁睍")
-			bbotResults, bbotSubdomains, err := s.expandBbotActiveSubdomains(domains)
+			bbotResults, bbotSubdomains, err := s.expandBbotActiveSubdomains(ctx, domains)
 			allResults = append(allResults, bbotResults...)
 			if err != nil {
 				log.Printf("[Scan] Job %s bbot active warning: %v", jobID, err)
@@ -3873,7 +3873,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 
 		if hasActiveSubs {
 			s.appendJobLogf(projectID, jobID, "info", "闃舵寮€濮? 涓诲姩鏋氫妇 (dictSize=%d)", dictSize)
-			activeResults, activeSubdomains, err := s.expandActiveSubdomains(domains, subdomains, dictSize, dnsResolvers)
+			activeResults, activeSubdomains, err := s.expandActiveSubdomains(ctx, domains, subdomains, dictSize, dnsResolvers)
 			allResults = append(allResults, activeResults...)
 			if err != nil {
 				log.Printf("[Scan] Job %s active subs warning: %v", jobID, err)
@@ -3892,7 +3892,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 		if hasPorts || hasHttpx || hasSubTakeover {
 			s.appendJobLogf(projectID, jobID, "info", "闃舵寮€濮? 缃戠粶鎺㈡祴 (targets=%d httpx=%v ports=%v nuclei=%v cors=%v subtakeover=%v witness=%v)",
 				len(subdomains), hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness)
-			networkResults, err := s.runNetworkPipeline(subdomains, hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness, screenshotDir)
+			networkResults, err := s.runNetworkPipeline(ctx, subdomains, hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness, screenshotDir)
 			allResults = append(allResults, networkResults...)
 			if err != nil {
 				scanErr = fmt.Errorf("network stage failed: %v", err)
@@ -3910,7 +3910,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	} else if hasPorts || hasHttpx || hasSubTakeover {
 		s.appendJobLogf(projectID, jobID, "info", "闃舵寮€濮? 缃戠粶鎺㈡祴 (targets=%d httpx=%v ports=%v nuclei=%v cors=%v subtakeover=%v witness=%v)",
 			len(domains), hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness)
-		networkResults, err := s.runNetworkPipeline(domains, hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness, screenshotDir)
+		networkResults, err := s.runNetworkPipeline(ctx, domains, hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness, screenshotDir)
 		allResults = append(allResults, networkResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("network stage failed: %v", err)
@@ -4058,7 +4058,7 @@ func (s *Server) appendPluginStatusLogs(projectID, jobID string, results []engin
 	}
 }
 
-func (s *Server) collectSubdomains(rootDomains []string, includePassiveBBOT bool) ([]engine.Result, []string, error) {
+func (s *Server) collectSubdomains(ctx context.Context, rootDomains []string, includePassiveBBOT bool) ([]engine.Result, []string, error) {
 	pipeline := engine.NewPipeline()
 	isBatch := len(rootDomains) > 1
 	pipeline.AddDomainScanner(plugins.NewSubfinderPlugin(isBatch))
@@ -4068,25 +4068,25 @@ func (s *Server) collectSubdomains(rootDomains []string, includePassiveBBOT bool
 		pipeline.AddDomainScanner(plugins.NewBBOTPlugin(true))
 	}
 	pipeline.AddDomainScanner(plugins.NewShosubgoPlugin())
-	results, err := pipeline.Execute(rootDomains)
+	results, err := pipeline.Execute(ctx, rootDomains)
 	subdomains := extractDomains(results)
 	log.Printf("[Scan] Passive collection: %d unique subdomains", len(subdomains))
 	return results, subdomains, err
 }
 
-func (s *Server) expandBbotActiveSubdomains(rootDomains []string) ([]engine.Result, []string, error) {
+func (s *Server) expandBbotActiveSubdomains(ctx context.Context, rootDomains []string) ([]engine.Result, []string, error) {
 	scanner := plugins.NewBBOTPlugin(false)
-	results, err := scanner.Execute(rootDomains)
+	results, err := scanner.Execute(ctx, rootDomains)
 	subdomains := extractDomains(results)
 	log.Printf("[Scan] BBOT active expansion: %d unique subdomains", len(subdomains))
 	return results, subdomains, err
 }
 
-func (s *Server) expandActiveSubdomains(rootDomains, passiveSubdomains []string, dictSize int, dnsResolvers string) ([]engine.Result, []string, error) {
+func (s *Server) expandActiveSubdomains(ctx context.Context, rootDomains, passiveSubdomains []string, dictSize int, dnsResolvers string) ([]engine.Result, []string, error) {
 	var allResults []engine.Result
 	dictPlugin := plugins.NewDictgenPlugin(dictSize)
 	dictInput := append(append([]string{}, passiveSubdomains...), rootDomains...)
-	dictResults, err := dictPlugin.Execute(dictInput)
+	dictResults, err := dictPlugin.Execute(ctx, dictInput)
 	allResults = append(allResults, dictResults...)
 	if err != nil {
 		return allResults, nil, err
@@ -4103,7 +4103,7 @@ func (s *Server) expandActiveSubdomains(rootDomains, passiveSubdomains []string,
 		return allResults, []string{}, nil
 	}
 	brutePlugin := plugins.NewDNSXBruteforcePlugin(rootDomains, dnsResolvers)
-	bruteResults, err := brutePlugin.Execute(words)
+	bruteResults, err := brutePlugin.Execute(ctx, words)
 	allResults = append(allResults, bruteResults...)
 	if err != nil {
 		return allResults, nil, err
@@ -4111,7 +4111,7 @@ func (s *Server) expandActiveSubdomains(rootDomains, passiveSubdomains []string,
 	return allResults, extractDomains(bruteResults), nil
 }
 
-func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, enableNuclei, enableCors, enableSubTakeover, enableWitness bool, screenshotDir string) ([]engine.Result, error) {
+func (s *Server) runNetworkPipeline(ctx context.Context, targets []string, enableHTTPX, enablePorts, enableNuclei, enableCors, enableSubTakeover, enableWitness bool, screenshotDir string) ([]engine.Result, error) {
 	pipeline := engine.NewPipeline()
 	if enableHTTPX {
 		pipeline.SetHttpxScanner(plugins.NewHttpxPlugin())
@@ -4137,7 +4137,7 @@ func (s *Server) runNetworkPipeline(targets []string, enableHTTPX, enablePorts, 
 	if enableWitness {
 		pipeline.SetScreenshotScanner(plugins.NewGowitnessPlugin(screenshotDir))
 	}
-	return pipeline.ExecuteFromSubdomains(targets)
+	return pipeline.ExecuteFromSubdomains(ctx, targets)
 }
 
 func configuredPortScannerEngine() string {

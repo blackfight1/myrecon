@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -18,7 +19,7 @@ type Result struct {
 // Scanner defines scanner plugin behavior.
 type Scanner interface {
 	Name() string
-	Execute(input []string) ([]Result, error)
+	Execute(ctx context.Context, input []string) ([]Result, error)
 }
 
 // Pipeline orchestrates scan stages.
@@ -90,7 +91,7 @@ type scannerResult struct {
 }
 
 // Execute runs the full pipeline from root domains.
-func (p *Pipeline) Execute(input []string) ([]Result, error) {
+func (p *Pipeline) Execute(ctx context.Context, input []string) ([]Result, error) {
 	var allResults []Result
 	var currentInput []string
 
@@ -103,7 +104,7 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 			go func(s Scanner) {
 				defer wg.Done()
 				start := time.Now()
-				results, err := s.Execute(input)
+				results, err := s.Execute(ctx, input)
 				status := buildPluginStatusResult(s.Name(), len(results), err, time.Since(start))
 				resultChan <- scannerResult{
 					name:     s.Name(),
@@ -148,7 +149,7 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 		currentInput = input
 	}
 
-	networkResults, err := p.runNetworkStage(currentInput)
+	networkResults, err := p.runNetworkStage(ctx, currentInput)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +157,7 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 
 	for _, scanner := range p.nextScanners {
 		start := time.Now()
-		results, err := scanner.Execute(currentInput)
+		results, err := scanner.Execute(ctx, currentInput)
 		allResults = append(allResults, buildPluginStatusResult(scanner.Name(), len(results), err, time.Since(start)))
 		if err != nil {
 			return nil, err
@@ -176,11 +177,11 @@ func (p *Pipeline) Execute(input []string) ([]Result, error) {
 }
 
 // ExecuteFromSubdomains starts from known subdomains.
-func (p *Pipeline) ExecuteFromSubdomains(subdomains []string) ([]Result, error) {
-	return p.runNetworkStage(subdomains)
+func (p *Pipeline) ExecuteFromSubdomains(ctx context.Context, subdomains []string) ([]Result, error) {
+	return p.runNetworkStage(ctx, subdomains)
 }
 
-func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
+func (p *Pipeline) runNetworkStage(ctx context.Context, input []string) ([]Result, error) {
 	var allResults []Result
 
 	if p.httpxScanner == nil && len(p.portScanners) == 0 && len(p.vulnScanners) == 0 && p.screenshotScanner == nil {
@@ -195,7 +196,7 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			results, err := p.httpxScanner.Execute(input)
+			results, err := p.httpxScanner.Execute(ctx, input)
 			status := buildPluginStatusResult(p.httpxScanner.Name(), len(results), err, time.Since(start))
 			resultChan <- scannerResult{name: p.httpxScanner.Name(), results: results, err: err, statuses: []Result{status}}
 		}()
@@ -211,7 +212,7 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 
 			for _, scanner := range p.portScanners {
 				start := time.Now()
-				results, err := scanner.Execute(portInput)
+				results, err := scanner.Execute(ctx, portInput)
 				statusResults = append(statusResults, buildPluginStatusResult(scanner.Name(), len(results), err, time.Since(start)))
 
 				if err != nil {
@@ -309,7 +310,7 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 			}
 			fmt.Printf("[Vuln] %s scanning %d targets...\n", vulnScanner.Name(), len(scanInput))
 			start := time.Now()
-			vulnResults, err := vulnScanner.Execute(scanInput)
+			vulnResults, err := vulnScanner.Execute(ctx, scanInput)
 			allResults = append(allResults, buildPluginStatusResult(vulnScanner.Name(), len(vulnResults), err, time.Since(start)))
 			if err != nil {
 				if strings.Contains(err.Error(), "not found in PATH") {
@@ -326,7 +327,7 @@ func (p *Pipeline) runNetworkStage(input []string) ([]Result, error) {
 	if p.screenshotScanner != nil && len(screenshotInputs) > 0 {
 		fmt.Printf("[Screenshot] capturing %d live URLs...\n", len(screenshotInputs))
 		start := time.Now()
-		screenshotResults, err := p.screenshotScanner.Execute(screenshotInputs)
+		screenshotResults, err := p.screenshotScanner.Execute(ctx, screenshotInputs)
 		allResults = append(allResults, buildPluginStatusResult(p.screenshotScanner.Name(), len(screenshotResults), err, time.Since(start)))
 		if err != nil {
 			if strings.Contains(err.Error(), "not found in PATH") {

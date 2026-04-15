@@ -1,6 +1,7 @@
 package subdomain
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -30,7 +31,7 @@ func (d *DictgenPlugin) Name() string {
 }
 
 // Execute generates dictionary words suitable for active brute-force.
-func (d *DictgenPlugin) Execute(input []string) ([]engine.Result, error) {
+func (d *DictgenPlugin) Execute(_ context.Context, input []string) ([]engine.Result, error) {
 	domains := normalizeDomains(input)
 	wordScores := map[string]int{}
 

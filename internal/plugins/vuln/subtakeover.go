@@ -1,6 +1,7 @@
 package vuln
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -89,7 +90,7 @@ func (s *SubTakeoverPlugin) Name() string {
 
 // Execute runs subjack and converts findings into the unified vulnerability format.
 // Input supports either plain host/domain or "target|rootDomain" style.
-func (s *SubTakeoverPlugin) Execute(input []string) ([]engine.Result, error) {
+func (s *SubTakeoverPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if !envBool("SUBTAKEOVER_SCAN_ENABLED", true) {
 		return []engine.Result{}, nil
 	}
@@ -167,7 +168,7 @@ func (s *SubTakeoverPlugin) Execute(input []string) ([]engine.Result, error) {
 		args = append(args, "-r", s.resolverList)
 	}
 
-	cmd := exec.Command("subjack", args...)
+	cmd := exec.CommandContext(ctx, "subjack", args...)
 	output, runErr := cmd.CombinedOutput()
 
 	results, parseErr := s.parseSubjackOutput(outputPath, rootHints)

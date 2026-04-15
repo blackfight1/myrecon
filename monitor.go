@@ -43,13 +43,7 @@ type monitorChangeSummary struct {
 	Highlights        []string
 }
 
-func runMonitorLoop(projectID, rootDomain string, interval time.Duration, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) {
-	dsn := "host=localhost user=hunter password=hunter123 dbname=hunter port=5432 sslmode=disable"
-	database, err := db.NewDatabase(dsn)
-	if err != nil {
-		fmt.Printf("[Monitor] database connection failed: %v\n", err)
-		return
-	}
+func runMonitorLoop(database *db.Database, projectID, rootDomain string, interval time.Duration, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier plugins.Notifier) {
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		projectID = "default"
@@ -77,7 +71,7 @@ func runMonitorLoop(projectID, rootDomain string, interval time.Duration, dryRun
 		runDueMonitorTasks(database, dryRun, activeSubs, dictSize, dnsResolvers, notifier)
 	}
 }
-func runDueMonitorTasks(database *db.Database, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) {
+func runDueMonitorTasks(database *db.Database, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier plugins.Notifier) {
 	if recovered, err := database.RecoverStaleRunningTasks(monitorTaskStaleAfter); err != nil {
 		fmt.Printf("[Monitor] recover stale tasks failed: %v\n", err)
 	} else if recovered > 0 {
@@ -91,7 +85,7 @@ func runDueMonitorTasks(database *db.Database, dryRun bool, activeSubs bool, dic
 	}
 }
 
-func runOneDueMonitorTask(database *db.Database, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) bool {
+func runOneDueMonitorTask(database *db.Database, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier plugins.Notifier) bool {
 	task, err := database.ClaimDueMonitorTask()
 	if err != nil {
 		fmt.Printf("[Monitor] claim due task failed: %v\n", err)
@@ -105,7 +99,7 @@ func runOneDueMonitorTask(database *db.Database, dryRun bool, activeSubs bool, d
 	return true
 }
 
-func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier *plugins.DingTalkNotifier) {
+func executeMonitorTask(database *db.Database, task *db.MonitorTask, dryRun bool, activeSubs bool, dictSize int, dnsResolvers string, notifier plugins.Notifier) {
 	start := time.Now()
 	rootDomain := task.RootDomain
 	projectID := strings.TrimSpace(task.ProjectID)
@@ -512,11 +506,7 @@ func extractStringSlice(v interface{}) []string {
 
 func equalStringSet(a, b []string) bool {
 	if len(a) != len(b) {
-		ac := append([]string{}, a...)
-		bc := append([]string{}, b...)
-		sort.Strings(ac)
-		sort.Strings(bc)
-		return strings.Join(ac, ",") == strings.Join(bc, ",")
+		return false
 	}
 	ac := append([]string{}, a...)
 	bc := append([]string{}, b...)

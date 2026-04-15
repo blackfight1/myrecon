@@ -2,6 +2,7 @@ package subdomain
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,7 +29,7 @@ func (b *BBOTPlugin) Name() string {
 }
 
 // Execute runs BBOT subdomain enumeration for all input root domains.
-func (b *BBOTPlugin) Execute(input []string) ([]engine.Result, error) {
+func (b *BBOTPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if _, err := exec.LookPath("bbot"); err != nil {
 		return nil, fmt.Errorf("bbot not found in PATH. Please install bbot and ensure it's in your PATH")
 	}
@@ -62,7 +63,7 @@ func (b *BBOTPlugin) Execute(input []string) ([]engine.Result, error) {
 		args = append(args, "-rf", "passive", "-ef", "aggressive")
 	}
 
-	cmd := exec.Command("bbot", args...)
+	cmd := exec.CommandContext(ctx, "bbot", args...)
 	_, runErr := cmd.CombinedOutput()
 
 	subdomains, parseErr := readSubdomainsFile(outputFile)

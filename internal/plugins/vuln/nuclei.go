@@ -2,6 +2,7 @@ package vuln
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -66,7 +67,7 @@ func (n *NucleiPlugin) Name() string {
 }
 
 // Execute runs nuclei against input URLs and emits vulnerability results.
-func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
+func (n *NucleiPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if _, err := exec.LookPath("nuclei"); err != nil {
 		return nil, fmt.Errorf("nuclei not found in PATH. Please install nuclei and ensure it's in your PATH")
 	}
@@ -125,7 +126,7 @@ func (n *NucleiPlugin) Execute(input []string) ([]engine.Result, error) {
 		strings.Join(n.excludeSeverities, ","),
 		strings.Join(n.excludeTags, ","),
 	)
-	cmd := exec.Command("nuclei", args...)
+	cmd := exec.CommandContext(ctx, "nuclei", args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

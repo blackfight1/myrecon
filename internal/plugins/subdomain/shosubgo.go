@@ -2,6 +2,7 @@ package subdomain
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,7 +25,7 @@ func (s *ShosubgoPlugin) Name() string {
 }
 
 // Execute runs shosubgo for all input domains.
-func (s *ShosubgoPlugin) Execute(input []string) ([]engine.Result, error) {
+func (s *ShosubgoPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if _, err := exec.LookPath("shosubgo"); err != nil {
 		return nil, fmt.Errorf("shosubgo not found in PATH. Please install shosubgo and ensure it's in your PATH")
 	}
@@ -50,7 +51,7 @@ func (s *ShosubgoPlugin) Execute(input []string) ([]engine.Result, error) {
 
 		fmt.Printf("[Shosubgo] Collecting subdomains from Shodan for: %s\n", domain)
 
-		cmd := exec.Command("shosubgo", "-d", domain, "-s", apiKey)
+		cmd := exec.CommandContext(ctx, "shosubgo", "-d", domain, "-s", apiKey)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create stdout pipe: %v", err)

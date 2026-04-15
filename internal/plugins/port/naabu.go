@@ -2,6 +2,7 @@ package port
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -32,7 +33,7 @@ func (n *NaabuPlugin) Name() string {
 }
 
 // Execute runs naabu and excludes 80/443 since httpx already covers web services.
-func (n *NaabuPlugin) Execute(input []string) ([]engine.Result, error) {
+func (n *NaabuPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if _, err := exec.LookPath("naabu"); err != nil {
 		return nil, fmt.Errorf("naabu not found in PATH. Please install naabu and ensure it's in your PATH")
 	}
@@ -56,7 +57,7 @@ func (n *NaabuPlugin) Execute(input []string) ([]engine.Result, error) {
 	}
 	_ = tmpFile.Close()
 
-	cmd := exec.Command("naabu",
+	cmd := exec.CommandContext(ctx, "naabu",
 		"-list", tmpFile.Name(),
 		"-top-ports", "1000",
 		"-exclude-ports", "80,443",

@@ -1,6 +1,7 @@
 package subdomain
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -23,7 +24,7 @@ func (f *FindomainPlugin) Name() string {
 }
 
 // Execute runs findomain for one or more root domains.
-func (f *FindomainPlugin) Execute(input []string) ([]engine.Result, error) {
+func (f *FindomainPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if _, err := exec.LookPath("findomain"); err != nil {
 		return nil, fmt.Errorf("findomain not found in PATH. Please install findomain and ensure it's in your PATH")
 	}
@@ -46,7 +47,7 @@ func (f *FindomainPlugin) Execute(input []string) ([]engine.Result, error) {
 	}
 	defer os.Remove(outputFile)
 
-	cmd := exec.Command("findomain", "--stdin", "-q", "-u", outputFile)
+	cmd := exec.CommandContext(ctx, "findomain", "--stdin", "-q", "-u", outputFile)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

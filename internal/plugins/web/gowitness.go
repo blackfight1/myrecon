@@ -2,6 +2,7 @@ package web
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,7 +37,7 @@ func (g *GowitnessPlugin) Name() string {
 
 // Execute runs gowitness screenshots.
 // Input format: []string{"url|root_domain", ...}.
-func (g *GowitnessPlugin) Execute(input []string) ([]engine.Result, error) {
+func (g *GowitnessPlugin) Execute(ctx context.Context, input []string) ([]engine.Result, error) {
 	if _, err := exec.LookPath("gowitness"); err != nil {
 		return nil, fmt.Errorf("gowitness not found in PATH. Please install gowitness and ensure it's in your PATH")
 	}
@@ -81,7 +82,7 @@ func (g *GowitnessPlugin) Execute(input []string) ([]engine.Result, error) {
 		}
 		_ = tmpFile.Close()
 
-		cmd := exec.Command("gowitness",
+		cmd := exec.CommandContext(ctx, "gowitness",
 			"scan", "file",
 			"-f", tmpFile.Name(),
 			"--ports-small",
