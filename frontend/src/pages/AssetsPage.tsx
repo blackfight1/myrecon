@@ -175,6 +175,7 @@ export function AssetsPage() {
                   <th>域名</th>
                   <th>URL</th>
                   <th>IP</th>
+                  <th>新增</th>
                   <th>状态码</th>
                   <th>标题</th>
                   <th>技术栈</th>
@@ -188,6 +189,7 @@ export function AssetsPage() {
                     <td><DomainLink asset={a} /></td>
                     <td>{a.url || <span className="cell-muted">—</span>}</td>
                     <td>{a.ip ? <span className="cell-mono">{a.ip}</span> : <span className="cell-muted">—</span>}</td>
+                    <td>{a.monitorNew ? <span className="badge badge-warning">新增</span> : <span className="cell-muted">-</span>}</td>
                     <td>
                       {a.statusCode ? (
                         <span className={a.statusCode >= 200 && a.statusCode < 300 ? "badge badge-success" : a.statusCode >= 400 ? "badge badge-danger" : "badge badge-warning"}>
@@ -203,7 +205,7 @@ export function AssetsPage() {
                   </tr>
                 ))}
                 {items.length === 0 && (
-                  <tr><td colSpan={8} style={{ textAlign: "center", padding: 32, color: "#888" }}>暂无数据</td></tr>
+                  <tr><td colSpan={9} style={{ textAlign: "center", padding: 32, color: "#888" }}>暂无数据</td></tr>
                 )}
               </tbody>
             </table>

@@ -70,6 +70,7 @@ export interface Asset {
   ip?: string;
   pool?: "verified" | "candidate";
   verifyStatus?: "pending" | "verified" | string;
+  monitorNew?: boolean;
   statusCode?: number;
   title?: string;
   technologies?: string[];

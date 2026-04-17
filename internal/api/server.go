@@ -171,6 +171,7 @@ type assetResponse struct {
 	IP           string   `json:"ip,omitempty"`
 	Pool         string   `json:"pool,omitempty"`
 	VerifyStatus string   `json:"verifyStatus,omitempty"`
+	MonitorNew   bool     `json:"monitorNew"`
 	StatusCode   int      `json:"statusCode,omitempty"`
 	Title        string   `json:"title,omitempty"`
 	Technologies []string `json:"technologies,omitempty"`
@@ -2910,6 +2911,7 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 					LastSeen:     timeToISO(c.LastSeen),
 				})
 			}
+			s.markMonitorNewAssets(projectID, resp)
 			writeJSON(w, http.StatusOK, pagedAssetsResponse{
 				Items:    resp,
 				Page:     page,
@@ -2939,6 +2941,7 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 				LastSeen:     timeToISO(c.LastSeen),
 			})
 		}
+		s.markMonitorNewAssets(projectID, resp)
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -3015,6 +3018,7 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 				LastSeen:     timeToISO(a.LastSeen),
 			})
 		}
+		s.markMonitorNewAssets(projectID, resp)
 		writeJSON(w, http.StatusOK, pagedAssetsResponse{
 			Items:    resp,
 			Page:     page,
@@ -3047,8 +3051,76 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 			LastSeen:     timeToISO(a.LastSeen),
 		})
 	}
+	s.markMonitorNewAssets(projectID, resp)
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) markMonitorNewAssets(projectID string, items []assetResponse) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" || len(items) == 0 {
+		return
+	}
+
+	domainSeen := make(map[string]bool, len(items))
+	ipSeen := make(map[string]bool, len(items))
+	domains := make([]string, 0, len(items))
+	ips := make([]string, 0, len(items))
+	for _, it := range items {
+		d := strings.ToLower(strings.TrimSpace(it.Domain))
+		if d != "" && !domainSeen[d] {
+			domainSeen[d] = true
+			domains = append(domains, d)
+		}
+		ip := strings.TrimSpace(it.IP)
+		if ip != "" && !ipSeen[ip] {
+			ipSeen[ip] = true
+			ips = append(ips, ip)
+		}
+	}
+	if len(domains) == 0 && len(ips) == 0 {
+		return
+	}
+
+	type monitorKeyRow struct {
+		Domain string
+		IP     string
+	}
+	rows := make([]monitorKeyRow, 0, len(items))
+	query := s.db.DB.Model(&db.MonitorEvent{}).
+		Select("domain, ip").
+		Where("project_id = ? AND event_type = ? AND status = ?", projectID, "new_live", monitorEventStatusOpen)
+	switch {
+	case len(domains) > 0 && len(ips) > 0:
+		query = query.Where("(LOWER(domain) IN ? OR ip IN ?)", domains, ips)
+	case len(domains) > 0:
+		query = query.Where("LOWER(domain) IN ?", domains)
+	case len(ips) > 0:
+		query = query.Where("ip IN ?", ips)
+	}
+	if err := query.Find(&rows).Error; err != nil {
+		return
+	}
+
+	openDomains := make(map[string]bool, len(rows))
+	openIPs := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if d := strings.ToLower(strings.TrimSpace(row.Domain)); d != "" {
+			openDomains[d] = true
+		}
+		if ip := strings.TrimSpace(row.IP); ip != "" {
+			openIPs[ip] = true
+		}
+	}
+	if len(openDomains) == 0 && len(openIPs) == 0 {
+		return
+	}
+
+	for i := range items {
+		d := strings.ToLower(strings.TrimSpace(items[i].Domain))
+		ip := strings.TrimSpace(items[i].IP)
+		items[i].MonitorNew = openDomains[d] || (ip != "" && openIPs[ip])
+	}
 }
 
 func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
