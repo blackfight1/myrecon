@@ -147,9 +147,8 @@ CHAOS_KEY=your_key
 # 或：
 PDCP_API_KEY=your_key
 
-# DingTalk 通知（开启 -notify 时）
-DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxxx
-DINGTALK_SECRET=SECxxxxxxxxxxxxxxxx
+# 飞书通知（开启 -notify 时）
+FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 # CORS（可选）
 # 默认仅允许 http://localhost:5173 和 http://127.0.0.1:5173
@@ -216,8 +215,7 @@ PowerShell 示例：
 
 ```powershell
 $env:SHODAN_API_KEY="your_key"
-$env:DINGTALK_WEBHOOK="https://oapi.dingtalk.com/robot/send?access_token=xxxx"
-$env:DINGTALK_SECRET="SECxxxx"
+$env:FEISHU_WEBHOOK="https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 $env:CORS_ALLOWED_ORIGINS="http://localhost:5173"
 ```
 
@@ -351,8 +349,9 @@ go run . -mode scan -scan-delete-domain example.com
 
 ## 通知行为说明
 
-- `scan` 模式：任务结束后发送摘要通知（成功/失败/取消），受任务级 `notify` 和全局 `DINGTALK_WEBHOOK` 控制。
-- `monitor` 模式：仅在检测到变更时发送通知，且有降噪冷却；目前由全局 `DINGTALK_WEBHOOK` 控制。
+- `scan` 模式：任务结束后发送摘要通知（成功/失败/取消），受任务级 `notify` 和全局通知 webhook 控制。
+- `monitor` 模式：仅在检测到变更时发送通知，且有降噪冷却；由全局通知 webhook 控制。
+- 通知 webhook：`FEISHU_WEBHOOK`。
 - `monitor` 通知内容包含：新资产 URL/标题/技术栈、端口变化（OPEN/CLOSED/CHANGED）摘要。
 
 ## 端口指纹显示说明

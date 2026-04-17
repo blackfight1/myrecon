@@ -206,11 +206,14 @@ func (t *TscanPortPlugin) prepareRuntimeSlot(sourceBin string, index int) (*tsca
 
 	sourceDir := filepath.Dir(sourceBin)
 	requiredFiles := []struct {
-		name string
-		perm os.FileMode
+		name     string
+		perm     os.FileMode
+		optional bool
 	}{
-		{name: filepath.Base(slot.binPath), perm: 0o755},
-		{name: "JsRule.json", perm: 0o644},
+		{name: filepath.Base(slot.binPath), perm: 0o755, optional: false},
+		{name: "JsRule.json", perm: 0o644, optional: true},
+		{name: "config.db", perm: 0o644, optional: true},
+		{name: "config.yaml", perm: 0o644, optional: true},
 	}
 
 	for _, file := range requiredFiles {
@@ -222,7 +225,7 @@ func (t *TscanPortPlugin) prepareRuntimeSlot(sourceBin string, index int) (*tsca
 		}
 		st, err := os.Stat(src)
 		if err != nil {
-			if file.name == "JsRule.json" && os.IsNotExist(err) {
+			if file.optional && os.IsNotExist(err) {
 				continue
 			}
 			return nil, err
@@ -278,8 +281,6 @@ func (t *TscanPortPlugin) unlockSlot(slot *tscanRuntimeSlot) error {
 
 func cleanupRuntimeSlot(slotDir string) error {
 	patterns := []string{
-		"config.db",
-		"config.yaml",
 		"port.txt",
 		"url.txt",
 		"poc.txt",
@@ -315,13 +316,6 @@ func cleanupRuntimeSlot(slotDir string) error {
 			if err := os.RemoveAll(match); err != nil && !os.IsNotExist(err) {
 				return err
 			}
-		}
-	}
-
-	for _, base := range []string{"config.db", "config.yaml"} {
-		path := filepath.Join(slotDir, base)
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
 		}
 	}
 	return nil

@@ -200,7 +200,7 @@ export function SettingsPage() {
 
           <div className="panel">
             <div className="panel-header">
-              <h2>钉钉通知（环境变量）</h2>
+              <h2>飞书通知（环境变量）</h2>
               <span className={`badge ${settings.notifications.enabled ? "badge-success" : "badge-neutral"}`}>
                 {settings.notifications.enabled ? "已启用" : "未启用"}
               </span>
@@ -209,14 +209,10 @@ export function SettingsPage() {
               <div className="settings-grid">
                 <div className="setting-row">
                   <span className="setting-label">Webhook</span>
-                  <span className="setting-value cell-mono">{maskValue(settings.notifications.dingtalkWebhook)}</span>
-                </div>
-                <div className="setting-row">
-                  <span className="setting-label">Secret</span>
-                  <span className="setting-value">{settings.notifications.dingtalkSecret ? "已设置" : "未设置"}</span>
+                  <span className="setting-value cell-mono">{maskValue(settings.notifications.feishuWebhook)}</span>
                 </div>
               </div>
-              <div className="setting-note">该模块读取环境变量 `DINGTALK_WEBHOOK` / `DINGTALK_SECRET`。</div>
+              <div className="setting-note">该模块读取环境变量 `FEISHU_WEBHOOK`。</div>
               <div style={{ marginTop: 12 }}>
                 <button
                   className="btn btn-sm"

@@ -9,11 +9,10 @@ import (
 	"hunter/internal/plugins/web"
 )
 
-// DingTalkNotifier re-exports the notifier type for backward compatibility.
-type DingTalkNotifier = notify.DingTalkNotifier
+type FeishuNotifier = notify.FeishuNotifier
 
-func NewDingTalkNotifierFromEnv(enabled bool) *DingTalkNotifier {
-	return notify.NewDingTalkNotifierFromEnv(enabled)
+func NewFeishuNotifierFromEnv(enabled bool) *FeishuNotifier {
+	return notify.NewFeishuNotifierFromEnv(enabled)
 }
 
 func NewSubfinderPlugin(batchMode bool) engine.Scanner {

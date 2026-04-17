@@ -81,9 +81,8 @@ type runtimeDatabaseSettings struct {
 }
 
 type runtimeNotificationSettings struct {
-	DingTalkWebhook string
-	DingTalkSecret  string
-	Enabled         bool
+	FeishuWebhook string
+	Enabled       bool
 }
 
 type runtimeScannerSettings struct {
@@ -407,9 +406,8 @@ type databaseSettingsResponse struct {
 }
 
 type notificationSettingsResponse struct {
-	DingTalkWebhook string `json:"dingtalkWebhook"`
-	DingTalkSecret  string `json:"dingtalkSecret"`
-	Enabled         bool   `json:"enabled"`
+	FeishuWebhook string `json:"feishuWebhook"`
+	Enabled       bool   `json:"enabled"`
 }
 
 type scannerSettingsResponse struct {
@@ -595,7 +593,7 @@ func (s *Server) RunWorkers() error {
 			s.appendJobLog(item.ProjectID, item.JobID, "warn", item.ErrorMessage)
 			if strings.TrimSpace(item.LastStage) == "" {
 				s.appendJobLogf(item.ProjectID, item.JobID, "warn",
-					"worker 鍥炴敹鍓嶆棤闃舵璁板綍: root=%s started_at=%s updated_at=%s cutoff=%s",
+					"worker recovered stale running scan job: root=%s started_at=%s updated_at=%s cutoff=%s",
 					item.RootDomain, timePtrToISO(item.StartedAt), timeToISO(item.JobUpdatedAt), timeToISO(item.CutoffAt),
 				)
 				continue
@@ -607,13 +605,13 @@ func (s *Server) RunWorkers() error {
 			}
 			if stageErr == "" {
 				s.appendJobLogf(item.ProjectID, item.JobID, "warn",
-					"worker 鍥炴敹鍓嶆渶鍚庨樁娈? stage=%s status=%s stage_updated_at=%s",
+					"worker recovered stale running scan job in stage: stage=%s status=%s stage_updated_at=%s",
 					item.LastStage, item.LastStageStatus, timePtrToISO(item.LastStageUpdatedAt),
 				)
 				continue
 			}
 			s.appendJobLogf(item.ProjectID, item.JobID, "warn",
-				"worker 鍥炴敹鍓嶆渶鍚庨樁娈? stage=%s status=%s stage_updated_at=%s stage_error=%s",
+				"worker recovered stale running scan job in stage: stage=%s status=%s stage_updated_at=%s stage_error=%s",
 				item.LastStage, item.LastStageStatus, timePtrToISO(item.LastStageUpdatedAt), stageErr,
 			)
 		}
@@ -1052,9 +1050,9 @@ func (s *Server) handleRelations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-// Monitor Scheduler 鈥?runs in worker process
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
+// Monitor Scheduler 闁?runs in worker process
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 
 func (s *Server) runScanWorker() {
 	log.Printf("[Worker] scan worker started (poll=%v)", scanWorkerPollInterval)
@@ -1086,7 +1084,7 @@ func (s *Server) executeClaimedScanJob(job *db.ScanJob) {
 	dryRun := job.DryRun
 	notify := job.Notify
 	log.Printf("[Worker] claimed scan job %s project=%s root=%s modules=%v", job.JobID, job.ProjectID, job.RootDomain, modules)
-	s.appendJobLogf(job.ProjectID, job.JobID, "info", "Worker 宸查鍙栦换鍔? root=%s modules=%v", job.RootDomain, modules)
+	s.appendJobLogf(job.ProjectID, job.JobID, "info", "Worker claimed job: root=%s modules=%v", job.RootDomain, modules)
 	s.runScanAsync(job.ProjectID, job.JobID, job.RootDomain, modules, enableNuclei, activeSubs, dictSize, dnsResolvers, dryRun, notify)
 }
 
@@ -1112,33 +1110,34 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 	if task == nil {
 		return
 	}
+
 	jobID := fmt.Sprintf("task-%d", task.ID)
 	rootDomain := task.RootDomain
 	log.Printf("[Scheduler] executing monitor task %d for %s", task.ID, rootDomain)
-	s.appendJobLogf(task.ProjectID, jobID, "info", "鐩戞帶浠诲姟寮€濮? root=%s attempt=%d/%d", rootDomain, task.Attempt+1, task.MaxAttempts)
+	s.appendJobLogf(task.ProjectID, jobID, "info", "Monitor task started: root=%s attempt=%d/%d", rootDomain, task.Attempt+1, task.MaxAttempts)
 
-	// Create a monitor run record
+	// Create a monitor run record.
 	run, err := s.db.CreateMonitorRun(task.ProjectID, rootDomain)
 	if err != nil {
 		log.Printf("[Scheduler] failed to create monitor run: %v", err)
-		s.appendJobLogf(task.ProjectID, jobID, "error", "鍒涘缓 monitor run 澶辫触: %v", err)
+		s.appendJobLogf(task.ProjectID, jobID, "error", "Failed to create monitor run: %v", err)
 		_ = s.db.HandleMonitorTaskFailure(task, fmt.Sprintf("create run failed: %v", err))
 		return
 	}
-	s.appendJobLogf(task.ProjectID, jobID, "debug", "monitor run 宸插垱寤? runID=%d", run.ID)
+	s.appendJobLogf(task.ProjectID, jobID, "debug", "Monitor run created: run_id=%d", run.ID)
 
 	target, err := s.db.GetOrCreateMonitorTarget(task.ProjectID, rootDomain)
 	if err != nil {
 		log.Printf("[Scheduler] failed to get monitor target: %v", err)
-		s.appendJobLogf(task.ProjectID, jobID, "error", "璇诲彇鐩戞帶鐩爣澶辫触: %v", err)
+		s.appendJobLogf(task.ProjectID, jobID, "error", "Failed to get monitor target: %v", err)
 		_ = s.db.CompleteMonitorRun(run.ID, "failed", err.Error(), 0, 0, 0, 0, 0)
 		_ = s.db.HandleMonitorTaskFailure(task, err.Error())
 		return
 	}
 	establishBaseline := !target.BaselineDone
 
-	// Collect subdomains
-	s.appendJobLog(task.ProjectID, jobID, "info", "闃舵寮€濮? 瀛愬煙鏀堕泦")
+	// Collect subdomains.
+	s.appendJobLog(task.ProjectID, jobID, "info", "Stage: collect subdomains")
 	subResults, subdomains, err := s.collectSubdomains(context.Background(), []string{rootDomain}, true)
 	if err != nil {
 		errMsg := fmt.Sprintf("subdomain collection failed: %v", err)
@@ -1148,31 +1147,31 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 		_ = s.db.HandleMonitorTaskFailure(task, errMsg)
 		return
 	}
-	s.appendJobLogf(task.ProjectID, jobID, "info", "瀛愬煙鏀堕泦瀹屾垚: unique=%d resultItems=%d", len(subdomains), len(subResults))
+	s.appendJobLogf(task.ProjectID, jobID, "info", "Subdomain collection completed: unique=%d result_items=%d", len(subdomains), len(subResults))
 
-	// Run network pipeline (httpx + ports)
-	s.appendJobLogf(task.ProjectID, jobID, "info", "闃舵寮€濮? 缃戠粶鎺㈡祴 (targets=%d)", len(subdomains))
+	// Run network pipeline (httpx + ports).
+	s.appendJobLogf(task.ProjectID, jobID, "info", "Stage: network discovery (targets=%d)", len(subdomains))
 	networkResults, err := s.runNetworkPipeline(context.Background(), subdomains, true, target.MonitorPorts, false, false, false, false, s.screenshotDir)
 	if err != nil {
 		log.Printf("[Scheduler] network pipeline warning for %s: %v", rootDomain, err)
-		s.appendJobLogf(task.ProjectID, jobID, "warn", "缃戠粶鎺㈡祴鍛婅: %v", err)
+		s.appendJobLogf(task.ProjectID, jobID, "warn", "Network discovery completed with warnings: %v", err)
 	}
 	networkCounts := countResults(networkResults)
-	s.appendJobLogf(task.ProjectID, jobID, "info", "缃戠粶鎺㈡祴瀹屾垚: web=%d ports=%d", networkCounts["web_services"], networkCounts["ports"])
+	s.appendJobLogf(task.ProjectID, jobID, "info", "Network discovery completed: web=%d ports=%d", networkCounts["web_services"], networkCounts["ports"])
 	currentSnapshot := buildMonitorSnapshotPayload(networkResults)
 
 	allResults := append(subResults, networkResults...)
 
-	// Save results to DB
+	// Save results to DB.
 	if dbErr := s.saveResultsToDB(task.ProjectID, rootDomain, fmt.Sprintf("mon-run-%d", run.ID), allResults); dbErr != nil {
 		log.Printf("[Scheduler] DB save warning: %v", dbErr)
-		s.appendJobLogf(task.ProjectID, jobID, "warn", "缁撴灉鍐欏叆鏁版嵁搴撳憡璀? %v", dbErr)
+		s.appendJobLogf(task.ProjectID, jobID, "warn", "Persist results warning: %v", dbErr)
 	}
 
-	// Detect changes
+	// Detect changes.
 	newLive, webChanged, portOpened, portClosed, svcChanged := s.detectChanges(task.ProjectID, rootDomain, run.ID, target, currentSnapshot)
 	if snapErr := s.createMonitorSnapshotFromState(task.ProjectID, rootDomain, run.ID, currentSnapshot); snapErr != nil {
-		s.appendJobLogf(task.ProjectID, jobID, "warn", "鐩戞帶蹇収鍐欏叆澶辫触: %v", snapErr)
+		s.appendJobLogf(task.ProjectID, jobID, "warn", "Persist monitor snapshot warning: %v", snapErr)
 	}
 
 	// Optional: run vulnerability scan for incremental monitor changes.
@@ -1182,27 +1181,27 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 		cooldown := time.Duration(policy.VulnCooldownMin) * time.Minute
 		if target.LastVulnScanAt != nil && cooldown > 0 && time.Since(*target.LastVulnScanAt) < cooldown {
 			nextAt := target.LastVulnScanAt.Add(cooldown)
-			s.appendJobLogf(task.ProjectID, jobID, "info", "鐩戞帶澧為噺婕忔壂鍐峰嵈涓紝璺宠繃鏈疆锛歯ext=%s", timeToISO(nextAt))
+			s.appendJobLogf(task.ProjectID, jobID, "info", "Skip monitor vuln scan due to cooldown: next_at=%s", timeToISO(nextAt))
 		} else {
 			vulnTargets, targetErr := s.collectMonitorVulnTargets(task.ProjectID, run.ID, policy.VulnOnNewLive, policy.VulnOnWebChanged, policy.VulnMaxURLs)
 			if targetErr != nil {
-				s.appendJobLogf(task.ProjectID, jobID, "warn", "鐩戞帶澧為噺婕忔壂鐩爣鎻愬彇澶辫触: %v", targetErr)
+				s.appendJobLogf(task.ProjectID, jobID, "warn", "Collect monitor vuln targets failed: %v", targetErr)
 			} else if len(vulnTargets) == 0 {
-				s.appendJobLog(task.ProjectID, jobID, "info", "鐩戞帶澧為噺婕忔壂璺宠繃锛氭湰杞棤绗﹀悎绛栫暐鐨勫閲?URL")
+				s.appendJobLog(task.ProjectID, jobID, "info", "Skip monitor vuln scan: no eligible URLs")
 			} else {
-				s.appendJobLogf(task.ProjectID, jobID, "info", "闃舵寮€濮? 澧為噺婕忔礊鎵弿 (urls=%d nuclei=%v cors=%v subtakeover=%v)", len(vulnTargets), policy.EnableNuclei, policy.EnableCors, policy.EnableSubtakeover)
+				s.appendJobLogf(task.ProjectID, jobID, "info", "Stage: monitor vulnerability scan (urls=%d nuclei=%v cors=%v subtakeover=%v)", len(vulnTargets), policy.EnableNuclei, policy.EnableCors, policy.EnableSubtakeover)
 				vulnResults, vulnErr := s.runMonitorVulnPipeline(task.ProjectID, rootDomain, run.ID, vulnTargets, policy.EnableNuclei, policy.EnableCors, policy.EnableSubtakeover)
 				if vulnErr != nil {
-					s.appendJobLogf(task.ProjectID, jobID, "warn", "鐩戞帶澧為噺婕忔壂鍛婅: %v", vulnErr)
+					s.appendJobLogf(task.ProjectID, jobID, "warn", "Monitor vulnerability scan warning: %v", vulnErr)
 				}
 				monitorVulnCount = countResults(vulnResults)["vulnerabilities"]
-				s.appendJobLogf(task.ProjectID, jobID, "info", "鐩戞帶澧為噺婕忔壂瀹屾垚: new_vulns=%d", monitorVulnCount)
+				s.appendJobLogf(task.ProjectID, jobID, "info", "Monitor vulnerability scan completed: new_vulns=%d", monitorVulnCount)
 				_ = s.db.UpdateMonitorTargetLastVulnScan(task.ProjectID, rootDomain, time.Now())
 			}
 		}
 	}
 
-	// Complete run
+	// Complete run.
 	status := "success"
 	_ = s.db.CompleteMonitorRun(run.ID, status, "", newLive, webChanged, portOpened, portClosed, svcChanged)
 
@@ -1210,28 +1209,28 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 	now := time.Now()
 	_ = s.db.UpdateMonitorTargetAfterRun(task.ProjectID, rootDomain, now, establishBaseline)
 
-	// Complete task and schedule next
+	// Complete task and schedule next.
 	_ = s.db.CompleteMonitorTaskSuccess(task.ID)
 
 	totalChanges := newLive + webChanged + portOpened + portClosed + svcChanged
 	log.Printf("[Scheduler] monitor task %d completed for %s: %d total changes", task.ID, rootDomain, totalChanges)
-	s.appendJobLogf(task.ProjectID, jobID, "info", "鐩戞帶浠诲姟瀹屾垚: changes=%d (new_live=%d web_changed=%d port_opened=%d port_closed=%d service_changed=%d) new_vulns=%d",
+	s.appendJobLogf(task.ProjectID, jobID, "info", "Monitor task completed: changes=%d (new_live=%d web_changed=%d port_opened=%d port_closed=%d service_changed=%d) new_vulns=%d",
 		totalChanges, newLive, webChanged, portOpened, portClosed, svcChanged, monitorVulnCount)
 
-	// Send notification if changes detected
+	// Send notification if changes detected.
 	if totalChanges > 0 {
 		s.settingsMu.RLock()
 		notifyEnabled := s.settings.Notifications.Enabled
 		s.settingsMu.RUnlock()
 		if notifyEnabled {
-			notifier := plugins.NewDingTalkNotifierFromEnv(true)
+			notifier := plugins.NewFeishuNotifierFromEnv(true)
 			if notifier.Enabled() {
 				assetLines, omittedAssets, portLines, omittedPorts, notifiedEventIDs, suppressedByWindow, detailErr := s.buildMonitorNotifyDetails(task.ProjectID, run.ID, monitorEventNotifyWindow)
 				if detailErr != nil {
-					s.appendJobLogf(task.ProjectID, jobID, "warn", "鐩戞帶閫氱煡璇︽儏鏋勫缓澶辫触锛岄檷绾т负鎽樿閫氱煡: %v", detailErr)
+					s.appendJobLogf(task.ProjectID, jobID, "warn", "Build monitor notification details failed: %v", detailErr)
 				}
 				if len(assetLines) == 0 && len(portLines) == 0 {
-					s.appendJobLogf(task.ProjectID, jobID, "info", "鐩戞帶閫氱煡琚獥鍙ｆ姂鍒? root=%s window=%s suppressed=%d", rootDomain, monitorEventNotifyWindow, suppressedByWindow)
+					s.appendJobLogf(task.ProjectID, jobID, "info", "Skip monitor notification: root=%s window=%s suppressed=%d", rootDomain, monitorEventNotifyWindow, suppressedByWindow)
 					return
 				}
 				stats := map[string]int{
@@ -1243,7 +1242,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 				if target != nil && target.NotifyAISummary {
 					summary, aiErr := s.buildMonitorNotifyAISummary(task.ProjectID, rootDomain, stats, assetLines, portLines, omittedAssets, omittedPorts)
 					if aiErr != nil {
-						s.appendJobLogf(task.ProjectID, jobID, "warn", "monitor ai summary failed: %v", aiErr)
+						s.appendJobLogf(task.ProjectID, jobID, "warn", "Monitor AI summary failed: %v", aiErr)
 					} else {
 						aiSummary = summary
 					}
@@ -1260,7 +1259,7 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 					omittedPorts,
 					aiSummary,
 				); err != nil {
-					s.appendJobLogf(task.ProjectID, jobID, "warn", "閫氱煡鍙戦€佸け璐? %v", err)
+					s.appendJobLogf(task.ProjectID, jobID, "warn", "Send monitor notification failed: %v", err)
 				} else {
 					now := time.Now()
 					if len(notifiedEventIDs) > 0 {
@@ -1270,18 +1269,16 @@ func (s *Server) executeMonitorTask(task *db.MonitorTask) {
 								"last_notified_at": now,
 								"notify_count":     gorm.Expr("COALESCE(notify_count, 0) + 1"),
 							}).Error; err != nil {
-							s.appendJobLogf(task.ProjectID, jobID, "warn", "閫氱煡鐘舵€佸洖鍐欏け璐? %v", err)
+							s.appendJobLogf(task.ProjectID, jobID, "warn", "Update monitor event notify flags failed: %v", err)
 						}
 					}
-					s.appendJobLogf(task.ProjectID, jobID, "info", "鐩戞帶閫氱煡宸插彂閫? run=%d assets=%d ports=%d notified=%d suppressed=%d",
+					s.appendJobLogf(task.ProjectID, jobID, "info", "Monitor notification sent: run=%d assets=%d ports=%d notified=%d suppressed=%d",
 						run.ID, len(assetLines), len(portLines), len(notifiedEventIDs), suppressedByWindow)
 				}
 			}
 		}
 	}
 }
-
-// detectChanges compares current run snapshot with the previous successful snapshot.
 func (s *Server) detectChanges(projectID, rootDomain string, runID uint, target *db.MonitorTarget, current monitorSnapshotPayload) (newLive, webChanged, portOpened, portClosed, svcChanged int) {
 	if target == nil || !target.BaselineDone {
 		// First successful run establishes baseline only.
@@ -2654,9 +2651,9 @@ func buildMonitorPortEventKey(domain, ip string, port int, protocol string) stri
 	return fmt.Sprintf("port_opened|host=%s|ip=%s|port=%d|proto=%s", host, ip, port, protocol)
 }
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 // Dashboard
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -2814,9 +2811,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 // Assets / Ports / Vulns
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 
 func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -3271,9 +3268,9 @@ func (s *Server) handleVulns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-// Jobs 鈥?persistent scan_jobs table
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
+// Jobs 闁?persistent scan_jobs table
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -3565,7 +3562,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		ID: jobID, ProjectID: projectID, RootDomain: rootDomain, Mode: mode, Modules: modules,
 		Status: "pending", StartedAt: now.Format(time.RFC3339),
 	})
-	s.appendJobLogf(projectID, jobID, "info", "浠诲姟宸插垱寤哄苟杩涘叆闃熷垪: root=%s modules=%v dryRun=%v notify=%v", rootDomain, modules, req.DryRun, notify)
+	s.appendJobLogf(projectID, jobID, "info", "Job created and queued: root=%s modules=%v dryRun=%v notify=%v", rootDomain, modules, req.DryRun, notify)
 	s.writeAudit(projectID, actorFromRequest(r), "create_scan", "job", jobID, map[string]interface{}{
 		"domain": rootDomain, "modules": modules, "dryRun": req.DryRun, "notify": notify,
 	}, r)
@@ -3595,7 +3592,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	// Update DB
 	_ = s.db.CancelScanJob(body.JobID)
 	if job, err := s.db.GetScanJob(body.JobID); err == nil {
-		s.appendJobLog(job.ProjectID, body.JobID, "warn", "浠诲姟宸茶鐢ㄦ埛鍙栨秷")
+		s.appendJobLog(job.ProjectID, body.JobID, "warn", "Job canceled by user")
 		s.writeAudit(job.ProjectID, actorFromRequest(r), "cancel_scan", "job", body.JobID, map[string]interface{}{
 			"rootDomain": job.RootDomain,
 		}, r)
@@ -3805,7 +3802,7 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	}).Error
 
 	log.Printf("[Scan] Job %s started for %s, modules=%v dryRun=%v", jobID, rootDomain, modules, dryRun)
-	s.appendJobLogf(projectID, jobID, "info", "鎵弿寮€濮? root=%s modules=%v dryRun=%v", rootDomain, modules, dryRun)
+	s.appendJobLogf(projectID, jobID, "info", "Scan started: root=%s modules=%v dryRun=%v", rootDomain, modules, dryRun)
 
 	// API and worker run as separate processes; refresh persisted settings at
 	// job start so newly saved defaults can take effect without service restart.
@@ -3842,12 +3839,11 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	s.settingsMu.RUnlock()
 
 	dictSize = clampDictSize(dictSize)
-	s.appendJobLogf(projectID, jobID, "debug", "鎵ц鍙傛暟: hasSubs=%v hasBbotActive=%v hasActiveSubs=%v hasHttpx=%v hasPorts=%v hasNuclei=%v hasCors=%v hasSubTakeover=%v hasWitness=%v dictSize=%d",
+	s.appendJobLogf(projectID, jobID, "debug", "Execution params: hasSubs=%v hasBbotActive=%v hasActiveSubs=%v hasHttpx=%v hasPorts=%v hasNuclei=%v hasCors=%v hasSubTakeover=%v hasWitness=%v dictSize=%d",
 		hasSubs, hasBbotActive, hasActiveSubs, hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness, dictSize)
 
 	var allResults []engine.Result
 	var scanErr error
-
 	domains := []string{rootDomain}
 
 	if err := s.checkScanCanceled(ctx, jobID); err != nil {
@@ -3856,92 +3852,92 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	}
 
 	if hasSubs {
-		s.appendJobLog(projectID, jobID, "info", "闃舵寮€濮? 瀛愬煙鏀堕泦")
+		s.appendJobLog(projectID, jobID, "info", "Stage started: passive subdomain collection")
 		includePassiveBBOT := !hasBbotActive
 		subResults, subdomains, err := s.collectSubdomains(ctx, domains, includePassiveBBOT)
 		allResults = append(allResults, subResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("subdomain collection failed: %v", err)
-			s.appendJobLogf(projectID, jobID, "error", "瀛愬煙鏀堕泦澶辫触: %v", err)
+			s.appendJobLogf(projectID, jobID, "error", "Passive subdomain collection failed: %v", err)
 			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr, dryRun, notify)
 			return
 		}
-		s.appendJobLogf(projectID, jobID, "info", "瀛愬煙鏀堕泦瀹屾垚: unique=%d resultItems=%d", len(subdomains), len(subResults))
+		s.appendJobLogf(projectID, jobID, "info", "Passive subdomain collection done: unique=%d resultItems=%d", len(subdomains), len(subResults))
 		if err := s.checkScanCanceled(ctx, jobID); err != nil {
-			s.appendJobLog(projectID, jobID, "warn", "任务已取消")
+			s.appendJobLog(projectID, jobID, "warn", "Task canceled")
 			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 			return
 		}
 
 		if hasBbotActive {
-			s.appendJobLog(projectID, jobID, "info", "闃舵寮€濮? BBOT 涓诲姩鎵╁睍")
+			s.appendJobLog(projectID, jobID, "info", "Stage started: BBOT active expansion")
 			bbotResults, bbotSubdomains, err := s.expandBbotActiveSubdomains(ctx, domains)
 			allResults = append(allResults, bbotResults...)
 			if err != nil {
 				log.Printf("[Scan] Job %s bbot active warning: %v", jobID, err)
-				s.appendJobLogf(projectID, jobID, "warn", "BBOT 涓诲姩鎵╁睍鍛婅: %v", err)
+				s.appendJobLogf(projectID, jobID, "warn", "BBOT active expansion warning: %v", err)
 			} else {
 				before := len(subdomains)
 				subdomains = mergeUnique(subdomains, bbotSubdomains)
-				s.appendJobLogf(projectID, jobID, "info", "BBOT 涓诲姩鎵╁睍瀹屾垚: 鏂板=%d, 鍚堝苟鍚?%d", len(subdomains)-before, len(subdomains))
+				s.appendJobLogf(projectID, jobID, "info", "BBOT active expansion done: added=%d mergedTotal=%d", len(subdomains)-before, len(subdomains))
 			}
 			if err := s.checkScanCanceled(ctx, jobID); err != nil {
-				s.appendJobLog(projectID, jobID, "warn", "任务已取消")
+				s.appendJobLog(projectID, jobID, "warn", "Task canceled")
 				s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 				return
 			}
 		}
 
 		if hasActiveSubs {
-			s.appendJobLogf(projectID, jobID, "info", "闃舵寮€濮? 涓诲姩鏋氫妇 (dictSize=%d)", dictSize)
+			s.appendJobLogf(projectID, jobID, "info", "Stage started: active subdomain bruteforce (dictSize=%d)", dictSize)
 			activeResults, activeSubdomains, err := s.expandActiveSubdomains(ctx, projectID, domains, subdomains, dictSize, dnsResolvers)
 			allResults = append(allResults, activeResults...)
 			if err != nil {
 				log.Printf("[Scan] Job %s active subs warning: %v", jobID, err)
-				s.appendJobLogf(projectID, jobID, "warn", "涓诲姩鏋氫妇鍛婅: %v", err)
+				s.appendJobLogf(projectID, jobID, "warn", "Active subdomain bruteforce warning: %v", err)
 			} else {
 				subdomains = mergeUnique(subdomains, activeSubdomains)
-				s.appendJobLogf(projectID, jobID, "info", "涓诲姩鏋氫妇瀹屾垚: 鏂板=%d, 鍚堝苟鍚?%d", len(activeSubdomains), len(subdomains))
+				s.appendJobLogf(projectID, jobID, "info", "Active subdomain bruteforce done: added=%d mergedTotal=%d", len(activeSubdomains), len(subdomains))
 			}
 			if err := s.checkScanCanceled(ctx, jobID); err != nil {
-				s.appendJobLog(projectID, jobID, "warn", "任务已取消")
+				s.appendJobLog(projectID, jobID, "warn", "Task canceled")
 				s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 				return
 			}
 		}
 
 		if hasPorts || hasHttpx || hasSubTakeover {
-			s.appendJobLogf(projectID, jobID, "info", "闃舵寮€濮? 缃戠粶鎺㈡祴 (targets=%d httpx=%v ports=%v nuclei=%v cors=%v subtakeover=%v witness=%v)",
+			s.appendJobLogf(projectID, jobID, "info", "Stage started: network scan (targets=%d httpx=%v ports=%v nuclei=%v cors=%v subtakeover=%v witness=%v)",
 				len(subdomains), hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness)
 			networkResults, err := s.runNetworkPipeline(ctx, subdomains, hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness, screenshotDir)
 			allResults = append(allResults, networkResults...)
 			if err != nil {
 				scanErr = fmt.Errorf("network stage failed: %v", err)
-				s.appendJobLogf(projectID, jobID, "error", "缃戠粶鎺㈡祴澶辫触: %v", err)
+				s.appendJobLogf(projectID, jobID, "error", "Network stage failed: %v", err)
 			}
 			networkCounts := countResults(networkResults)
-			s.appendJobLogf(projectID, jobID, "info", "缃戠粶鎺㈡祴瀹屾垚: web=%d ports=%d vulns=%d",
+			s.appendJobLogf(projectID, jobID, "info", "Network stage done: web=%d ports=%d vulns=%d",
 				networkCounts["web_services"], networkCounts["ports"], networkCounts["vulnerabilities"])
 			if err := s.checkScanCanceled(ctx, jobID); err != nil {
-				s.appendJobLog(projectID, jobID, "warn", "任务已取消")
+				s.appendJobLog(projectID, jobID, "warn", "Task canceled")
 				s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 				return
 			}
 		}
 	} else if hasPorts || hasHttpx || hasSubTakeover {
-		s.appendJobLogf(projectID, jobID, "info", "闃舵寮€濮? 缃戠粶鎺㈡祴 (targets=%d httpx=%v ports=%v nuclei=%v cors=%v subtakeover=%v witness=%v)",
+		s.appendJobLogf(projectID, jobID, "info", "Stage started: network scan (targets=%d httpx=%v ports=%v nuclei=%v cors=%v subtakeover=%v witness=%v)",
 			len(domains), hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness)
 		networkResults, err := s.runNetworkPipeline(ctx, domains, hasHttpx, hasPorts, hasNuclei, hasCors, hasSubTakeover, hasWitness, screenshotDir)
 		allResults = append(allResults, networkResults...)
 		if err != nil {
 			scanErr = fmt.Errorf("network stage failed: %v", err)
-			s.appendJobLogf(projectID, jobID, "error", "缃戠粶鎺㈡祴澶辫触: %v", err)
+			s.appendJobLogf(projectID, jobID, "error", "Network stage failed: %v", err)
 		}
 		networkCounts := countResults(networkResults)
-		s.appendJobLogf(projectID, jobID, "info", "缃戠粶鎺㈡祴瀹屾垚: web=%d ports=%d vulns=%d",
+		s.appendJobLogf(projectID, jobID, "info", "Network stage done: web=%d ports=%d vulns=%d",
 			networkCounts["web_services"], networkCounts["ports"], networkCounts["vulnerabilities"])
 		if err := s.checkScanCanceled(ctx, jobID); err != nil {
-			s.appendJobLog(projectID, jobID, "warn", "任务已取消")
+			s.appendJobLog(projectID, jobID, "warn", "Task canceled")
 			s.finishScan(projectID, rootDomain, jobID, startTime, allResults, err, dryRun, notify)
 			return
 		}
@@ -3950,7 +3946,6 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	s.appendPluginStatusLogs(projectID, jobID, allResults)
 	s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr, dryRun, notify)
 }
-
 func (s *Server) checkScanCanceled(ctx context.Context, jobID string) error {
 	select {
 	case <-ctx.Done():
@@ -3973,7 +3968,7 @@ func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.
 	if !dryRun {
 		dbErr = s.saveResultsToDB(projectID, rootDomain, jobID, results)
 		if dbErr != nil {
-			s.appendJobLogf(projectID, jobID, "error", "缁撴灉鍐欏叆鏁版嵁搴撳け璐? %v", dbErr)
+			s.appendJobLogf(projectID, jobID, "error", "Save results to database failed: %v", dbErr)
 		}
 	}
 
@@ -4012,7 +4007,7 @@ func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.
 
 	log.Printf("[Scan] Job %s finished: status=%s duration=%ds subs=%d ports=%d vulns=%d screenshots=%d dryRun=%v",
 		jobID, finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"], counts["screenshots"], dryRun)
-	s.appendJobLogf(projectID, jobID, "info", "鎵弿缁撴潫: status=%s duration=%ds subs=%d ports=%d vulns=%d screenshots=%d dryRun=%v",
+	s.appendJobLogf(projectID, jobID, "info", "Scan finished: status=%s duration=%ds subs=%d ports=%d vulns=%d screenshots=%d dryRun=%v",
 		finalStatus, duration, counts["subdomains"], counts["ports"], counts["vulnerabilities"], counts["screenshots"], dryRun)
 	s.writeAudit(projectID, "system", "finish_scan", "job", jobID, map[string]interface{}{
 		"status": finalStatus, "durationSec": duration, "subdomains": counts["subdomains"], "ports": counts["ports"], "vulns": counts["vulnerabilities"], "screenshots": counts["screenshots"], "dryRun": dryRun,
@@ -4027,19 +4022,15 @@ func (s *Server) finishScan(projectID, rootDomain, jobID string, startTime time.
 	if !notifyEnabled {
 		return
 	}
-	notifier := plugins.NewDingTalkNotifierFromEnv(true)
+	notifier := plugins.NewFeishuNotifierFromEnv(true)
 	if !notifier.Enabled() {
 		return
 	}
 	if err := notifier.SendReconEnd(finalStatus == "success", time.Duration(duration)*time.Second, counts, errMsg); err != nil {
 		log.Printf("[Notify] scan finish notification failed for job %s: %v", jobID, err)
-		s.appendJobLogf(projectID, jobID, "warn", "閫氱煡鍙戦€佸け璐? %v", err)
+		s.appendJobLogf(projectID, jobID, "warn", "Send notification failed: %v", err)
 	}
 }
-
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-// Scan pipeline helpers
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (s *Server) appendPluginStatusLogs(projectID, jobID string, results []engine.Result) {
 	for _, result := range results {
@@ -4066,15 +4057,15 @@ func (s *Server) appendPluginStatusLogs(projectID, jobID string, results []engin
 			level = "warn"
 		}
 		if errMsg == "" {
-			s.appendJobLogf(projectID, jobID, level, "鎵弿鍣ㄧ姸鎬? %s status=%s success=%d failure=%d timeout=%d duration=%dms",
+			s.appendJobLogf(projectID, jobID, level, "Plugin status: %s status=%s success=%d failure=%d timeout=%d duration=%dms",
 				scanner, status, successCount, failureCount, timeoutCount, durationMS)
 		} else {
-			s.appendJobLogf(projectID, jobID, level, "鎵弿鍣ㄧ姸鎬? %s status=%s success=%d failure=%d timeout=%d duration=%dms error=%s",
+			s.appendJobLogf(projectID, jobID, level, "Plugin status: %s status=%s success=%d failure=%d timeout=%d duration=%dms error=%s",
 				scanner, status, successCount, failureCount, timeoutCount, durationMS, trimForNotify(errMsg, 260))
 		}
 
 		if strings.EqualFold(scanner, "nmap") && status == "ok" && successCount == 0 {
-			s.appendJobLog(projectID, jobID, "warn", "Nmap 已执行但未识别到服务指纹，端口页可能只显示开放端口而没有 service/version")
+			s.appendJobLog(projectID, jobID, "warn", "Nmap executed but no service fingerprints were identified; port page may only show open ports without service/version")
 		}
 	}
 }
@@ -4399,9 +4390,9 @@ func portResultCountKey(result engine.Result) (string, string, bool) {
 	return fmt.Sprintf("%s|%d|%s", ip, port, protocol), domain, true
 }
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 // Monitor targets/runs/changes API
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 
 func (s *Server) handleMonitorTargets(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -5014,9 +5005,9 @@ func (s *Server) handleBulkMonitorEventStatus(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "updated": result.RowsAffected, "newStatus": status})
 }
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 // Screenshots
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 
 func (s *Server) handleScreenshotDomains(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -5246,9 +5237,9 @@ func (s *Server) handleScreenshotFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filePath)
 }
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 // Settings
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -5266,9 +5257,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 	settings := s.settings
 	s.settingsMu.RUnlock()
 	// Notification credentials are managed by environment variables only.
-	settings.Notifications.DingTalkWebhook = os.Getenv("DINGTALK_WEBHOOK")
-	settings.Notifications.DingTalkSecret = os.Getenv("DINGTALK_SECRET")
-	settings.Notifications.Enabled = strings.TrimSpace(settings.Notifications.DingTalkWebhook) != ""
+	settings.Notifications.FeishuWebhook = os.Getenv("FEISHU_WEBHOOK")
+	settings.Notifications.Enabled = strings.TrimSpace(settings.Notifications.FeishuWebhook) != ""
 
 	resp := systemSettingsResponse{
 		Database: databaseSettingsResponse{
@@ -5277,9 +5267,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 			SSLMode: settings.Database.SSLMode, Connected: s.db.DB != nil,
 		},
 		Notifications: notificationSettingsResponse{
-			DingTalkWebhook: maskSecret(settings.Notifications.DingTalkWebhook),
-			DingTalkSecret:  maskSecret(settings.Notifications.DingTalkSecret),
-			Enabled:         settings.Notifications.Enabled,
+			FeishuWebhook: maskSecret(settings.Notifications.FeishuWebhook),
+			Enabled:       settings.Notifications.Enabled,
 		},
 		Scanner: scannerSettingsResponse{
 			ScreenshotDir:     settings.Scanner.ScreenshotDir,
@@ -5311,29 +5300,16 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+	if patch.Database != nil {
+		writeError(w, http.StatusBadRequest, "database settings are read-only; configure via environment variables and restart services")
+		return
+	}
 
 	s.settingsMu.Lock()
 	scannerChanged := false
 	var scannerSnapshot runtimeScannerSettings
 	aiChanged := false
 	var aiSnapshot runtimeAISettings
-	if p := patch.Database; p != nil {
-		if p.Host != nil {
-			s.settings.Database.Host = strings.TrimSpace(*p.Host)
-		}
-		if p.Port != nil {
-			s.settings.Database.Port = *p.Port
-		}
-		if p.User != nil {
-			s.settings.Database.User = strings.TrimSpace(*p.User)
-		}
-		if p.DBName != nil {
-			s.settings.Database.DBName = strings.TrimSpace(*p.DBName)
-		}
-		if p.SSLMode != nil {
-			s.settings.Database.SSLMode = strings.TrimSpace(*p.SSLMode)
-		}
-	}
 	if p := patch.Scanner; p != nil {
 		scannerChanged = true
 		if p.ScreenshotDir != nil {
@@ -5675,13 +5651,13 @@ func (s *Server) handleTestNotify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	notifier := plugins.NewDingTalkNotifierFromEnv(true)
+	notifier := plugins.NewFeishuNotifierFromEnv(true)
 	if !notifier.Enabled() {
-		writeError(w, http.StatusBadRequest, "DingTalk notification not configured")
+		writeError(w, http.StatusBadRequest, "Notification webhook not configured (set FEISHU_WEBHOOK)")
 		return
 	}
 	stats := map[string]int{"test": 1}
-	if err := notifier.SendReconEnd(true, 0, stats, "This is a test notification from myrecon."); err != nil {
+	if err := notifier.SendReconEnd(true, 0, stats, "This is a test notification from myrecon (Feishu-ready)."); err != nil {
 		writeError(w, http.StatusInternalServerError, "send failed: "+err.Error())
 		return
 	}
@@ -5692,9 +5668,9 @@ func (s *Server) handleTestNotify(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 // Utilities
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 
 func loadRuntimeSettings(screenshotDir string) runtimeSettings {
 	port := 5432
@@ -5719,9 +5695,8 @@ func loadRuntimeSettings(screenshotDir string) runtimeSettings {
 			SSLMode: envOrDefault("DB_SSLMODE", "disable"),
 		},
 		Notifications: runtimeNotificationSettings{
-			DingTalkWebhook: os.Getenv("DINGTALK_WEBHOOK"),
-			DingTalkSecret:  os.Getenv("DINGTALK_SECRET"),
-			Enabled:         os.Getenv("DINGTALK_WEBHOOK") != "",
+			FeishuWebhook: os.Getenv("FEISHU_WEBHOOK"),
+			Enabled:       strings.TrimSpace(os.Getenv("FEISHU_WEBHOOK")) != "",
 		},
 		Scanner: runtimeScannerSettings{
 			ScreenshotDir:     screenshotDir,
@@ -6553,9 +6528,9 @@ func (s *Server) saveSimpleEdge(projectID, rootDomain, srcType, srcID, dstType, 
 	_ = s.db.DB.Create(&edge).Error
 }
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 // Asset Detail
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 
 type assetDetailResponse struct {
 	Asset  assetResponse           `json:"asset"`
@@ -6636,9 +6611,9 @@ func (s *Server) handleAssetDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, assetDetailResponse{Asset: ar, Ports: pr, Vulns: vr})
 }
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 // Bulk Operations
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 
 func (s *Server) handleBulkDeleteAssets(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -6929,9 +6904,9 @@ func (s *Server) handleBulkVulnStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "updated": result.RowsAffected})
 }
 
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 // Global Search
-// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾闁冲厜鍋撻柍鍏夊亾
 
 type globalSearchResponse struct {
 	Assets []assetResponse         `json:"assets"`

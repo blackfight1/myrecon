@@ -2,36 +2,28 @@ package notify
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
 
-// DingTalkNotifier sends simple recon notifications.
-type DingTalkNotifier struct {
+// FeishuNotifier sends recon notifications to Feishu bot webhook.
+type FeishuNotifier struct {
 	enabled bool
 	webhook string
-	secret  string
 	client  *http.Client
 }
 
-// NewDingTalkNotifierFromEnv creates a notifier from env.
-// It reads webhook from DINGTALK_WEBHOOK.
-func NewDingTalkNotifierFromEnv(enabled bool) *DingTalkNotifier {
-	webhook := strings.TrimSpace(os.Getenv("DINGTALK_WEBHOOK"))
-	secret := strings.TrimSpace(os.Getenv("DINGTALK_SECRET"))
-	return &DingTalkNotifier{
+// NewFeishuNotifierFromEnv creates a notifier from FEISHU_WEBHOOK.
+func NewFeishuNotifierFromEnv(enabled bool) *FeishuNotifier {
+	webhook := strings.TrimSpace(os.Getenv("FEISHU_WEBHOOK"))
+	return &FeishuNotifier{
 		enabled: enabled && webhook != "",
 		webhook: webhook,
-		secret:  secret,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -39,16 +31,15 @@ func NewDingTalkNotifierFromEnv(enabled bool) *DingTalkNotifier {
 }
 
 // Enabled reports whether notifier is active.
-func (n *DingTalkNotifier) Enabled() bool {
+func (n *FeishuNotifier) Enabled() bool {
 	return n != nil && n.enabled
 }
 
 // SendReconStart sends recon start notification.
-func (n *DingTalkNotifier) SendReconStart(inputCount int, modules []string, dryRun bool) error {
+func (n *FeishuNotifier) SendReconStart(inputCount int, modules []string, dryRun bool) error {
 	if !n.Enabled() {
 		return nil
 	}
-
 	content := fmt.Sprintf(
 		"[Hunter] Recon Start\nInputs: %d\nModules: %s\nMode: %s\nTime: %s",
 		inputCount,
@@ -60,16 +51,14 @@ func (n *DingTalkNotifier) SendReconStart(inputCount int, modules []string, dryR
 }
 
 // SendReconEnd sends recon finish notification.
-func (n *DingTalkNotifier) SendReconEnd(success bool, duration time.Duration, stats map[string]int, errMsg string) error {
+func (n *FeishuNotifier) SendReconEnd(success bool, duration time.Duration, stats map[string]int, errMsg string) error {
 	if !n.Enabled() {
 		return nil
 	}
-
 	status := "success"
 	if !success {
 		status = "failed"
 	}
-
 	content := fmt.Sprintf(
 		"[Hunter] Recon End\nStatus: %s\nDuration: %s\nSubdomains: %d\nWeb services: %d\nPorts: %d\nVulnerabilities: %d\nScreenshots: %d\nTime: %s",
 		status,
@@ -81,20 +70,17 @@ func (n *DingTalkNotifier) SendReconEnd(success bool, duration time.Duration, st
 		stats["screenshots"],
 		time.Now().Format("2006-01-02 15:04:05"),
 	)
-
 	if errMsg != "" {
 		content += "\nError: " + errMsg
 	}
-
 	return n.sendText(content)
 }
 
 // SendMonitorChanges sends monitor delta summary.
-func (n *DingTalkNotifier) SendMonitorChanges(rootDomain string, changes map[string]int, highlights []string) error {
+func (n *FeishuNotifier) SendMonitorChanges(rootDomain string, changes map[string]int, highlights []string) error {
 	if !n.Enabled() {
 		return nil
 	}
-
 	content := fmt.Sprintf(
 		"[Hunter] Monitor Change Alert\nDomain: %s\nNew live subdomains: %d\nWeb changes: %d\nNew open ports: %d\nClosed ports: %d\nService changes: %d\nTime: %s",
 		rootDomain,
@@ -105,16 +91,14 @@ func (n *DingTalkNotifier) SendMonitorChanges(rootDomain string, changes map[str
 		changes["service_changed"],
 		time.Now().Format("2006-01-02 15:04:05"),
 	)
-
 	if len(highlights) > 0 {
 		content += "\nHighlights:\n- " + strings.Join(highlights, "\n- ")
 	}
-
 	return n.sendText(content)
 }
 
 // SendMonitorRunDigest sends a compact monitor digest with actionable details.
-func (n *DingTalkNotifier) SendMonitorRunDigest(
+func (n *FeishuNotifier) SendMonitorRunDigest(
 	projectID, rootDomain string,
 	runID uint,
 	duration time.Duration,
@@ -130,18 +114,19 @@ func (n *DingTalkNotifier) SendMonitorRunDigest(
 	}
 
 	var b strings.Builder
-	b.WriteString("### [Hunter] ??????\n")
-	b.WriteString(fmt.Sprintf("- ??: `%s`\n", safeInline(projectID)))
-	b.WriteString(fmt.Sprintf("- ???: `%s`\n", safeInline(rootDomain)))
+	b.WriteString("### [Hunter] 监控变更通知\n")
+	b.WriteString(fmt.Sprintf("- 项目: `%s`\n", safeInline(projectID)))
+	b.WriteString(fmt.Sprintf("- 根域名: `%s`\n", safeInline(rootDomain)))
 	b.WriteString(fmt.Sprintf("- Run: `%d`\n", runID))
-	b.WriteString(fmt.Sprintf("- ??: `%s`\n", duration.Round(time.Second).String()))
-	b.WriteString(fmt.Sprintf("- ??: new_live=%d, web_changed=%d, port_opened=%d, port_closed=%d, service_changed=%d\n",
+	b.WriteString(fmt.Sprintf("- 耗时: `%s`\n", duration.Round(time.Second).String()))
+	b.WriteString(fmt.Sprintf("- 变化: new_live=%d, web_changed=%d, port_opened=%d, port_closed=%d, service_changed=%d\n",
 		changes["new_live"],
 		changes["web_changed"],
 		changes["port_opened"],
 		changes["port_closed"],
 		changes["service_changed"],
 	))
+
 	if strings.TrimSpace(aiSummary) != "" {
 		b.WriteString("\n**AI 摘要（降噪）**\n")
 		normalized := strings.ReplaceAll(aiSummary, "\r\n", "\n")
@@ -159,53 +144,61 @@ func (n *DingTalkNotifier) SendMonitorRunDigest(
 	}
 
 	if len(newAssetLines) > 0 {
-		b.WriteString("\n**?????URL | ?? | ????**\n")
+		b.WriteString("\n**新资产（URL | 标题 | 技术栈）**\n")
 		for _, line := range newAssetLines {
 			b.WriteString("- ")
 			b.WriteString(safeMarkdownLine(line))
 			b.WriteString("\n")
 		}
 		if omittedAssets > 0 {
-			b.WriteString(fmt.Sprintf("- ... ?? %d ????\n", omittedAssets))
+			b.WriteString(fmt.Sprintf("- ... 省略 %d 条资产\n", omittedAssets))
 		}
 	}
 
 	if len(portLines) > 0 {
-		b.WriteString("\n**?????OPEN/CLOSED/CHANGED?**\n")
+		b.WriteString("\n**端口变化（OPEN/CLOSED/CHANGED）**\n")
 		for _, line := range portLines {
 			b.WriteString("- ")
 			b.WriteString(safeMarkdownLine(line))
 			b.WriteString("\n")
 		}
 		if omittedPorts > 0 {
-			b.WriteString(fmt.Sprintf("- ... ?? %d ????\n", omittedPorts))
+			b.WriteString(fmt.Sprintf("- ... 省略 %d 条端口变化\n", omittedPorts))
 		}
 	}
 
-	b.WriteString("\n> ??: ")
+	b.WriteString("\n> 时间: ")
 	b.WriteString(time.Now().Format("2006-01-02 15:04:05"))
-	return n.sendMarkdown("??????", b.String())
+	return n.sendMarkdown("监控变更通知", b.String())
 }
 
-func (n *DingTalkNotifier) sendText(content string) error {
+func (n *FeishuNotifier) sendText(content string) error {
 	payload := map[string]interface{}{
-		"msgtype": "text",
-		"text": map[string]string{
-			"content": content,
+		"msg_type": "text",
+		"content": map[string]string{
+			"text": content,
 		},
 	}
+	return n.doSend(payload)
+}
 
+func (n *FeishuNotifier) sendMarkdown(title, text string) error {
+	// Keep payload simple and stable across Feishu tenants.
+	payload := map[string]interface{}{
+		"msg_type": "text",
+		"content": map[string]string{
+			"text": "[" + title + "]\n" + text,
+		},
+	}
+	return n.doSend(payload)
+}
+
+func (n *FeishuNotifier) doSend(payload map[string]interface{}) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-
-	requestURL, err := n.buildSignedURL()
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewBuffer(body))
+	req, err := http.NewRequest(http.MethodPost, n.webhook, bytes.NewBuffer(body))
 	if err != nil {
 		return err
 	}
@@ -216,69 +209,28 @@ func (n *DingTalkNotifier) sendText(content string) error {
 		return err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("dingtalk notify failed with status: %s", resp.Status)
+		return fmt.Errorf("feishu notify failed with status: %s", resp.Status)
 	}
-
-	var result struct {
-		ErrCode int    `json:"errcode"`
-		ErrMsg  string `json:"errmsg"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("failed to decode dingtalk response: %v", err)
-	}
-	if result.ErrCode != 0 {
-		return fmt.Errorf("dingtalk notify failed: errcode=%d errmsg=%s", result.ErrCode, result.ErrMsg)
-	}
-
-	return nil
+	return checkFeishuResponse(resp.Body)
 }
 
-func (n *DingTalkNotifier) sendMarkdown(title, text string) error {
-	payload := map[string]interface{}{
-		"msgtype": "markdown",
-		"markdown": map[string]string{
-			"title": title,
-			"text":  text,
-		},
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-
-	requestURL, err := n.buildSignedURL()
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewBuffer(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := n.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("dingtalk notify failed with status: %s", resp.Status)
-	}
-
+func checkFeishuResponse(body io.Reader) error {
 	var result struct {
-		ErrCode int    `json:"errcode"`
-		ErrMsg  string `json:"errmsg"`
+		Code          int    `json:"code"`
+		Msg           string `json:"msg"`
+		StatusCode    int    `json:"StatusCode"`
+		StatusMessage string `json:"StatusMessage"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("failed to decode dingtalk response: %v", err)
+	if err := json.NewDecoder(body).Decode(&result); err != nil {
+		// Some proxies may return empty body on success.
+		return nil
 	}
-	if result.ErrCode != 0 {
-		return fmt.Errorf("dingtalk notify failed: errcode=%d errmsg=%s", result.ErrCode, result.ErrMsg)
+	if result.Code != 0 {
+		return fmt.Errorf("feishu notify failed: code=%d msg=%s", result.Code, result.Msg)
+	}
+	if result.StatusCode != 0 {
+		return fmt.Errorf("feishu notify failed: status_code=%d status_message=%s", result.StatusCode, result.StatusMessage)
 	}
 	return nil
 }
@@ -299,27 +251,4 @@ func safeMarkdownLine(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", " ")
 	return s
-}
-
-func (n *DingTalkNotifier) buildSignedURL() (string, error) {
-	if n.secret == "" {
-		return n.webhook, nil
-	}
-
-	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
-	stringToSign := timestamp + "\n" + n.secret
-
-	mac := hmac.New(sha256.New, []byte(n.secret))
-	if _, err := mac.Write([]byte(stringToSign)); err != nil {
-		return "", fmt.Errorf("failed to sign dingtalk request: %v", err)
-	}
-
-	sign := base64.StdEncoding.EncodeToString(mac.Sum(nil))
-	encodedSign := url.QueryEscape(sign)
-
-	separator := "?"
-	if strings.Contains(n.webhook, "?") {
-		separator = "&"
-	}
-	return n.webhook + separator + "timestamp=" + timestamp + "&sign=" + encodedSign, nil
 }

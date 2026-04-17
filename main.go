@@ -33,7 +33,7 @@ func main() {
 	enableActiveSubs := flag.Bool("active-subs", false, "Enable active subdomain bruteforce after passive stage")
 	dictSize := flag.Int("dict-size", 1500, "Dictionary size cap for active subdomain bruteforce")
 	dnsResolvers := flag.String("dns-resolvers", "", "Optional dnsx resolvers file path")
-	enableNotify := flag.Bool("notify", false, "Enable DingTalk start/end notification")
+	enableNotify := flag.Bool("notify", false, "Enable Feishu start/end notification")
 	monitorInterval := flag.String("monitor-interval", "6h", "Monitor interval, e.g. 30m / 1h / 6h")
 	monitorList := flag.Bool("monitor-list", false, "List current monitor targets")
 	monitorStop := flag.String("monitor-stop", "", "Stop a monitor target, e.g. -monitor-stop example.com")
@@ -47,8 +47,8 @@ func main() {
 	listScreenshots := flag.Bool("list-screenshots", false, "List domains with screenshots")
 
 	flag.Parse()
-	if *enableNotify && strings.TrimSpace(os.Getenv("DINGTALK_WEBHOOK")) == "" {
-		fmt.Println("[WARN] -notify is enabled but DINGTALK_WEBHOOK is not set; notifications will be disabled.")
+	if *enableNotify && strings.TrimSpace(os.Getenv("FEISHU_WEBHOOK")) == "" {
+		fmt.Println("[WARN] -notify is enabled but FEISHU_WEBHOOK is not set; notifications will be disabled.")
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(*runMode))
@@ -200,7 +200,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("database connection failed: %v", err)
 		}
-		notifier := plugins.NewDingTalkNotifierFromEnv(*enableNotify)
+		notifier := plugins.NewFeishuNotifierFromEnv(*enableNotify)
 		runMonitorLoop(
 			monDB,
 			strings.TrimSpace(*projectID),
@@ -247,11 +247,11 @@ func main() {
 
 	printRunInfo(enableSubs, enablePorts, enableWitness, *enableNuclei, *enableActiveSubs, *dryRun, len(input))
 	modulesList := buildModules(enableSubs, enablePorts, enableWitness, *enableNuclei, *enableActiveSubs)
-	notifier := plugins.NewDingTalkNotifierFromEnv(*enableNotify)
+	notifier := plugins.NewFeishuNotifierFromEnv(*enableNotify)
 	scanStartTime := time.Now()
 	if notifier.Enabled() {
 		if err := notifier.SendReconStart(len(input), modulesList, *dryRun); err != nil {
-			fmt.Printf("[WARN] failed to send DingTalk start notification: %v\n", err)
+			fmt.Printf("[WARN] failed to send notification: %v\n", err)
 		}
 	}
 
@@ -259,7 +259,7 @@ func main() {
 		msg := fmt.Sprintf(format, args...)
 		if notifier.Enabled() {
 			if err := notifier.SendReconEnd(false, time.Since(scanStartTime), map[string]int{}, msg); err != nil {
-				fmt.Printf("[WARN] failed to send DingTalk end notification: %v\n", err)
+				fmt.Printf("[WARN] failed to send notification: %v\n", err)
 			}
 		}
 		log.Fatalf("scan failed: %s", msg)
@@ -313,7 +313,7 @@ func main() {
 	if notifier.Enabled() {
 		stats := collectResultCounts(results)
 		if err := notifier.SendReconEnd(true, time.Since(scanStartTime), stats, ""); err != nil {
-			fmt.Printf("[WARN] failed to send DingTalk end notification: %v\n", err)
+			fmt.Printf("[WARN] failed to send notification: %v\n", err)
 		}
 	}
 
@@ -420,7 +420,7 @@ func printUsage() {
 	fmt.Println("  -dict-size         Dictionary cap for active bruteforce (default 800)")
 	fmt.Println("  -dns-resolvers     Optional resolvers file for dnsx")
 	fmt.Println("  -nuclei            Enable nuclei scanning")
-	fmt.Println("  -notify            Enable DingTalk notifications")
+	fmt.Println("  -notify            Enable Feishu notifications")
 }
 
 func validateModeAndConflicts(mode, domain, domainList, inputFile, modules, reportDomain string, listScreenshots bool, monitorList bool, monitorStop, monitorDelete string, scanListDomains bool, scanDeleteDomain string) error {

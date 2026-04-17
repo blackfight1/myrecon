@@ -112,7 +112,7 @@ export function ScreenshotsPage() {
           <div className="stat-value">{totalScreenshots}</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">域名数</div>
+          <div className="stat-label">根域名数</div>
           <div className="stat-value">{domains.length}</div>
         </div>
         <div className="stat-card">

@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -24,10 +25,11 @@ import (
 // ──────────────────────────────────────────
 
 const (
-	tokenExpiry        = 24 * time.Hour
-	authCookieName     = "myrecon_token"
-	defaultUsername    = "admin"
-	defaultPasswordRaw = "yy233966"
+	tokenExpiry          = 24 * time.Hour
+	authCookieName       = "myrecon_token"
+	defaultUsername      = "admin"
+	defaultPasswordRaw   = "yy233966"
+	defaultJWTSecretFile = "data/jwt_secret"
 )
 
 var (
@@ -60,15 +62,61 @@ func getJWTSecret() []byte {
 	jwtSecretOnce.Do(func() {
 		if env := strings.TrimSpace(os.Getenv("JWT_SECRET")); env != "" {
 			jwtSecret = []byte(env)
-		} else {
-			jwtSecret = make([]byte, 32)
-			if _, err := rand.Read(jwtSecret); err != nil {
-				log.Fatalf("[Auth] failed to generate JWT secret: %v", err)
-			}
-			log.Println("[Auth] generated random JWT secret (set JWT_SECRET env to persist across restarts)")
+			return
 		}
+
+		filePath := strings.TrimSpace(os.Getenv("JWT_SECRET_FILE"))
+		if filePath == "" {
+			filePath = filepath.FromSlash(defaultJWTSecretFile)
+		}
+		if secret, created, err := loadOrCreateJWTSecretFile(filePath); err == nil {
+			jwtSecret = secret
+			if created {
+				log.Printf("[Auth] generated persistent JWT secret at %s", filePath)
+			} else {
+				log.Printf("[Auth] loaded persistent JWT secret from %s", filePath)
+			}
+			return
+		} else {
+			log.Printf("[Auth] failed to load/create JWT secret file (%s): %v", filePath, err)
+		}
+
+		// Fallback: keep service running with an ephemeral secret.
+		jwtSecret = make([]byte, 32)
+		if _, err := rand.Read(jwtSecret); err != nil {
+			log.Fatalf("[Auth] failed to generate JWT secret: %v", err)
+		}
+		log.Println("[Auth] generated ephemeral JWT secret (set JWT_SECRET or JWT_SECRET_FILE to persist across restarts)")
 	})
 	return jwtSecret
+}
+
+func loadOrCreateJWTSecretFile(path string) ([]byte, bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, false, fmt.Errorf("jwt secret file path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, false, err
+	}
+	if raw, err := os.ReadFile(path); err == nil {
+		secret := strings.TrimSpace(string(raw))
+		if secret == "" {
+			return nil, false, fmt.Errorf("jwt secret file is empty")
+		}
+		return []byte(secret), false, nil
+	} else if !os.IsNotExist(err) {
+		return nil, false, err
+	}
+
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		return nil, false, err
+	}
+	secret := hex.EncodeToString(seed)
+	if err := os.WriteFile(path, []byte(secret+"\n"), 0o600); err != nil {
+		return nil, false, err
+	}
+	return []byte(secret), true, nil
 }
 
 // ──────────────────────────────────────────

@@ -331,8 +331,7 @@ export interface SystemSettings {
     connected: boolean;
   };
   notifications: {
-    dingtalkWebhook: string;
-    dingtalkSecret: string;
+    feishuWebhook: string;
     enabled: boolean;
   };
   scanner: {
