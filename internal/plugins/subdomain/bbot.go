@@ -2,11 +2,14 @@ package subdomain
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,8 +66,16 @@ func (b *BBOTPlugin) Execute(ctx context.Context, input []string) ([]engine.Resu
 		args = append(args, "-rf", "passive", "-ef", "aggressive")
 	}
 
-	cmd := exec.CommandContext(ctx, "bbot", args...)
-	_, runErr := cmd.CombinedOutput()
+	timeout := b.resolveTimeout()
+	runCtx := ctx
+	cancel := func() {}
+	if timeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
+	defer cancel()
+
+	cmd := exec.Command("bbot", args...)
+	output, runErr := runCommandWithContext(runCtx, cmd)
 
 	subdomains, parseErr := readSubdomainsFile(outputFile)
 	if parseErr != nil {
@@ -74,9 +85,23 @@ func (b *BBOTPlugin) Execute(ctx context.Context, input []string) ([]engine.Resu
 		return nil, fmt.Errorf("failed to parse bbot subdomains output: %v", parseErr)
 	}
 
+	// Timeout is treated as non-fatal to prevent one long-running source from
+	// blocking the whole scan pipeline forever.
+	if errors.Is(runErr, context.DeadlineExceeded) {
+		fmt.Printf("[BBOT] Timeout after %s, continue with partial results=%d\n", timeout, len(subdomains))
+		runErr = nil
+	}
+	// User/system cancellation should still propagate to terminate the job.
+	if errors.Is(runErr, context.Canceled) && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if runErr != nil {
 		if len(subdomains) == 0 {
-			return nil, fmt.Errorf("bbot execution failed: %v", runErr)
+			msg := strings.TrimSpace(tailText(output, 1200))
+			if msg == "" {
+				return nil, fmt.Errorf("bbot execution failed: %v", runErr)
+			}
+			return nil, fmt.Errorf("bbot execution failed: %v | output: %s", runErr, msg)
 		}
 		fmt.Printf("[BBOT] Command finished with warning: %v\n", runErr)
 	}
@@ -91,6 +116,68 @@ func (b *BBOTPlugin) Execute(ctx context.Context, input []string) ([]engine.Resu
 
 	fmt.Printf("[BBOT] Found %d subdomains\n", len(results))
 	return results, nil
+}
+
+func (b *BBOTPlugin) resolveTimeout() time.Duration {
+	// Keep passive reasonably short; active can run longer.
+	defaultMin := 25
+	envKey := "BBOT_PASSIVE_TIMEOUT_MIN"
+	if !b.passiveOnly {
+		defaultMin = 60
+		envKey = "BBOT_ACTIVE_TIMEOUT_MIN"
+	}
+	if raw := strings.TrimSpace(os.Getenv(envKey)); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			return time.Duration(v) * time.Minute
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("BBOT_TIMEOUT_MIN")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			return time.Duration(v) * time.Minute
+		}
+	}
+	return time.Duration(defaultMin) * time.Minute
+}
+
+func runCommandWithContext(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	prepareProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-waitCh:
+		return out.Bytes(), err
+	case <-ctx.Done():
+		_ = killProcessGroup(cmd)
+		select {
+		case <-waitCh:
+		case <-time.After(4 * time.Second):
+			_ = killProcessGroup(cmd)
+		}
+		return out.Bytes(), ctx.Err()
+	}
+}
+
+func tailText(b []byte, max int) string {
+	if max <= 0 {
+		max = 1024
+	}
+	if len(b) <= max {
+		return string(b)
+	}
+	return string(b[len(b)-max:])
 }
 
 func normalizeDomains(input []string) []string {

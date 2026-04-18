@@ -32,6 +32,7 @@ const (
 	maxListRows                = 5000
 	schedulerPollInterval      = 15 * time.Second
 	scanWorkerPollInterval     = 3 * time.Second
+	scanCancelWatchInterval    = 5 * time.Second
 	scanJobStaleAfter          = 6 * time.Hour
 	monitorEventNotifyWindow   = 30 * time.Minute
 	monitorNotifyMaxAssets     = 6
@@ -3860,6 +3861,10 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	s.scanCancels[jobID] = cancel
 	s.scanCancelMu.Unlock()
 
+	watchCtx, stopCancelWatch := context.WithCancel(ctx)
+	defer stopCancelWatch()
+	go s.watchScanJobCancel(watchCtx, jobID, cancel)
+
 	defer func() {
 		cancel()
 		s.scanCancelMu.Lock()
@@ -4023,6 +4028,31 @@ func (s *Server) runScanAsync(projectID, jobID, rootDomain string, modules []str
 	s.appendPluginStatusLogs(projectID, jobID, allResults)
 	s.finishScan(projectID, rootDomain, jobID, startTime, allResults, scanErr, dryRun, notify)
 }
+
+func (s *Server) watchScanJobCancel(ctx context.Context, jobID string, cancel context.CancelFunc) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" || cancel == nil {
+		return
+	}
+	ticker := time.NewTicker(scanCancelWatchInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			job, err := s.db.GetScanJob(jobID)
+			if err != nil || job == nil {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(job.Status), "canceled") {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
 func (s *Server) checkScanCanceled(ctx context.Context, jobID string) error {
 	select {
 	case <-ctx.Done():
