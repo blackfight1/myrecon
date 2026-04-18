@@ -97,7 +97,7 @@ func (n *FeishuNotifier) SendMonitorChanges(rootDomain string, changes map[strin
 	return n.sendText(content)
 }
 
-// SendMonitorRunDigest sends a compact monitor digest with actionable details.
+// SendMonitorRunDigest sends compact monitor digest with low-noise formatting.
 func (n *FeishuNotifier) SendMonitorRunDigest(
 	projectID, rootDomain string,
 	runID uint,
@@ -114,12 +114,13 @@ func (n *FeishuNotifier) SendMonitorRunDigest(
 	}
 
 	var b strings.Builder
-	b.WriteString("### [Hunter] 监控变更通知\n")
-	b.WriteString(fmt.Sprintf("- 项目: `%s`\n", safeInline(projectID)))
-	b.WriteString(fmt.Sprintf("- 根域名: `%s`\n", safeInline(rootDomain)))
-	b.WriteString(fmt.Sprintf("- Run: `%d`\n", runID))
-	b.WriteString(fmt.Sprintf("- 耗时: `%s`\n", duration.Round(time.Second).String()))
-	b.WriteString(fmt.Sprintf("- 变化: new_live=%d, web_changed=%d, port_opened=%d, port_closed=%d, service_changed=%d\n",
+	b.WriteString("### [Hunter] Monitor Digest\n")
+	b.WriteString(fmt.Sprintf("- Project: `%s`\n", safeInline(projectID)))
+	b.WriteString(fmt.Sprintf("- Root Domain: `%s`\n", safeInline(rootDomain)))
+	b.WriteString(fmt.Sprintf("- Run ID: `%d`\n", runID))
+	b.WriteString(fmt.Sprintf("- Date: `%s`\n", time.Now().Format("2006-01-02")))
+	b.WriteString(fmt.Sprintf("- Duration: `%s`\n", duration.Round(time.Second).String()))
+	b.WriteString(fmt.Sprintf("- Changes: new_live=%d, web_changed=%d, port_opened=%d, port_closed=%d, service_changed=%d\n",
 		changes["new_live"],
 		changes["web_changed"],
 		changes["port_opened"],
@@ -128,48 +129,54 @@ func (n *FeishuNotifier) SendMonitorRunDigest(
 	))
 
 	if strings.TrimSpace(aiSummary) != "" {
-		b.WriteString("\n**AI 摘要（降噪）**\n")
+		b.WriteString("\n**AI Summary (noise-reduced)**\n")
 		normalized := strings.ReplaceAll(aiSummary, "\r\n", "\n")
 		normalized = strings.ReplaceAll(normalized, "\r", "\n")
 		lines := strings.Split(normalized, "\n")
+		written := 0
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
 			}
+			if written >= 4 {
+				b.WriteString("- ...\n")
+				break
+			}
 			b.WriteString("- ")
 			b.WriteString(safeMarkdownLine(line))
 			b.WriteString("\n")
+			written++
 		}
 	}
 
 	if len(newAssetLines) > 0 {
-		b.WriteString("\n**新资产（URL | 标题 | 技术栈）**\n")
+		b.WriteString("\n**Web Assets (date | url | title | tech)**\n")
 		for _, line := range newAssetLines {
 			b.WriteString("- ")
 			b.WriteString(safeMarkdownLine(line))
 			b.WriteString("\n")
 		}
 		if omittedAssets > 0 {
-			b.WriteString(fmt.Sprintf("- ... 省略 %d 条资产\n", omittedAssets))
+			b.WriteString(fmt.Sprintf("- ... omitted %d more asset lines\n", omittedAssets))
 		}
 	}
 
 	if len(portLines) > 0 {
-		b.WriteString("\n**端口变化（OPEN/CLOSED/CHANGED）**\n")
+		b.WriteString("\n**Port Changes (OPEN/CLOSED/CHANGED)**\n")
 		for _, line := range portLines {
 			b.WriteString("- ")
 			b.WriteString(safeMarkdownLine(line))
 			b.WriteString("\n")
 		}
 		if omittedPorts > 0 {
-			b.WriteString(fmt.Sprintf("- ... 省略 %d 条端口变化\n", omittedPorts))
+			b.WriteString(fmt.Sprintf("- ... omitted %d more port lines\n", omittedPorts))
 		}
 	}
 
-	b.WriteString("\n> 时间: ")
+	b.WriteString("\n> Generated at: ")
 	b.WriteString(time.Now().Format("2006-01-02 15:04:05"))
-	return n.sendMarkdown("监控变更通知", b.String())
+	return n.sendMarkdown("Monitor Change Notification", b.String())
 }
 
 func (n *FeishuNotifier) sendText(content string) error {
@@ -252,3 +259,4 @@ func safeMarkdownLine(s string) string {
 	s = strings.ReplaceAll(s, "\r", " ")
 	return s
 }
+

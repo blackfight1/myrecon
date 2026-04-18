@@ -34,8 +34,8 @@ const (
 	scanWorkerPollInterval     = 3 * time.Second
 	scanJobStaleAfter          = 6 * time.Hour
 	monitorEventNotifyWindow   = 30 * time.Minute
-	monitorNotifyMaxAssets     = 10
-	monitorNotifyMaxPorts      = 12
+	monitorNotifyMaxAssets     = 6
+	monitorNotifyMaxPorts      = 8
 	monitorEventStatusOpen     = "open"
 	monitorEventStatusResolved = "resolved"
 	appSettingScannerKey       = "settings.scanner.v1"
@@ -2488,9 +2488,14 @@ func formatMonitorAssetNotifyLine(ch db.AssetChange) string {
 	if strings.EqualFold(strings.TrimSpace(ch.ChangeType), "web_changed") {
 		label = "CHANGED"
 	}
-	return fmt.Sprintf("[%s %s] %s | %s | %s",
+	discoveredDate := "-"
+	if !ch.CreatedAt.IsZero() {
+		discoveredDate = ch.CreatedAt.Format("2006-01-02")
+	}
+	return fmt.Sprintf("[%s %s] %s | %s | %s | %s",
 		label,
 		statusText,
+		discoveredDate,
 		trimForNotify(target, 110),
 		trimForNotify(title, 70),
 		trimForNotify(techText, 70),

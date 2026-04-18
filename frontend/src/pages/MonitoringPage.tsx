@@ -15,7 +15,7 @@ import {
   useStopMonitorTarget,
   useUpdateMonitorTarget
 } from "../hooks/queries";
-import { formatDate } from "../lib/format";
+import { formatDate, formatDateYMD } from "../lib/format";
 import { matchesProjectDomain, normalizeRootDomain } from "../lib/projectScope";
 import type { MonitorEvent, MonitorRun, MonitorTarget } from "../types/models";
 
@@ -492,7 +492,7 @@ export function MonitoringPage() {
                       <th>Asset</th>
                       <th>Port</th>
                       <th>Title/Service</th>
-                      <th>First Seen</th>
+                      <th>Discovered</th>
                       <th>Last Seen</th>
                       <th>Count</th>
                       <th>Actions</th>
@@ -510,7 +510,7 @@ export function MonitoringPage() {
                           <td className="cell-mono">{ev.url || ev.domain || "-"}</td>
                           <td>{ev.port ? `${ev.protocol || "tcp"}/${ev.port}` : "-"}</td>
                           <td>{ev.title || ev.service || "-"}</td>
-                          <td className="cell-muted">{formatDate(ev.firstSeenAt)}</td>
+                          <td className="cell-muted">{formatDateYMD(ev.firstSeenAt)}</td>
                           <td className="cell-muted">{formatDate(ev.lastSeenAt)}</td>
                           <td>{ev.occurrenceCount}</td>
                           <td>
@@ -647,7 +647,7 @@ export function MonitoringPage() {
                       </div>
                       <div className="monitor-context-kv">
                         <span>First Seen</span>
-                        <span>{formatDate(selectedEvent.firstSeenAt)}</span>
+                        <span>{formatDateYMD(selectedEvent.firstSeenAt)}</span>
                       </div>
                       <div className="monitor-context-kv">
                         <span>Last Seen</span>
